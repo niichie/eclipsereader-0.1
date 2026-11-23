@@ -6,24 +6,38 @@ struct CatalogSite: Identifiable, Hashable {
     let url: URL
     let note: String
     let symbol: String
+    /// Read through a dedicated connection rather than the page reader.
+    var native = false
     var id: String { url.absoluteString }
 }
 
-/// Official, free-to-read sources shipped with the app. The user adds any other site under "Your sites".
+/// Sites shipped with the app. Anything else can be saved under "Your sites".
 enum SiteCatalog {
+    static func site(_ name: String, _ url: String, _ note: String, _ symbol: String, native: Bool = false) -> CatalogSite {
+        CatalogSite(name: name, url: URL(string: url)!, note: note, symbol: symbol, native: native)
+    }
+    /// Built-in connections: chapters, covers and pages come from the site's own data.
+    static let connected: [CatalogSite] = [
+        site("MangaDex", "https://mangadex.org/", "Huge community library, every language · native", "books.vertical", native: true),
+        site("WeebCentral", "https://weebcentral.com/", "Manga with full chapter lists · native", "square.stack.3d.up", native: true),
+        site("WEBTOON", "https://www.webtoons.com/en/", "Official webtoons, every free episode · native", "iphone.gen3", native: true),
+    ]
+    /// Popular manga & manhwa sites: open a series and tap Add to library.
+    static let popular: [CatalogSite] = [
+        site("Asura Scans", "https://asurascans.com/comics", "Action manhwa, fast releases", "flame"),
+        site("MangaDot", "https://mangadot.net/", "Manga, manhwa and manhua", "circle.grid.cross"),
+        site("MangaBall", "https://mangaball.com/", "Large mixed library", "circle.circle"),
+        site("Comix", "https://comix.to/", "Manga and manhwa, clean reader", "rectangle.on.rectangle.angled"),
+        site("WEBTOON Canvas", "https://www.webtoons.com/en/canvas", "Independent creators’ webcomics", "paintpalette"),
+    ]
+    /// Official publishers with free chapters.
     static let official: [CatalogSite] = [
-        CatalogSite(name: "WEBTOON", url: URL(string: "https://www.webtoons.com/en/")!,
-                    note: "Official webtoons and manhwa, free episodes", symbol: "iphone.gen3"),
-        CatalogSite(name: "WEBTOON Canvas", url: URL(string: "https://www.webtoons.com/en/canvas")!,
-                    note: "Independent creators’ webcomics", symbol: "paintpalette"),
-        CatalogSite(name: "MANGA Plus", url: URL(string: "https://mangaplus.shueisha.co.jp/updates")!,
-                    note: "Shueisha’s official free chapters · reads in the browser", symbol: "book"),
-        CatalogSite(name: "Tapas", url: URL(string: "https://tapas.io/")!,
-                    note: "Webcomics and novels, many free", symbol: "rectangle.stack"),
-        CatalogSite(name: "GlobalComix", url: URL(string: "https://globalcomix.com/")!,
-                    note: "Comics and manga, free and premium", symbol: "globe"),
-        CatalogSite(name: "Comikey", url: URL(string: "https://comikey.com/")!,
-                    note: "Licensed manga and manhwa, free chapters", symbol: "key"),
+        site("MANGA Plus", "https://mangaplus.shueisha.co.jp/updates", "Shueisha’s free chapters · reads in the browser", "book"),
+        site("Tapas", "https://tapas.io/", "Webcomics and novels, many free", "rectangle.stack"),
+        site("Tappytoon", "https://www.tappytoon.com/en", "Licensed manhwa", "t.circle"),
+        site("Manta", "https://manta.net/en", "Romance and fantasy manhwa", "m.circle"),
+        site("GlobalComix", "https://globalcomix.com/", "Comics and manga, free and premium", "globe"),
+        site("Comikey", "https://comikey.com/", "Licensed manga and manhwa, free chapters", "key"),
     ]
 }
 
@@ -50,7 +64,7 @@ struct BrowseView: View {
                     Text("Open any manga, manhwa or webcomic site, then tap **Add to library** on a series or chapter. It joins your library with every chapter, ready to read or download.")
                         .font(.subheadline).foregroundStyle(.secondary)
 
-                    section("Your sites") {
+                    section("Your sites", detail: (model.state.sites ?? []).isEmpty ? "Save any site from the browser’s menu" : nil) {
                         ForEach(model.state.sites ?? []) { site in
                             SiteRow(name: site.name, host: site.url.host ?? "", note: nil, symbol: "bookmark.fill") { browsing = BrowseTarget(url: site.url) }
                                 .contextMenu {
@@ -63,16 +77,14 @@ struct BrowseView: View {
                         }.buttonStyle(.plain)
                     }
 
-                    section("Built in") {
-                        SiteRow(name: "ReadBerserk", host: "readberserk.com", note: "Berserk, read natively", symbol: "moon.fill") {
-                            browsing = BrowseTarget(url: ReadBerserkParser.home)
-                        }
+                    section("Connected", detail: "Chapters, covers and pages straight from the site") {
+                        siteGrid(SiteCatalog.connected + [SiteCatalog.site("ReadBerserk", "https://readberserk.com/", "Berserk, built in · native", "moon.fill", native: true)])
                     }
-
-                    section("Official & free") {
-                        ForEach(SiteCatalog.official) { site in
-                            SiteRow(name: site.name, host: site.url.host ?? "", note: site.note, symbol: site.symbol) { browsing = BrowseTarget(url: site.url) }
-                        }
+                    section("Popular sites", detail: "Open a series, then tap Add to library") {
+                        siteGrid(SiteCatalog.popular)
+                    }
+                    section("Official & free", detail: nil) {
+                        siteGrid(SiteCatalog.official)
                     }
                 }
                 .padding(20)
@@ -101,10 +113,26 @@ struct BrowseView: View {
             if let url = parts.url { browsing = BrowseTarget(url: url) }
         }
     }
-    @ViewBuilder private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    @ViewBuilder private func section<Content: View>(_ title: String, detail: String?, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.title3.weight(.bold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.title3.weight(.bold))
+                if let detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
+            }
             content()
+        }
+    }
+    private func siteGrid(_ sites: [CatalogSite]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
+            ForEach(sites) { site in
+                SiteRow(name: site.name, host: site.url.host ?? "", note: site.note, symbol: site.symbol, native: site.native) {
+                    browsing = BrowseTarget(url: site.url)
+                }
+                .contextMenu {
+                    Button { model.saveSite(name: site.name, url: site.url) } label: { Label("Add to Your sites", systemImage: "bookmark") }
+                    Link(destination: site.url) { Label("Open in Safari", systemImage: "safari") }
+                }
+            }
         }
     }
 }
@@ -116,22 +144,48 @@ private struct SiteRow: View {
     let host: String
     let note: String?
     let symbol: String
+    var native = false
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10).fill(Eclipse.accent.opacity(0.22))
-                    Image(systemName: symbol).foregroundStyle(Eclipse.highlight)
-                }.frame(width: 42, height: 42)
+            HStack(spacing: 12) {
+                SiteIcon(host: host, symbol: symbol)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(name).font(.headline)
+                    HStack(spacing: 6) {
+                        Text(name).font(.headline).lineLimit(1)
+                        if native {
+                            Image(systemName: "bolt.fill").font(.caption2).foregroundStyle(Eclipse.highlight)
+                                .accessibilityLabel("Connected")
+                        }
+                    }
                     Text(note ?? host).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
-                Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(.secondary)
-            }.padding(12).eclipseCard(cornerRadius: 14)
-        }.buttonStyle(.plain)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+            }
+            .padding(12).frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
+            .eclipseCard(cornerRadius: 14)
+        }.buttonStyle(PressableStyle())
+    }
+}
+
+/// The site's own icon when it has one, otherwise a symbol on the accent colour.
+private struct SiteIcon: View {
+    let host: String
+    let symbol: String
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10).fill(Eclipse.accent.opacity(0.22))
+            Image(systemName: symbol).foregroundStyle(Eclipse.highlight)
+            if !host.isEmpty, let url = URL(string: "https://\(host)/apple-touch-icon.png") {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image { image.resizable().scaledToFill() }
+                }
+            }
+        }
+        .frame(width: 42, height: 42)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .accessibilityHidden(true)
     }
 }
 

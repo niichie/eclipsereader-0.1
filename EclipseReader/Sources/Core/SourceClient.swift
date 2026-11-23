@@ -51,7 +51,8 @@ public actor WebsiteHTTPClient: HTTPTransport {
             ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
             : "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
             forHTTPHeaderField: "User-Agent")
-        request.setValue(image ? "image/*" : "text/html", forHTTPHeaderField: "Accept")
+        let api = url.host?.lowercased().hasPrefix("api.") ?? false
+        request.setValue(image ? "image/*" : api ? "application/json" : "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         if let referer { request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer") }
         do {
             let (file, response) = try await session.download(for: request)
@@ -69,7 +70,7 @@ public actor WebsiteHTTPClient: HTTPTransport {
                       let head = try? FileHandle(forReadingFrom: file).read(upToCount: 12),
                       ImageSniffer.isImage(head) else { throw SourceError.invalidImage }
             }
-            if !image && !["text/html", "application/xhtml+xml"].contains(mime) {
+            if !image && !["text/html", "application/xhtml+xml", "application/json", "text/plain"].contains(mime) {
                 throw SourceError.unsupportedStructure
             }
             let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0

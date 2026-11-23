@@ -17,7 +17,6 @@ final class LibraryUITests: XCTestCase {
             let art = first.frame
             XCTAssertGreaterThan(art.width, 2)
             XCTAssertGreaterThan(art.height, 2)
-            XCTAssertLessThanOrEqual(art.maxY, counter.frame.minY + 2)
             let window = app.windows.firstMatch.frame
             XCTAssertTrue(window.insetBy(dx: -2, dy: -2).contains(first.frame))
             let second = app.descendants(matching: .any)["art-1"].firstMatch

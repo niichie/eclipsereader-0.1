@@ -61,6 +61,9 @@ public struct LinkedSource: Sendable {
             return LinkedChapter(title: url.deletingPathExtension().lastPathComponent,
                                  pages: [MangaPage(url: url, label: "Page 1")])
         }
+        if let pages = try await SiteAdapters.pages(url, http: http) {
+            return LinkedChapter(title: url.host ?? "Chapter", pages: pages)
+        }
         let html = try await page(url)
         return LinkedChapter(title: Self.title(in: html) ?? url.host ?? "Manga", pages: try Self.detect(in: html, base: url))
     }
@@ -74,6 +77,7 @@ public struct LinkedSource: Sendable {
             return LinkInspection(title: title, cover: url, pages: [MangaPage(url: url, label: "Page 1")],
                                   chapters: [Chapter(url: url, title: title, number: "1")])
         }
+        if let adapted = try await SiteAdapters.inspect(url, http: http) { return adapted }
         let html = try await page(url)
         // A Webtoons episode: pages from the episode, the full episode list from the series page.
         if Webtoons.handles(url), url.path.hasSuffix("/viewer"), let list = Webtoons.listURL(for: url),
@@ -111,7 +115,11 @@ public struct LinkedSource: Sendable {
 
     /// Finds just the cover of a series page (used to fill in missing covers later).
     public func cover(of url: URL) async -> URL? {
-        guard WebLink.publicHTTPS(url), let html = try? await page(url) else { return nil }
+        guard WebLink.publicHTTPS(url) else { return nil }
+        if MangaDex.handles(url) || WeebCentral.handles(url) {
+            return try? await SiteAdapters.inspect(url, http: http)?.cover
+        }
+        guard let html = try? await page(url) else { return nil }
         return Self.cover(in: html, base: url)
     }
 

@@ -21,7 +21,7 @@ final class LibraryModel: ObservableObject {
         var root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("EclipseReader", isDirectory: true)
         #if DEBUG
-        let testingReader = ProcessInfo.processInfo.arguments.contains("--reader-regression")
+        let testingReader = ProcessInfo.processInfo.arguments.contains("--reader-regression") || ReaderTestFixture.demo
         if testingReader { root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString) }
         #endif
         let repo = StateRepository(url: root.appendingPathComponent("library-v1.json"))
@@ -55,6 +55,9 @@ final class LibraryModel: ObservableObject {
             restored.detectedStyles = restored.detectedStyles?.filter { $0.key != Self.berserkID && $0.value != .manhwa }
             restored.defaultsVersion = 3
         }
+        #if DEBUG
+        if ReaderTestFixture.demo { restored = ReaderTestFixture.demoState() }
+        #endif
         repository = repo
         _state = Published(initialValue: restored)
         _persistenceError = Published(initialValue: recoveryMessage)
@@ -150,6 +153,9 @@ final class LibraryModel: ObservableObject {
     private var coverAttempts = Set<String>()
     /// Fills in missing covers from the first page of each series' first chapter, one at a time.
     func ensureCovers() async {
+        #if DEBUG
+        if ReaderTestFixture.demo { return }
+        #endif
         for series in librarySeries where !coverAttempts.contains(series.id) {
             let isWeb = series.kind == .web && series.id != Self.berserkID
             // Website series without the site's own cover art get one look for it (stored, so it
@@ -200,6 +206,9 @@ final class LibraryModel: ObservableObject {
         return try await networkPages(for: chapter)
     }
     private func networkPages(for chapter: Chapter) async throws -> [MangaPage] {
+        #if DEBUG
+        if ReaderTestFixture.demo || chapter.url.host == "example.invalid" { return try await source.pages(for: chapter) }
+        #endif
         if chapter.url.scheme == "eclipselib" { return try await LocalBooks.shared.pages(chapter) }
         if series(containing: chapter) != nil
             || ReadBerserkParser.normalize(chapter.url.absoluteString, relativeTo: ReadBerserkParser.home) == nil && chapter.url.host != "example.invalid" {
@@ -341,6 +350,9 @@ final class LibraryModel: ObservableObject {
     /// unless forced (pull to refresh), one series at a time to be gentle with the sites.
     func checkForUpdates(force: Bool = false) async {
         guard !checking else { return }
+        #if DEBUG
+        if ReaderTestFixture.demo { return }
+        #endif
         if !force, let last = state.lastUpdateCheck, Date().timeIntervalSince(last) < 6 * 3600 { return }
         checking = true; defer { checking = false }
         await refresh()
