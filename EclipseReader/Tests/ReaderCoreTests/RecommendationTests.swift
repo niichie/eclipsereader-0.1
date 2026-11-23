@@ -30,3 +30,34 @@ final class FreeBooksTests: XCTestCase {
         XCTAssertEqual(books.first?.cover?.lastPathComponent, "pg1342.cover.medium.jpg")
     }
 }
+
+private actor RoutedTransport: HTTPTransport {
+    let routes: [(String, Data)]
+    private(set) var asked: [URL] = []
+    init(_ routes: [(String, String)]) { self.routes = routes.map { ($0.0, Data($0.1.utf8)) } }
+    func fetch(_ url: URL, referer: URL?, image: Bool) async throws -> Data {
+        asked.append(url)
+        let text = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+        guard let hit = routes.first(where: { text.contains($0.0) }) else { throw SourceError.unsupportedStructure }
+        return hit.1
+    }
+}
+
+final class BecauseYouReadTests: XCTestCase {
+    private func manga(_ id: String, _ title: String, tags: String = "[]") -> String {
+        #"{"id":"\#(id)","attributes":{"title":{"en":"\#(title)"},"originalLanguage":"ja","year":1989,"tags":\#(tags)},"relationships":[]}"#
+    }
+    func testPicksDistinctiveGenresAndSkipsTheLibrary() async throws {
+        let tags = #"[{"id":"g-action","attributes":{"group":"genre","name":{"en":"Action"}}},{"id":"g-dark","attributes":{"group":"genre","name":{"en":"Tragedy"}}},{"id":"g-fantasy","attributes":{"group":"genre","name":{"en":"Fantasy"}}},{"id":"t-demons","attributes":{"group":"theme","name":{"en":"Demons"}}}]"#
+        XCTAssertEqual(Discover.pickTags(try JSONSerialization.jsonObject(with: Data(tags.utf8))), ["g-dark", "g-fantasy"])
+        let transport = RoutedTransport([
+            ("title=Berserk", #"{"data":[\#(manga("b1", "Berserk", tags: tags))]}"#),
+            ("includedTags", #"{"data":[\#(manga("b1", "Berserk")),\#(manga("v1", "Vinland Saga")),\#(manga("c1", "Claymore"))]}"#),
+        ])
+        let items = try await Discover.similar(to: "Berserk", excluding: ["claymore"], http: transport)
+        XCTAssertEqual(items.map(\.title), ["Vinland Saga"])
+        let asked = await transport.asked
+        let last = asked.last.map { $0.absoluteString.removingPercentEncoding ?? $0.absoluteString } ?? ""
+        XCTAssertTrue(last.contains("includedTags[]=g-dark"), last)
+    }
+}

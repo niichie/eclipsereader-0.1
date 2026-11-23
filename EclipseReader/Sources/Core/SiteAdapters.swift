@@ -237,17 +237,17 @@ public struct DiscoverItem: Identifiable, Hashable, Sendable {
 }
 
 public enum Discover {
+    private static func base(limit: Int, ratings: [String] = ["safe", "suggestive"]) -> [URLQueryItem] {
+        [URLQueryItem(name: "limit", value: String(limit)),
+         URLQueryItem(name: "includes[]", value: "cover_art"),
+         URLQueryItem(name: "availableTranslatedLanguage[]", value: "en"),
+         URLQueryItem(name: "hasAvailableChapters", value: "true")]
+            + ratings.map { URLQueryItem(name: "contentRating[]", value: $0) }
+    }
     /// MangaDex titles with English chapters: popular ones, or matches for a search.
     public static func mangaDex(query: String? = nil, limit: Int = 24, http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [DiscoverItem] {
         var parts = URLComponents(string: "https://api.mangadex.org/manga")!
-        var items = [
-            URLQueryItem(name: "limit", value: String(limit)),
-            URLQueryItem(name: "includes[]", value: "cover_art"),
-            URLQueryItem(name: "availableTranslatedLanguage[]", value: "en"),
-            URLQueryItem(name: "hasAvailableChapters", value: "true"),
-            URLQueryItem(name: "contentRating[]", value: "safe"),
-            URLQueryItem(name: "contentRating[]", value: "suggestive"),
-        ]
+        var items = base(limit: limit)
         if let query, !query.trimmingCharacters(in: .whitespaces).isEmpty {
             items.append(URLQueryItem(name: "title", value: query))
             items.append(URLQueryItem(name: "order[relevance]", value: "desc"))
@@ -256,10 +256,60 @@ public enum Discover {
         }
         parts.queryItems = items
         guard let url = parts.url else { return [] }
-        let data = try await http.fetch(url, referer: nil, image: false)
+        return try parse(try await http.fetch(url, referer: nil, image: false)).map(\.item)
+    }
+
+    /// "Because you read …": finds the series on MangaDex, then the best-rated titles sharing its genres.
+    public static func similar(to title: String, excluding: Set<String> = [], limit: Int = 16,
+                               http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [DiscoverItem] {
+        var lookup = URLComponents(string: "https://api.mangadex.org/manga")!
+        lookup.queryItems = base(limit: 5, ratings: ["safe", "suggestive", "erotica"]) + [
+            URLQueryItem(name: "title", value: title), URLQueryItem(name: "order[relevance]", value: "desc")]
+        guard let lookupURL = lookup.url else { return [] }
+        let found = try parse(try await http.fetch(lookupURL, referer: nil, image: false))
+        guard let source = found.first(where: { Self.sameTitle($0.item.title, title) }) ?? found.first else { return [] }
+        let tags = pickTags(source.tags)
+        guard !tags.isEmpty else { return [] }
+        var parts = URLComponents(string: "https://api.mangadex.org/manga")!
+        parts.queryItems = base(limit: limit + 8)
+            + tags.map { URLQueryItem(name: "includedTags[]", value: $0) }
+            + [URLQueryItem(name: "includedTagsMode", value: "AND"),
+               URLQueryItem(name: "order[rating]", value: "desc")]
+        guard let url = parts.url else { return [] }
+        let list = try parse(try await http.fetch(url, referer: nil, image: false)).map(\.item)
+        let skip = excluding.map { $0.lowercased() }
+        return Array(list.filter { item in
+            item.id != source.item.id && !skip.contains { Self.sameTitle($0, item.title) }
+        }.prefix(limit))
+    }
+
+    /// Up to two genre tags (themes fill in when a series has fewer), most specific first.
+    static func pickTags(_ value: Any?) -> [String] {
+        guard let tags = value as? [[String: Any]] else { return [] }
+        // Broad genres match almost everything; prefer the distinctive ones.
+        let broad: Set<String> = ["action", "adventure", "drama", "comedy", "romance", "slice of life"]
+        func entries(_ group: String) -> [(id: String, name: String)] {
+            tags.compactMap { tag -> (id: String, name: String)? in
+                guard let id = tag["id"] as? String, let a = tag["attributes"] as? [String: Any],
+                      a["group"] as? String == group else { return nil }
+                let name = ((a["name"] as? [String: Any])?["en"] as? String ?? "").lowercased()
+                return (id, name)
+            }
+        }
+        let genres = entries("genre").sorted { !broad.contains($0.name) && broad.contains($1.name) }
+        let themes = entries("theme")
+        return Array((genres + themes).prefix(2).map(\.id))
+    }
+
+    static func sameTitle(_ a: String, _ b: String) -> Bool {
+        func clean(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        return clean(a) == clean(b)
+    }
+
+    static func parse(_ data: Data) throws -> [(item: DiscoverItem, tags: Any?)] {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let list = object["data"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
-        return list.compactMap { entry -> DiscoverItem? in
+        return list.compactMap { entry -> (item: DiscoverItem, tags: Any?)? in
             guard let id = entry["id"] as? String, let a = entry["attributes"] as? [String: Any],
                   let page = URL(string: "https://mangadex.org/title/\(id)") else { return nil }
             let title = MangaDex.localized(a["title"]) ?? MangaDex.altTitle(a["altTitles"]) ?? "Untitled"
@@ -269,7 +319,7 @@ public enum Discover {
             let language = (a["originalLanguage"] as? String ?? "").lowercased()
             let kind = MangaDex.style(language: language, tags: a["tags"]).title
             let year = (a["year"] as? Int).map { " · \($0)" } ?? ""
-            return DiscoverItem(id: id, title: title, url: page, cover: cover, detail: kind + year)
+            return (DiscoverItem(id: id, title: title, url: page, cover: cover, detail: kind + year), a["tags"])
         }
     }
 }

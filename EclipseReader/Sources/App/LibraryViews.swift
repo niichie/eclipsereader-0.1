@@ -95,6 +95,7 @@ struct LibraryView: View {
     @AppStorage("libraryShowQuote") private var showQuote = true
     @State private var searchingEverywhere = false
     @State private var categoryID: String?
+    @AppStorage("libraryShowBecause") private var showBecause = true
     @State private var selecting = false
     @State private var selection = Set<String>()
     @State private var confirmRemove = false
@@ -153,6 +154,12 @@ struct LibraryView: View {
         }
     }
 
+    /// The comic you read most recently, for "Because you read …".
+    private var recentSeries: MangaSeries? {
+        guard let chapter = model.lastChapter, let series = model.series(id: model.seriesID(for: chapter)), series.kind != .book,
+              !model.isHidden(series) else { return nil }
+        return series
+    }
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -211,6 +218,10 @@ struct LibraryView: View {
                         if query.isEmpty && filter == .all && categoryID == nil && model.librarySeries.count < 12 {
                             DiscoverStrip(openSeries: $openSeries, width: contentWidth)
                         }
+                        // Recommendations from what you read last (manga, manhwa and comics; MangaDex genres).
+                        if query.isEmpty && categoryID == nil && filter != .books && showBecause, let recent = recentSeries {
+                            DiscoverStrip(openSeries: $openSeries, width: contentWidth, similarTo: recent.title)
+                        }
                         if visible.isEmpty && query.isEmpty {
                             ContentUnavailableView {
                                 Label(query.isEmpty ? "Nothing here yet" : "No matches", systemImage: "books.vertical")
@@ -236,7 +247,9 @@ struct LibraryView: View {
             }
             .confirmationDialog("Remove \(selection.count) series from the library?", isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) {
-                    for series in model.librarySeries where selection.contains(series.id) { model.remove(series) }
+                    for series in model.librarySeries where selection.contains(series.id) && series.id != LibraryModel.berserkID {
+                        model.remove(series)
+                    }
                     endSelection()
                 }
             } message: { Text("Reading progress and downloads for them are removed too.") }
@@ -510,6 +523,8 @@ struct DiscoverStrip: View {
     @EnvironmentObject private var model: LibraryModel
     @Binding var openSeries: MangaSeries?
     var width: CGFloat = 390
+    /// nil: popular on MangaDex. A title: "Because you read …" that series.
+    var similarTo: String? = nil
     @State private var items: [DiscoverItem] = []
     @State private var adding: String?
     @State private var error: String?
@@ -518,8 +533,13 @@ struct DiscoverStrip: View {
         VStack(alignment: .leading, spacing: 10) {
             if !items.isEmpty {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Discover").font(.title3.weight(.bold))
-                    Text("Popular on MangaDex").font(.footnote).foregroundStyle(.secondary)
+                    if let similarTo {
+                        Text("\(Text("Because you read ").foregroundStyle(.secondary))\(similarTo)")
+                            .font(.title3.weight(.bold)).lineLimit(1)
+                    } else {
+                        Text("Discover").font(.title3.weight(.bold))
+                        Text("Popular on MangaDex").font(.footnote).foregroundStyle(.secondary)
+                    }
                     Spacer()
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -553,11 +573,15 @@ struct DiscoverStrip: View {
             }
         }
         .padding(.top, 8)
-        .task {
+        .task(id: similarTo ?? "") {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
             #endif
-            if items.isEmpty { items = (try? await Discover.mangaDex(limit: 16)) ?? [] }
+            if let similarTo {
+                items = (try? await Discover.similar(to: similarTo, excluding: Set(model.allSeries.map(\.title)))) ?? []
+            } else if items.isEmpty {
+                items = (try? await Discover.mangaDex(limit: 16)) ?? []
+            }
         }
     }
     private func add(_ item: DiscoverItem) {
@@ -784,6 +808,10 @@ struct SettingsView: View {
                     NavigationLink { StatsPage() } label: {
                         SettingsRow(title: "Reading stats", detail: "Time read, streaks, chapters finished", symbol: "chart.bar.fill", tint: .green)
                     }
+                    NavigationLink { TrackingSettingsPage() } label: {
+                        SettingsRow(title: "Tracking", detail: model.state.aniListUser.map { "AniList · \($0)" } ?? "Sync progress to AniList",
+                                    symbol: "arrow.triangle.2.circlepath.circle.fill", tint: .cyan)
+                    }
                     NavigationLink { BackupSettingsPage() } label: {
                         SettingsRow(title: "Backup & restore", detail: "Move your library to another device", symbol: "externaldrive.fill", tint: .orange)
                     }
@@ -898,12 +926,63 @@ enum LibraryDensity: Int, CaseIterable, Identifiable {
     }
 }
 
+/// Create, rename, reorder and delete library categories.
+struct CategoriesPage: View {
+    @EnvironmentObject private var model: LibraryModel
+    @State private var adding = false
+    @State private var name = ""
+    @State private var renaming: LibraryCategory?
+    var body: some View {
+        List {
+            if model.categories.isEmpty {
+                Text("No categories yet. Make shelves like Reading, Plan to read or Favourites.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(model.categories) { category in
+                Button {
+                    name = category.name; renaming = category
+                } label: {
+                    HStack {
+                        Label(category.name, systemImage: "folder")
+                        Spacer()
+                        Text("\(category.seriesIDs.count)").monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+                .tint(.primary)
+                .swipeActions {
+                    Button("Delete", role: .destructive) { model.removeCategory(category) }
+                }
+            }
+            .onMove { model.moveCategories(from: $0, to: $1) }
+            .onDelete { offsets in offsets.map { model.categories[$0] }.forEach(model.removeCategory) }
+        }
+        .navigationTitle("Categories")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { name = ""; adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("New category")
+            }
+            if !model.categories.isEmpty { ToolbarItem(placement: .topBarLeading) { EditButton() } }
+        }
+        .alert("New category", isPresented: $adding) {
+            TextField("Name", text: $name)
+            Button("Create") { model.addCategory(name) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename category", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $name)
+            Button("Save") { if let renaming { model.renameCategory(renaming, to: name) } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+}
+
 struct LibrarySettingsPage: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("libraryDensity") private var density = LibraryDensity.comfortable.rawValue
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
     @AppStorage("libraryShowPick") private var showPick = true
+    @AppStorage("libraryShowBecause") private var showBecause = true
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     @State private var alertMessage: String?
     var body: some View {
@@ -916,6 +995,14 @@ struct LibrarySettingsPage: View {
                 Toggle("Continue reading bar", isOn: $showContinue)
                 Toggle("Quote of the launch", isOn: $showQuote)
                 Toggle("Pick of the launch (MyAnimeList & Open Library)", isOn: $showPick)
+                Toggle("“Because you read…” recommendations", isOn: $showBecause)
+            }
+            Section {
+                NavigationLink { CategoriesPage() } label: {
+                    LabeledContent("Categories", value: model.categories.isEmpty ? "None" : "\(model.categories.count)")
+                }
+            } footer: {
+                Text("Your own shelves, shown as tabs in the library. Long-press a cover, or choose Select… in the library menu, to file series.")
             }
             Section {
                 Button {
@@ -1503,6 +1590,7 @@ struct SeriesView: View {
     @State private var website = false
     @State private var pickingCover = false
     @State private var migrating = false
+    @State private var tracking = false
     @FocusState private var searchFocused: Bool
     var body: some View {
         if let series = model.series(id: seriesID) {
@@ -1660,6 +1748,12 @@ struct SeriesView: View {
                             if series.kind == .web && !builtIn {
                                 Button { migrating = true } label: { Label("Migrate to another site…", systemImage: "arrow.triangle.swap") }
                             }
+                            if series.kind != .book {
+                                Button { tracking = true } label: {
+                                    Label(AniList.linkedID(series, model: model) == nil ? "Track on AniList…" : "AniList tracking…",
+                                          systemImage: "arrow.triangle.2.circlepath")
+                                }
+                            }
                             if !builtIn {
                                 Button { newTitle = series.title; renaming = true } label: { Label("Rename", systemImage: "pencil") }
                                 Button(role: .destructive) { model.remove(series); dismiss() } label: { Label("Remove from library", systemImage: "trash") }
@@ -1674,6 +1768,7 @@ struct SeriesView: View {
             .sheet(isPresented: $website) { WebsiteView(url: series.url) }
             .sheet(isPresented: $pickingCover) { CoverPicker(series: series).environmentObject(model) }
             .sheet(isPresented: $migrating) { MigrateSheet(series: series).environmentObject(model) }
+            .sheet(isPresented: $tracking) { AniListLinkSheet(series: series).environmentObject(model) }
             .alert("Rename", isPresented: $renaming) {
                 TextField("Title", text: $newTitle)
                 Button("Save") { model.rename(series, to: newTitle) }
