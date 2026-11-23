@@ -1,33 +1,51 @@
 import SwiftUI
 
-/// Searches free libraries for books: Project Gutenberg (download and keep) and Open Library (borrow or read).
+/// Searches the free libraries whose books download straight into the library:
+/// Standard Ebooks and Project Gutenberg.
 @MainActor
 final class BookSearchModel: ObservableObject {
-    enum Phase: Equatable { case idle, loading, done([FreeBook]), failed }
+    enum Phase: Equatable { case idle, loading, done([FreeBook]), failed(String) }
+    @Published private(set) var standard: Phase = .idle
     @Published private(set) var gutenberg: Phase = .idle
-    @Published private(set) var openLibrary: Phase = .idle
     @Published private(set) var query = ""
     private var tasks: [Task<Void, Never>] = []
     func run(_ text: String) {
         tasks.forEach { $0.cancel() }
         query = text
-        gutenberg = .loading; openLibrary = .loading
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { standard = .idle; gutenberg = .idle; return }
+        standard = .loading; gutenberg = .loading
         tasks = [
             Task { [weak self] in
                 let result: Phase
-                do { result = .done(try await FreeBooks.gutenberg(query: text)) } catch { result = .failed }
+                do { result = .done(try await FreeBooks.standardEbooks(query: text)) }
+                catch { result = .failed(Self.explain(error, site: "Standard Ebooks")) }
                 guard let self, self.query == text, !Task.isCancelled else { return }
-                self.gutenberg = result
+                self.standard = result
             },
             Task { [weak self] in
                 let result: Phase
-                do { result = .done(try await FreeBooks.openLibrary(query: text)) } catch { result = .failed }
+                do { result = .done(try await FreeBooks.gutenberg(query: text)) }
+                catch { result = .failed(Self.explain(error, site: "Project Gutenberg")) }
                 guard let self, self.query == text, !Task.isCancelled else { return }
-                self.openLibrary = result
+                self.gutenberg = result
             },
         ]
     }
     func cancel() { tasks.forEach { $0.cancel() } }
+    /// Nothing found anywhere (and nothing still loading).
+    var nothingFound: Bool {
+        [standard, gutenberg].allSatisfy { phase in
+            switch phase { case .done(let books): books.isEmpty; case .failed: true; default: false }
+        }
+    }
+    static func explain(_ error: Error, site: String) -> String {
+        switch error as? SourceError {
+        case .unavailable(503): "\(site) is down for maintenance right now. Try again later."
+        case .timeout: "\(site) is taking too long to answer. Try again in a minute."
+        case .unavailable, .restricted: "\(site) isn’t answering right now. Try again later."
+        default: "\(site) couldn’t be searched just now. Check your connection."
+        }
+    }
 }
 
 /// A book cover with title and a line of detail, for search results and carousels.
@@ -69,12 +87,12 @@ struct BooksBrowseSection: View {
     @State private var popular: [FreeBook] = []
     @State private var busyID: String?
     @State private var message: String?
+    /// Libraries whose books download straight into eclipsereader (tap Add book on a book's page).
+    /// Lending libraries (Open Library, Internet Archive) are left out: their books are borrow-only.
     static let libraries: [CatalogSite] = [
-        SiteCatalog.site("Project Gutenberg", "https://www.gutenberg.org/", "70,000+ free classics · tap Download EPUB", "books.vertical"),
         SiteCatalog.site("Standard Ebooks", "https://standardebooks.org/ebooks", "Beautifully made free classics", "text.book.closed"),
-        SiteCatalog.site("Open Library", "https://openlibrary.org/", "Borrow millions of books free", "building.columns"),
-        SiteCatalog.site("Internet Archive", "https://archive.org/details/texts", "Free books, magazines and more", "archivebox"),
-        SiteCatalog.site("Wikisource", "https://en.wikisource.org/", "Free public-domain texts", "doc.text"),
+        SiteCatalog.site("Project Gutenberg", "https://www.gutenberg.org/", "70,000+ free public-domain books", "books.vertical"),
+        SiteCatalog.site("Wikisource", "https://en.wikisource.org/", "Public-domain texts · EPUB downloads", "doc.text"),
     ]
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -132,7 +150,10 @@ struct BooksBrowseSection: View {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
             #endif
-            if popular.isEmpty { popular = Array(((try? await FreeBooks.gutenberg()) ?? []).prefix(16)) }
+            if popular.isEmpty {
+                popular = Array(((try? await FreeBooks.standardEbooks()) ?? []).prefix(20))
+                if popular.isEmpty { popular = Array(((try? await FreeBooks.gutenberg()) ?? []).prefix(16)) }
+            }
         }
     }
     private func open(_ book: FreeBook) {
@@ -150,7 +171,7 @@ struct BooksBrowseSection: View {
     }
 }
 
-/// Results from Project Gutenberg and Open Library, plus matching books already in your library.
+/// Results from Standard Ebooks and Project Gutenberg, plus matching books already in your library.
 struct BookSearchResults: View {
     @EnvironmentObject private var model: LibraryModel
     @ObservedObject var search: BookSearchModel
@@ -165,8 +186,14 @@ struct BookSearchResults: View {
                     Text("\(series.title)\(series.author.map { " · \($0)" } ?? "")").font(.subheadline)
                 }
             }
-            row("Project Gutenberg", "Free to download and keep", search.gutenberg)
-            row("Open Library", "Borrow or read free online", search.openLibrary)
+            row("Standard Ebooks", "Tap to download and keep", search.standard)
+            row("Project Gutenberg", "Tap to download and keep", search.gutenberg)
+            if search.nothingFound {
+                Label {
+                    Text("Free libraries only have books that are out of copyright (mostly published before 1930). For newer books, download an EPUB you own in the browser, or import it from Files.")
+                } icon: { Image(systemName: "info.circle") }
+                .font(.footnote).foregroundStyle(.secondary)
+            }
         }
     }
     @ViewBuilder private func row(_ title: String, _ detail: String, _ phase: BookSearchModel.Phase) -> some View {
@@ -174,8 +201,8 @@ struct BookSearchResults: View {
         case .idle: EmptyView()
         case .loading:
             HStack(spacing: 8) { Text(title).font(.headline); ProgressView().controlSize(.mini) }
-        case .failed:
-            Text("\(title) didn’t answer.").font(.footnote).foregroundStyle(.secondary)
+        case .failed(let reason):
+            Text(reason).font(.footnote).foregroundStyle(.secondary)
         case .done(let books):
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
@@ -219,8 +246,6 @@ struct BookSearchSheet: View {
                     .padding(.horizontal, 14).frame(height: 50).eclipseCard(cornerRadius: 14)
                     if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
                     BookSearchResults(search: search, busyID: busyID) { open($0) }
-                    Text("Books still under copyright usually aren’t free. Open Library can lend many of them, or import a copy you own from Files.")
-                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 .padding(20).frame(maxWidth: 900).frame(maxWidth: .infinity)
             }
@@ -248,7 +273,7 @@ struct BookSearchSheet: View {
     }
 }
 
-/// Live pick of the launch: a top-ranked manga from MyAnimeList, or a 4★+ book from Open Library.
+/// Live pick of the launch: a top-rated manga from AniList (MyAnimeList as backup), or one of Standard Ebooks' most-read classics.
 @MainActor
 final class PickStore: ObservableObject {
     static let shared = PickStore()
@@ -278,6 +303,7 @@ final class PickStore: ObservableObject {
 /// The pick card: cover, score, a few lines of synopsis, "Find & read" and another pick.
 struct PickCard: View {
     let pick: Recommendation
+    var busy = false
     let read: () -> Void
     let next: () -> Void
     let close: () -> Void
@@ -302,10 +328,14 @@ struct PickCard: View {
                 }
                 HStack(spacing: 8) {
                     Button(action: read) {
-                        Label(pick.isBook ? "Find it" : "Find & read", systemImage: "magnifyingglass")
-                            .font(.caption.weight(.bold)).padding(.horizontal, 12).frame(height: 30)
-                            .background(Eclipse.highlight, in: Capsule()).foregroundStyle(.black)
-                    }.buttonStyle(PressableStyle())
+                        HStack(spacing: 5) {
+                            if busy { ProgressView().controlSize(.mini).tint(.black) }
+                            else { Image(systemName: pick.isBook && pick.link != nil ? "arrow.down" : "magnifyingglass") }
+                            Text(pick.isBook ? (pick.link != nil ? "Get it free" : "Find it") : "Find & read")
+                        }
+                        .font(.caption.weight(.bold)).padding(.horizontal, 12).frame(height: 30)
+                        .background(Eclipse.highlight, in: Capsule()).foregroundStyle(.black)
+                    }.buttonStyle(PressableStyle()).disabled(busy)
                     Button(action: next) {
                         Image(systemName: "shuffle").font(.caption.weight(.bold))
                             .frame(width: 30, height: 30).background(Color.white.opacity(0.1), in: Circle())

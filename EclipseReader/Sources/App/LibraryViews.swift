@@ -95,6 +95,7 @@ struct LibraryView: View {
     @AppStorage("libraryShowQuote") private var showQuote = true
     @State private var searchingEverywhere = false
     @State private var categoryID: String?
+    @State private var bookPickBusy = false
     @AppStorage("libraryShowBecause") private var showBecause = true
     @State private var selecting = false
     @State private var selection = Set<String>()
@@ -187,7 +188,7 @@ struct LibraryView: View {
                                 })
                             }
                             if showPick && !bookPickClosed, let pick = picks.book {
-                                PickCard(pick: pick, read: { readBook(pick.title) }, next: { withAnimation(.snappy) { picks.shuffle(book: true) } },
+                                PickCard(pick: pick, busy: bookPickBusy, read: { readBookPick(pick) }, next: { withAnimation(.snappy) { picks.shuffle(book: true) } },
                                          close: { withAnimation(.snappy) { bookPickClosed = true } })
                             }
                         }
@@ -334,6 +335,17 @@ struct LibraryView: View {
         let title = pick.title.lowercased()
         if let owned = model.librarySeries.first(where: { $0.title.lowercased() == title }) { openSeries = owned }
         else { quoteSearch = QuoteSearch(query: pick.title) }
+    }
+    /// The book of the launch: open your copy, or download it (every pick is free to keep).
+    private func readBookPick(_ pick: Recommendation) {
+        let lower = pick.title.lowercased()
+        if let owned = model.librarySeries.first(where: { $0.kind == .book && $0.title.lowercased() == lower }) { openSeries = owned; return }
+        guard let link = pick.link else { readBook(pick.title); return }
+        bookPickBusy = true
+        Task {
+            defer { bookPickBusy = false }
+            do { openSeries = try await model.downloadBook(link) } catch { bookSearch = QuoteSearch(query: pick.title) }
+        }
     }
     /// A book from a quote or pick: open your copy, or look for it in the free libraries.
     private func readBook(_ title: String) {

@@ -1,25 +1,112 @@
 import Foundation
 
-/// A book from a free library: Project Gutenberg (through Gutendex) or Open Library.
+/// A book from a free library you can download and keep: Standard Ebooks or Project Gutenberg.
 public struct FreeBook: Identifiable, Hashable, Sendable {
     public let id: String
     public let title: String
     public let author: String?
     public let cover: URL?
-    /// Direct EPUB download, when the book is free to keep.
+    /// Direct EPUB download.
     public let download: URL?
-    /// The book's own page (to borrow or read online).
+    /// The book's own page.
     public let page: URL?
     public let detail: String?
     public let source: String
 }
 
+/// Runs work with a deadline (slow mirrors and APIs shouldn't hold the screen hostage).
+public func withDeadline<T: Sendable>(_ seconds: Double, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await work() }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw SourceError.timeout
+        }
+        defer { group.cancelAll() }
+        guard let first = try await group.next() else { throw SourceError.timeout }
+        return first
+    }
+}
+
 public enum FreeBooks {
-    /// Project Gutenberg's 70,000+ public-domain books. No query: the most downloaded right now.
+    // MARK: Standard Ebooks
+
+    /// Standard Ebooks: carefully typeset public-domain classics. No query: their most-read books.
+    public static func standardEbooks(query: String? = nil, http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [FreeBook] {
+        var parts = URLComponents(string: "https://standardebooks.org/ebooks")!
+        let q = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        parts.queryItems = q.isEmpty
+            ? [URLQueryItem(name: "sort", value: "popularity"), URLQueryItem(name: "per-page", value: "48")]
+            : [URLQueryItem(name: "query", value: q), URLQueryItem(name: "per-page", value: "48")]
+        guard let url = parts.url else { return [] }
+        let data = try await http.fetch(url, referer: nil, image: false)
+        return parseStandardEbooks(String(decoding: data, as: UTF8.self))
+    }
+
+    static func parseStandardEbooks(_ html: String) -> [FreeBook] {
+        let site = "https://standardebooks.org"
+        return LinkedSource.matches(#"(?is)<li\b[^>]*typeof=["']schema:Book["'][^>]*about=["'](/ebooks/[^"']+)["'][^>]*>(.*?)</li>"#, html)
+            .compactMap { m -> FreeBook? in
+                let path = m[0], block = m[1]
+                let names = LinkedSource.matches(#"(?is)<span\b[^>]*property=["']schema:name["'][^>]*>(.*?)</span>"#, block).map { LinkedSource.plain($0[0]) }
+                guard let title = names.first, !title.isEmpty else { return nil }
+                let cover = LinkedSource.firstMatch(#"<img\b[^>]*src=["']([^"']+)["']"#, block).flatMap { URL(string: $0.hasPrefix("/") ? site + $0 : $0) }
+                // /ebooks/bram-stoker/dracula → …/downloads/bram-stoker_dracula.epub
+                let file = path.dropFirst("/ebooks/".count).replacingOccurrences(of: "/", with: "_")
+                return FreeBook(id: "se-\(path)", title: title, author: names.count > 1 ? names[1] : nil, cover: cover,
+                                download: URL(string: "\(site)\(path)/downloads/\(file).epub?source=download"),
+                                page: URL(string: site + path), detail: "Standard Ebooks", source: "Standard Ebooks")
+            }
+    }
+
+    // MARK: Project Gutenberg
+
+    /// Project Gutenberg's 70,000+ public-domain books, from its own search (Gutendex when that's down).
+    /// No query: the most downloaded books.
     public static func gutenberg(query: String? = nil, http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [FreeBook] {
+        let q = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var parts = URLComponents(string: "https://www.gutenberg.org/ebooks/search/")!
+        parts.queryItems = q.isEmpty ? [URLQueryItem(name: "sort_order", value: "downloads")] : [URLQueryItem(name: "query", value: q)]
+        var siteError: Error?
+        if let url = parts.url {
+            do {
+                let found = parseGutenbergSearch(String(decoding: try await http.fetch(url, referer: nil, image: false), as: UTF8.self))
+                if !found.isEmpty || !q.isEmpty { return found }
+            } catch { siteError = error }
+        }
+        do {
+            return try await withDeadline(12) { try await gutendex(query: q.isEmpty ? nil : q, http: http) }
+        } catch {
+            throw siteError ?? error
+        }
+    }
+
+    /// gutenberg.org's search results: <li class="booklink"> with title, author and downloads.
+    static func parseGutenbergSearch(_ html: String) -> [FreeBook] {
+        var seen = Set<Int>()
+        return LinkedSource.matches(#"(?is)<li\b[^>]*class=["'][^"']*booklink[^"']*["'][^>]*>(.*?)</li>"#, html).compactMap { m -> FreeBook? in
+            let block = m[0]
+            guard let raw = LinkedSource.firstMatch(#"href=["']/ebooks/(\d+)["']"#, block), let id = Int(raw), seen.insert(id).inserted,
+                  let title = LinkedSource.firstMatch(#"(?is)<span\b[^>]*class=["']title["'][^>]*>(.*?)</span>"#, block).map(LinkedSource.plain),
+                  !title.isEmpty else { return nil }
+            let author = LinkedSource.firstMatch(#"(?is)<span\b[^>]*class=["']subtitle["'][^>]*>(.*?)</span>"#, block).map(LinkedSource.plain)
+            let extra = LinkedSource.firstMatch(#"(?is)<span\b[^>]*class=["']extra["'][^>]*>(.*?)</span>"#, block).map(LinkedSource.plain)
+            return book(id: id, title: title, author: author, detail: extra)
+        }
+    }
+
+    static func book(id: Int, title: String, author: String?, detail: String?) -> FreeBook {
+        FreeBook(id: "pg-\(id)", title: title, author: author,
+                 cover: URL(string: "https://www.gutenberg.org/cache/epub/\(id)/pg\(id).cover.medium.jpg"),
+                 download: URL(string: "https://www.gutenberg.org/ebooks/\(id).epub3.images"),
+                 page: URL(string: "https://www.gutenberg.org/ebooks/\(id)"), detail: detail, source: "Project Gutenberg")
+    }
+
+    /// Gutendex, a community index of Project Gutenberg.
+    static func gutendex(query: String?, http: any HTTPTransport) async throws -> [FreeBook] {
         var parts = URLComponents(string: "https://gutendex.com/books/")!
         var items = [URLQueryItem(name: "mime_type", value: "application/epub+zip")]
-        if let query, !query.trimmingCharacters(in: .whitespaces).isEmpty { items.append(URLQueryItem(name: "search", value: query)) }
+        if let query { items.append(URLQueryItem(name: "search", value: query)) }
         parts.queryItems = items
         guard let url = parts.url else { return [] }
         return try parseGutendex(try await http.fetch(url, referer: nil, image: false))
@@ -29,14 +116,9 @@ public enum FreeBooks {
               let results = object["results"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
         return results.compactMap { entry -> FreeBook? in
             guard let id = entry["id"] as? Int, let title = entry["title"] as? String else { return nil }
-            let formats = entry["formats"] as? [String: String] ?? [:]
-            let epub = formats.first(where: { $0.key.hasPrefix("application/epub+zip") }).flatMap { URL(string: $0.value) }
-            let cover = formats["image/jpeg"].flatMap(URL.init(string:))
             let author = ((entry["authors"] as? [[String: Any]])?.first?["name"] as? String).map(flipName)
             let downloads = entry["download_count"] as? Int
-            return FreeBook(id: "pg-\(id)", title: title, author: author, cover: cover, download: epub,
-                            page: URL(string: "https://www.gutenberg.org/ebooks/\(id)"),
-                            detail: downloads.map { "\($0.formatted()) downloads" }, source: "Project Gutenberg")
+            return book(id: id, title: title, author: author, detail: downloads.map { "\($0.formatted()) downloads" })
         }
     }
     /// "Austen, Jane" → "Jane Austen".
@@ -46,27 +128,14 @@ public enum FreeBooks {
         return parts[1] + " " + parts[0]
     }
 
-    /// Open Library: every edition it knows, free to borrow or read when available.
-    public static func openLibrary(query: String, http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [FreeBook] {
-        var parts = URLComponents(string: "https://openlibrary.org/search.json")!
-        parts.queryItems = [URLQueryItem(name: "q", value: query),
-                            URLQueryItem(name: "fields", value: "key,title,author_name,cover_i,ebook_access,first_publish_year,ratings_average"),
-                            URLQueryItem(name: "limit", value: "20")]
-        guard let url = parts.url else { return [] }
-        let data = try await http.fetch(url, referer: nil, image: false)
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let docs = object["docs"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
-        return docs.compactMap { doc -> FreeBook? in
-            guard let key = doc["key"] as? String, let title = doc["title"] as? String else { return nil }
-            let access = doc["ebook_access"] as? String ?? "no_ebook"
-            let rating = (doc["ratings_average"] as? Double).map { String(format: "★ %.1f", $0) }
-            let availability = access == "public" ? "Free to read" : access == "borrowable" ? "Borrow free" : nil
-            return FreeBook(id: "ol-\(key)", title: title, author: (doc["author_name"] as? [String])?.first,
-                            cover: (doc["cover_i"] as? Int).flatMap { URL(string: "https://covers.openlibrary.org/b/id/\($0)-L.jpg") },
-                            download: nil, page: URL(string: "https://openlibrary.org\(key)"),
-                            detail: [availability, rating, (doc["first_publish_year"] as? Int).map(String.init)].compactMap { $0 }.joined(separator: " · "),
-                            source: "Open Library")
-        }
+    /// Other places the same file lives: Project Gutenberg's own mirror keeps serving when gutenberg.org is down.
+    public static func mirrors(for url: URL) -> [URL] {
+        let text = url.absoluteString
+        guard url.host?.hasSuffix("gutenberg.org") == true,
+              let raw = LinkedSource.firstMatch(#"/ebooks/(\d+)\.epub"#, text) ?? LinkedSource.firstMatch(#"/cache/epub/(\d+)/"#, text),
+              let id = Int(raw) else { return [] }
+        return ["https://gutenberg.pglaf.org/cache/epub/\(id)/pg\(id)-images-3.epub",
+                "https://aleph.pglaf.org/cache/epub/\(id)/pg\(id)-images-3.epub"].compactMap(URL.init(string:))
     }
 }
 
@@ -116,6 +185,11 @@ extension WebsiteHTTPClient {
         try HTTPPolicy.validate(status: http.statusCode)
         let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard size > 0, size <= maxBytes else { throw BookReaderError.unreadable("That download was empty or too large.") }
+        // A web page instead of the file (a "thank you" or bot-check page): not a book.
+        if (http.mimeType ?? "").lowercased().hasPrefix("text/html"), !["html", "htm", "xhtml"].contains(url.pathExtension.lowercased()) {
+            try? FileManager.default.removeItem(at: file)
+            throw BookReaderError.unreadable("The site showed a web page instead of the book. Open it in the browser and download it there.")
+        }
         var name = http.suggestedFilename ?? url.lastPathComponent
         if (name as NSString).pathExtension.isEmpty {
             let mime = http.mimeType ?? ""

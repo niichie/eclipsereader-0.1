@@ -172,9 +172,15 @@ extension LibraryModel {
         save()
     }
     /// Downloads a free book (Project Gutenberg EPUB) straight into the library.
+    /// Downloads a book into the library, trying Project Gutenberg's mirror when gutenberg.org is down.
     func downloadBook(_ url: URL) async throws -> MangaSeries {
-        let file = try await WebsiteHTTPClient().downloadFile(url)
-        return try await importBook(file)
+        let client = WebsiteHTTPClient()
+        var lastError: Error = SourceError.unavailable(0)
+        for candidate in [url] + FreeBooks.mirrors(for: url) {
+            do { return try await importBook(try await client.downloadFile(candidate)) }
+            catch { lastError = error }
+        }
+        throw lastError
     }
     func bookPosition(_ seriesID: String) -> BookPosition? { state.bookPositions?[seriesID] }
     func setBookPosition(_ position: BookPosition, for seriesID: String) {

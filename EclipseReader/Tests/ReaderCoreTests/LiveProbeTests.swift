@@ -81,12 +81,15 @@ final class LiveProbeTests: XCTestCase {
     }
 
     func testSites() async {
-        let sites = [("Asura Scans", "https://asurascans.com/comics"), ("MangaDot", "https://mangadot.net/"),
-                     ("MangaBall", "https://mangaball.com/"), ("Comix", "https://comix.to/")]
-        for (name, address) in sites {
+        let sites = [("Asura Scans", "https://asurascans.com/comics", "murim login"), ("MangaDot", "https://mangadot.net/", "Solo Leveling"),
+                     ("MangaBall", "https://mangaball.com/", "Solo Leveling"), ("Comix", "https://comix.to/", "Solo Leveling")]
+        for (name, address, query) in sites {
             await raw(name + " home", address)
-            await series(name, source: SearchSource(name: name, kind: .site(URL(string: address)!)), query: "Solo Leveling")
+            await series(name, source: SearchSource(name: name, kind: .site(URL(string: address)!)), query: query)
         }
+        await chapters("Comix title", url: URL(string: "https://comix.to/title/l9vj2-the-demon-king-overrun-by-heroes")!)
+        let (_, _, dot2) = await body("https://mangadot.net/manga/118?page=2")
+        dump("mangadot page 2", "chapter links: \(Set(LinkedSource.matches(#"/chapter/(\d+)"#, dot2).map { $0[0] }).count) || \(around(dot2, #"(?i)next|page=2|pagination"#, before: 300, after: 300))")
         let official = [("MANGA Plus", "https://mangaplus.shueisha.co.jp/updates"), ("Tapas", "https://tapas.io/"),
                         ("Tappytoon", "https://www.tappytoon.com/en"), ("Manta", "https://manta.net/en"),
                         ("GlobalComix", "https://globalcomix.com/"), ("Comikey", "https://comikey.com/"),
@@ -95,6 +98,26 @@ final class LiveProbeTests: XCTestCase {
     }
 
     func testBooks() async {
+        _ = await timed("Standard Ebooks search", { try await FreeBooks.standardEbooks(query: "dracula", http: http) }) {
+            ($0.count > 0, "\($0.count): " + $0.prefix(3).map { "\($0.title) by \($0.author ?? "-") \($0.download?.absoluteString ?? "-") cover=\($0.cover?.absoluteString ?? "-")" }.joined(separator: " | "))
+        }
+        _ = await timed("Standard Ebooks popular", { try await FreeBooks.standardEbooks(http: http) }) { ($0.count > 0, "\($0.count): " + $0.prefix(5).map(\.title).joined(separator: ", ")) }
+        if let book = try? await FreeBooks.standardEbooks(query: "frankenstein", http: http).first, let link = book.download {
+            _ = await timed("Standard Ebooks download \(book.title)", { try await http.downloadFile(link) }) { file in
+                let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                return (size > 10_000, "\(file.lastPathComponent) \(size)B")
+            }
+        }
+        _ = await timed("Gutenberg search (site, then Gutendex)", { try await FreeBooks.gutenberg(query: "frankenstein", http: http) }) {
+            ($0.count > 0, "\($0.count): " + $0.prefix(3).map { "\($0.title) by \($0.author ?? "-")" }.joined(separator: " | "))
+        }
+        for mirror in FreeBooks.mirrors(for: URL(string: "https://www.gutenberg.org/ebooks/84.epub3.images")!) {
+            _ = await timed("Gutenberg mirror \(mirror.host ?? "")", { try await http.downloadFile(mirror) }) { file in
+                let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                return (size > 10_000, "\(file.lastPathComponent) \(size)B")
+            }
+        }
+        await raw("Gutenberg mirror cover", "https://gutenberg.pglaf.org/cache/epub/84/pg84.cover.medium.jpg")
         _ = await timed("Gutenberg (gutendex) search", { try await FreeBooks.gutenberg(query: "pride and prejudice", http: http) }) {
             ($0.count > 0, "\($0.count): " + $0.prefix(3).map { "\($0.title) \($0.download?.absoluteString ?? "-")" }.joined(separator: " | "))
         }

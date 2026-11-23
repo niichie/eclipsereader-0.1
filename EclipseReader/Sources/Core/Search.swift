@@ -44,7 +44,7 @@ public enum GlobalSearch {
             var parts = URLComponents(string: "https://www.webtoons.com/en/search")!
             parts.queryItems = [URLQueryItem(name: "keyword", value: q)]
             guard let url = parts.url else { return [] }
-            return relevant(webtoonsResults(in: try await text(url, http: http), base: url), to: q)
+            return strictCanvas(relevant(webtoonsResults(in: try await text(url, http: http), base: url), to: q), query: q)
         case .site(let root):
             var lastError: Error?
             for url in searchURLs(root: root, query: q) {
@@ -69,10 +69,21 @@ public enum GlobalSearch {
         }
     }
 
+    /// Sites whose search lives somewhere other than WordPress's `?s=` (checked against the live sites).
+    static let searchPaths: [String: (path: String, parameter: String)] = [
+        "asurascans.com": ("/browse", "search"),
+    ]
     /// The search addresses to try for a website, most specific first.
     public static func searchURLs(root: URL, query: String) -> [URL] {
         var base = URLComponents()
         base.scheme = "https"; base.host = root.host; base.path = "/"
+        let host = (root.host ?? "").lowercased().replacingOccurrences(of: "www.", with: "")
+        if let known = searchPaths[host] {
+            var own = base
+            own.path = known.path
+            own.queryItems = [URLQueryItem(name: known.parameter, value: query)]
+            return [own.url].compactMap { $0 }
+        }
         var madara = base
         madara.queryItems = [URLQueryItem(name: "s", value: query), URLQueryItem(name: "post_type", value: "wp-manga")]
         var plain = base
@@ -163,8 +174,23 @@ public enum GlobalSearch {
             let cover = (img?["src"] ?? img?["data-src"]).flatMap { LinkedSource.resolve($0, base: base) }
             let title = LinkedSource.firstMatch(#"(?is)class=["'][^"']*(?:subj|title)[^"']*["'][^>]*>(.*?)<"#, m[1]).map(LinkedSource.plain)
                 ?? img?["alt"].map(LinkedSource.plain)
-            items.append(DiscoverItem(id: "webtoons-" + number, title: title ?? "Untitled", url: url, cover: cover, detail: "Webtoon"))
+            let canvas = url.path.lowercased().contains("/canvas/")
+            items.append(DiscoverItem(id: "webtoons-" + number, title: title ?? "Untitled", url: url, cover: cover,
+                                      detail: canvas ? "Canvas · fan & indie" : "WEBTOON Original"))
         }
-        return items
+        // Official series first; Canvas (anyone can post there) only when its title has every word searched for.
+        return items.filter { !$0.url.path.lowercased().contains("/canvas/") }
+            + items.filter { $0.url.path.lowercased().contains("/canvas/") }
+    }
+    /// Canvas results need the whole query in the title; a search for "Jujutsu Kaisen" shouldn't fill up with fan comics.
+    static func strictCanvas(_ items: [DiscoverItem], query: String) -> [DiscoverItem] {
+        let words = query.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 2 }
+        let originals = items.filter { !$0.url.path.lowercased().contains("/canvas/") }
+        return items.filter { item in
+            guard item.url.path.lowercased().contains("/canvas/") else { return true }
+            // Fan works named after an official series are noise when the official one is right there.
+            if !originals.isEmpty && originals.contains(where: { $0.title.lowercased().contains(words.joined(separator: " ")) }) { return false }
+            return words.allSatisfy { item.title.lowercased().contains($0) }
+        }
     }
 }

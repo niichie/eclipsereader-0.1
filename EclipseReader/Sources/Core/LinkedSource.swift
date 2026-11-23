@@ -504,7 +504,7 @@ public struct LinkedSource: Sendable {
             return run.enumerated().map { page($1, $0) }
         }
         // Script-built readers: image addresses listed in the page's data.
-        let listed = scriptImages(in: html)
+        let listed = scriptImages(in: html, base: base)
         if listed.count >= 3 { return listed.enumerated().map { MangaPage(url: $1, label: "Page \($0 + 1)") } }
         throw SourceError.unsupportedStructure
     }
@@ -543,12 +543,15 @@ public struct LinkedSource: Sendable {
 
     /// Image addresses written into a page's scripts (JSON chapter data), in order, grouped
     /// by folder or host so the largest consistent set wins.
-    static func scriptImages(in html: String) -> [URL] {
+    static func scriptImages(in html: String, base: URL? = nil) -> [URL] {
         let text = html.replacingOccurrences(of: "\\/", with: "/")
         var seen = Set<URL>()
         var urls: [URL] = []
-        for m in matches(#"(https://[^\s"'<>\\]+?\.(?:jpe?g|png|webp|avif)(?:\?[^\s"'<>\\]*)?)["'\\]"#, text) {
-            guard let url = URL(string: m[0]), WebLink.publicHTTPS(url) else { continue }
+        // Full addresses, and site-relative paths ("/chapters/…/001.webp", common in React and Next.js data).
+        for m in matches(#"(https://[^\s"'<>\\]+?\.(?:jpe?g|png|webp|avif)(?:\?[^\s"'<>\\]*)?|(?<=["'\\])/[A-Za-z0-9_][^\s"'<>\\:]*?\.(?:jpe?g|png|webp|avif)(?:\?[^\s"'<>\\]*)?)["'\\]"#, text) {
+            let raw = m[0]
+            guard let url = raw.hasPrefix("/") ? base.flatMap({ resolve(raw, base: $0) }) : URL(string: raw),
+                  WebLink.publicHTTPS(url) else { continue }
             let lower = url.absoluteString.lowercased()
             if junk.contains(where: lower.contains) || lower.contains("cover") { continue }
             if seen.insert(url).inserted { urls.append(url) }
@@ -560,7 +563,15 @@ public struct LinkedSource: Sendable {
             return order.map { g[$0]! }.max(by: { $0.count < $1.count }) ?? []
         }
         let byFolder = group { ($0.host ?? "") + $0.deletingLastPathComponent().path }
-        return byFolder.count >= 3 ? byFolder : group { $0.host ?? "" }
+        let chosen = byFolder.count >= 3 ? byFolder : group { $0.host ?? "" }
+        return numberedOrder(chosen)
+    }
+
+    /// Pages named 001.webp, 002.webp… go in number order, whatever order the script listed them in.
+    static func numberedOrder(_ urls: [URL]) -> [URL] {
+        let stems = urls.map { $0.deletingPathExtension().lastPathComponent }
+        guard urls.count >= 2, stems.allSatisfy({ $0.range(of: #"^\d+([-_.]\d+)*$"#, options: .regularExpression) != nil }) else { return urls }
+        return zip(urls, stems).sorted { $0.1.localizedStandardCompare($1.1) == .orderedAscending }.map(\.0)
     }
 }
 
