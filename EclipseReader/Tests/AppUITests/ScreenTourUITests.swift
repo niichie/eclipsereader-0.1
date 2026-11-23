@@ -110,7 +110,7 @@ final class ScreenTourUITests: XCTestCase {
     @MainActor
     private func shot(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
+        attachment.name = "\(UIDevice.current.name) - \(name)"
         attachment.lifetime = .keepAlways
         add(attachment)
     }

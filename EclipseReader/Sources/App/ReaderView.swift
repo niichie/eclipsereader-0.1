@@ -23,6 +23,8 @@ struct ReaderView: View {
     @State private var handle = ReaderHandle()
     @State private var scanNonce = 0
     @State private var tallPages = 0
+    @State private var pickingCover = false
+    @State private var toast: String?
     /// Global (manga) settings adjusted for this series' style: manhwa scrolls vertically,
     /// comics read left to right. Tall strips switch to vertical even before a style is known.
     private var effective: ReaderPreferences {
@@ -143,6 +145,20 @@ struct ReaderView: View {
                     }.preferredColorScheme(.dark)
                 }
                 .sheet(isPresented: $website) { WebsiteView(url: chapter.url) }
+                .sheet(isPresented: $pickingCover) {
+                    if let series = library.series(id: library.seriesID(for: chapter)) {
+                        CoverPicker(series: series).environmentObject(library)
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if let toast {
+                        Label(toast, systemImage: "checkmark.circle.fill")
+                            .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .padding(.top, 70)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
                 .sheet(item: $translator.editing) { block in TranslationEditor(model: translator, block: block) }
                 .translationRunner(translator)
                 .onChange(of: chapter.id) { _, _ in translator.clear() }
@@ -190,12 +206,21 @@ struct ReaderView: View {
                 if library.canDownload(chapter) && !library.isDownloaded(chapter) && library.downloads[chapter.id] == nil {
                     Button("Download chapter", systemImage: "arrow.down.circle") { library.download([chapter]) }
                 }
-                if pages.indices.contains(page) {
-                    Button("Use this page as cover", systemImage: "photo") {
-                        let current = pages[page]
-                        let seriesID = library.seriesID(for: chapter)
-                        Task { try? await library.chooseCoverPage(current, seriesID: seriesID) }
+                Section("Cover") {
+                    if pages.indices.contains(page) {
+                        Button("Use this page as cover", systemImage: "photo") {
+                            let current = pages[page]
+                            let seriesID = library.seriesID(for: chapter)
+                            let source = chapter
+                            Task {
+                                do {
+                                    try await library.chooseCoverPage(current, seriesID: seriesID, chapter: source)
+                                    flash("Cover updated")
+                                } catch { flash("Couldn’t use this page: \(error.localizedDescription)") }
+                            }
+                        }
                     }
+                    Button("Change cover…", systemImage: "photo.on.rectangle.angled") { pickingCover = true }
                 }
                 if chapter.url.scheme == "https" {
                     ShareLink(item: chapter.url) { Label("Share link", systemImage: "square.and.arrow.up") }
@@ -278,6 +303,13 @@ struct ReaderView: View {
         .foregroundStyle(on ? Eclipse.highlight : .white)
         .frame(maxWidth: .infinity, minHeight: 44)
         .contentShape(Rectangle())
+    }
+    private func flash(_ text: String) {
+        withAnimation(.snappy) { toast = text }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation(.snappy) { if toast == text { toast = nil } }
+        }
     }
     private func toggleTrim() {
         library.preferences.trimMargins = !(library.preferences.trimMargins ?? true)

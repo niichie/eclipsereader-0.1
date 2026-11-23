@@ -117,7 +117,7 @@ struct BrowseView: View {
                     }
 
                     section("Connected", detail: "Chapters, covers and pages straight from the site") {
-                        siteGrid(SiteCatalog.connected + [SiteCatalog.site("ReadBerserk", "https://readberserk.com/", "Berserk, built in · native", "moon.fill", native: true)])
+                        siteGrid(SiteCatalog.connected)
                     }
                     section("Popular sites", detail: "Open a series, then tap Add to library") {
                         siteGrid(SiteCatalog.popular)

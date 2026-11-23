@@ -111,40 +111,41 @@ jobs:
             -destination "id=$UDID" -derivedDataPath build/TestData > test-build.log 2>&1 \
             || { echo "::error::Test build failed"; grep -E "error:" test-build.log | sort -u | head -60; exit 1; }
 
-      - name: Screen tour on each device
+      - name: Screen tour on every device at once
         working-directory: EclipseReader
         run: |
           set -uo pipefail
           mkdir -p /tmp/shots
-          STATUS=0
+          DESTS=""
           while IFS='|' read -r KEY UDID NAME; do
-            echo "::group::$KEY ($NAME)"
             xcrun simctl boot "$UDID" || true
             xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --wifiBars 3 || true
-            xcodebuild test-without-building -project EclipseReader.xcodeproj -scheme EclipseReader \
-              -destination "id=$UDID" -derivedDataPath build/TestData \
-              -only-testing:EclipseReaderUITests/ScreenTourUITests \
-              -test-timeouts-enabled YES -default-test-execution-time-allowance 420 -maximum-test-execution-time-allowance 600 \
-              -resultBundlePath "/tmp/results/$KEY.xcresult" > "/tmp/shots/$KEY-test.log" 2>&1 || { STATUS=1; tail -60 "/tmp/shots/$KEY-test.log"; }
-            mkdir -p "/tmp/shots/$KEY"
-            xcrun xcresulttool export attachments --path "/tmp/results/$KEY.xcresult" --output-path "/tmp/shots/$KEY" || true
-            # Name files after their attachment titles.
-            if [ -f "/tmp/shots/$KEY/manifest.json" ]; then
-              python3 - "/tmp/shots/$KEY" <<'PY'
+            DESTS="$DESTS -destination id=$UDID"
+          done < /tmp/sims.txt
+          # Simulators run side by side; each screenshot is named after its device.
+          xcodebuild test-without-building -project EclipseReader.xcodeproj -scheme EclipseReader \
+            $DESTS -derivedDataPath build/TestData \
+            -only-testing:EclipseReaderUITests/ScreenTourUITests \
+            -maximum-concurrent-test-simulator-destinations 5 \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 420 -maximum-test-execution-time-allowance 600 \
+            -resultBundlePath /tmp/results/tour.xcresult > /tmp/shots/test.log 2>&1
+          STATUS=$?
+          grep -E "Test Case|error|failed|passed" /tmp/shots/test.log | tail -60
+          xcrun xcresulttool export attachments --path /tmp/results/tour.xcresult --output-path /tmp/shots/raw || true
+          python3 - /tmp/shots <<'PY'
           import json, os, re, sys
           root = sys.argv[1]
-          for test in json.load(open(os.path.join(root, "manifest.json"))):
-              for a in test.get("attachments", []):
-                  name = re.sub(r"[^A-Za-z0-9._ -]+", "", a.get("suggestedHumanReadableName", a["exportedFileName"]))
-                  src = os.path.join(root, a["exportedFileName"])
-                  if os.path.exists(src):
-                      os.replace(src, os.path.join(root, name))
+          raw = os.path.join(root, "raw")
+          manifest = os.path.join(raw, "manifest.json")
+          if os.path.exists(manifest):
+              for test in json.load(open(manifest)):
+                  for a in test.get("attachments", []):
+                      name = re.sub(r"[^A-Za-z0-9._ -]+", "", a.get("suggestedHumanReadableName", a["exportedFileName"]))
+                      src = os.path.join(raw, a["exportedFileName"])
+                      if os.path.exists(src):
+                          os.replace(src, os.path.join(root, name))
           PY
-            fi
-            xcrun simctl shutdown "$UDID" || true
-            echo "::endgroup::"
-          done < /tmp/sims.txt
-          ls -R /tmp/shots | head -200
+          ls /tmp/shots | head -200
           exit $STATUS
 
       - name: Upload screenshots

@@ -49,33 +49,33 @@ enum LibrarySort: String, CaseIterable, Identifiable {
 struct LibraryView: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var reader: Chapter?
-    @State private var website = false
     @State private var addLink = false
+    @State private var options = false
     @State private var openSeries: MangaSeries?
     @State private var query = ""
+    @State private var searching = false
     @State private var filter: LibraryFilter = .all
     @AppStorage("librarySort") private var sortRaw = LibrarySort.recent.rawValue
     @AppStorage("libraryShowContinue") private var showContinue = true
-    @AppStorage("libraryShowRecent") private var showRecent = true
     @Namespace private var zoom
+    @FocusState private var searchFocused: Bool
 
     private var sort: LibrarySort { LibrarySort(rawValue: sortRaw) ?? .recent }
+    private func matches(_ series: MangaSeries, _ filter: LibraryFilter) -> Bool {
+        switch filter {
+        case .all: true
+        case .new: model.newCount(series) > 0
+        case .downloaded: model.downloadedCount(series) > 0 || series.kind == .local
+        case .reading: model.lastRead(series) != nil && model.readCount(series) < series.chapters.count
+        case .manga: model.style(for: series.id) == .manga
+        case .manhwa: model.style(for: series.id) == .manhwa
+        case .comic: model.style(for: series.id) == .comic
+        case .files: series.kind == .local
+        }
+    }
     private var visible: [MangaSeries] {
         let list = model.librarySeries.filter { series in
-            let matches = query.isEmpty || series.title.localizedCaseInsensitiveContains(query)
-            let kind: Bool = {
-                switch filter {
-                case .all: true
-                case .new: model.newCount(series) > 0
-                case .downloaded: model.downloadedCount(series) > 0 || series.kind == .local
-                case .reading: model.lastRead(series) != nil && model.readCount(series) < series.chapters.count
-                case .manga: model.style(for: series.id) == .manga
-                case .manhwa: model.style(for: series.id) == .manhwa
-                case .comic: model.style(for: series.id) == .comic
-                case .files: series.kind == .local
-                }
-            }()
-            return matches && kind
+            (query.isEmpty || series.title.localizedCaseInsensitiveContains(query)) && matches(series, filter)
         }
         switch sort {
         case .title: return list.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
@@ -87,79 +87,46 @@ struct LibraryView: View {
             }
         }
     }
+    /// Tabs with something in them (All always shows), with counts like Mihon's categories.
+    private var tabs: [(LibraryFilter, Int)] {
+        LibraryFilter.allCases.compactMap { item in
+            let count = model.librarySeries.filter { matches($0, item) }.count
+            return item == .all || count > 0 || item == filter ? (item, count) : nil
+        }
+    }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    LibraryHeader(query: $query, addLink: $addLink, website: $website)
-                    if query.isEmpty { LibraryGreeting() }
-                    if query.isEmpty, showContinue, let chapter = model.lastChapter {
-                        ContinueHero(chapter: chapter, resume: { reader = chapter },
-                                     open: { openSeries = model.series(id: model.seriesID(for: chapter)) })
-                    }
-                    if query.isEmpty && model.totalNew > 0 {
-                        Button { withAnimation(.snappy) { filter = .new } } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "sparkles").font(.title3).foregroundStyle(Eclipse.highlight)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(model.totalNew) new chapter\(model.totalNew == 1 ? "" : "s")").font(.headline)
-                                    Text("Tap to see which series updated").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                            }.padding(16)
-                            .background(LinearGradient(colors: [Eclipse.accent.opacity(0.55), Eclipse.surface], startPoint: .leading, endPoint: .trailing),
-                                        in: RoundedRectangle(cornerRadius: 18))
-                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Eclipse.accent.opacity(0.35)))
-                        }.buttonStyle(.plain)
-                    }
-                    if query.isEmpty && showRecent { RecentStrip(reader: $reader) }
+            VStack(spacing: 0) {
+                topBar
+                ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            Text("Library").font(.title2.weight(.bold))
-                            Spacer()
-                            Menu {
-                                Picker("Sort", selection: $sortRaw) {
-                                    ForEach(LibrarySort.allCases) { Text($0.title).tag($0.rawValue) }
-                                }
-                            } label: { Label(sort.title, systemImage: "arrow.up.arrow.down").font(.subheadline) }
-                        }
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(LibraryFilter.allCases) { item in
-                                    Button { withAnimation(.snappy) { filter = item } } label: {
-                                        Text(item.title).font(.subheadline.weight(.semibold))
-                                            .padding(.horizontal, 14).padding(.vertical, 8)
-                                            .foregroundStyle(filter == item ? Color.white : Color.primary)
-                                            .background(filter == item ? AnyShapeStyle(Eclipse.accent) : AnyShapeStyle(Eclipse.surfaceHigh), in: Capsule())
-                                            .overlay(Capsule().strokeBorder(Eclipse.hairline))
-                                    }.buttonStyle(.plain)
-                                }
-                            }
+                        if query.isEmpty, showContinue, filter == .all, let chapter = model.lastChapter {
+                            ContinueBar(chapter: chapter, resume: { reader = chapter },
+                                        open: { openSeries = model.series(id: model.seriesID(for: chapter)) })
                         }
                         LibraryGrid(series: visible, reader: $reader, openSeries: $openSeries, zoom: zoom)
                         if visible.isEmpty {
                             ContentUnavailableView {
                                 Label(query.isEmpty ? "Nothing here yet" : "No matches", systemImage: "books.vertical")
                             } description: {
-                                Text(query.isEmpty ? "Add a manga or manhwa from a link, or import files." : "Try a different title.")
+                                Text(query.isEmpty ? "Add a series from Browse, paste a link, or import files." : "Try a different title.")
                             } actions: {
-                                Button("Add manga") { addLink = true }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
+                                Button("Add manga") { addLink = true }.buttonStyle(.borderedProminent).tint(Eclipse.accent)
                             }
                         }
+                        if let error = model.error, model.state.chapters.isEmpty { SourceNotice(message: error) { Task { await model.refresh() } } }
+                        if let error = model.persistenceError { Text(error).foregroundStyle(.orange).font(.subheadline) }
                     }
-                    if let error = model.error, model.state.chapters.isEmpty { SourceNotice(message: error) { Task { await model.refresh() } } }
-                    if let error = model.persistenceError { Text(error).foregroundStyle(.orange).font(.subheadline) }
+                    .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 24)
+                    .frame(maxWidth: 1280)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 20).padding(.vertical, 12)
-                .frame(maxWidth: 1180)                 // comfortable reading width on iPad and unfolded Duo
-                .frame(maxWidth: .infinity)
+                .scrollDismissesKeyboard(.interactively)
+                .refreshable { await model.checkForUpdates(force: true); await model.ensureCovers() }
             }
             .background(EclipseBackground())
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Library")
-            .toolbar(.hidden, for: .navigationBar)    // the header below adapts to every screen shape
+            .toolbar(.hidden, for: .navigationBar)    // the bar below adapts to every screen shape
             .sheet(isPresented: $addLink) {
                 AddMangaView { result in
                     addLink = false
@@ -169,10 +136,10 @@ struct LibraryView: View {
                     }
                 }.environmentObject(model)
             }
+            .sheet(isPresented: $options) { LibraryOptionsSheet().environmentObject(model).presentationDetents([.medium, .large]) }
             .navigationDestination(item: $openSeries) { series in
                 SeriesView(seriesID: series.id, reader: $reader).zoomDestination(series.id, in: zoom)
             }
-            .refreshable { await model.checkForUpdates(force: true); await model.ensureCovers() }
             .task {
                 if model.state.chapters.isEmpty && !ProcessInfo.processInfo.arguments.contains("--ui-testing") { await model.refresh() }
                 await model.ensureCovers()
@@ -180,155 +147,167 @@ struct LibraryView: View {
             }
             .onChange(of: model.librarySeries.count) { _, _ in Task { await model.ensureCovers() } }
             .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
-            .sheet(isPresented: $website) { WebsiteView(url: ReadBerserkParser.home) }
         }
     }
-}
 
-/// Logo, actions and search. Lives in the page (not the system bar) so it lays out the same
-/// on iPhone, iPad, folded and unfolded iPhone Duo, portrait and landscape.
-struct LibraryHeader: View {
-    @EnvironmentObject private var model: LibraryModel
-    @Binding var query: String
-    @Binding var addLink: Bool
-    @Binding var website: Bool
-    @FocusState private var searching: Bool
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                EclipseWordmark(size: 26)
-                Spacer(minLength: 8)
-                Menu {
-                    Button { Task { await model.checkForUpdates(force: true) } } label: {
-                        Label(model.checking ? "Checking for new chapters…" : "Check for new chapters", systemImage: "arrow.clockwise")
-                    }.disabled(model.checking)
-                    Button { website = true } label: { Label("Open readberserk.com", systemImage: "globe") }
-                } label: {
-                    Image(systemName: "ellipsis").font(.headline).frame(width: 40, height: 40).eclipseCard(cornerRadius: 20)
-                }.accessibilityLabel("More")
-                Button { addLink = true } label: {
-                    Image(systemName: "plus").font(.headline.weight(.bold)).foregroundStyle(.black)
-                        .frame(width: 40, height: 40).background(Eclipse.highlight, in: Circle())
-                }.accessibilityLabel("Add manga").accessibilityIdentifier("addManga")
-            }
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search your library", text: $query)
-                    .focused($searching).submitLabel(.search)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                if !query.isEmpty {
-                    Button { query = ""; searching = false } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .accessibilityLabel("Clear search")
+    /// Mihon-style app bar: title (or the search field), actions, then category tabs.
+    private var topBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                if searching {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search your library", text: $query)
+                            .focused($searchFocused).submitLabel(.search)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
+                    .padding(.horizontal, 12).frame(height: 38)
+                    .background(Eclipse.surfaceHigh, in: Capsule())
+                    Button("Cancel") { withAnimation(.snappy) { query = ""; searching = false; searchFocused = false } }
+                        .padding(.leading, 6)
+                } else {
+                    HStack(spacing: 8) {
+                        EclipseMark(size: 22)
+                        Text("Library").font(.title2.weight(.bold))
+                    }
+                    .accessibilityElement(children: .combine)
+                    Spacer(minLength: 8)
+                    barButton("magnifyingglass", "Search library") {
+                        withAnimation(.snappy) { searching = true }
+                        searchFocused = true
+                    }
+                    barButton("line.3.horizontal.decrease", "Sort and display") { options = true }
+                    Menu {
+                        Button { Task { await model.checkForUpdates(force: true) } } label: {
+                            Label(model.checking ? "Checking for new chapters…" : "Check for new chapters", systemImage: "arrow.clockwise")
+                        }.disabled(model.checking)
+                        if model.totalNew > 0 {
+                            Button { for s in model.librarySeries { model.clearNew(s) } } label: {
+                                Label("Mark all new chapters as seen", systemImage: "sparkles")
+                            }
+                        }
+                        if let random = model.librarySeries.randomElement() {
+                            Button { openSeries = random } label: { Label("Open a random series", systemImage: "shuffle") }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: 40, height: 40)
+                    }.accessibilityLabel("More")
+                    Button { addLink = true } label: {
+                        Image(systemName: "plus").font(.system(size: 16, weight: .heavy)).foregroundStyle(.black)
+                            .frame(width: 34, height: 34).background(Eclipse.highlight, in: Circle())
+                    }
+                    .padding(.leading, 4)
+                    .accessibilityLabel("Add manga").accessibilityIdentifier("addManga")
                 }
             }
-            .padding(.horizontal, 14).padding(.vertical, 11).eclipseCard(cornerRadius: 14)
+            .padding(.horizontal, 14).frame(height: 52)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(tabs, id: \.0) { entry in
+                        let item = entry.0, count = entry.1
+                        Button { withAnimation(.snappy) { filter = item } } label: {
+                            VStack(spacing: 7) {
+                                HStack(spacing: 5) {
+                                    Text(item.title).font(.subheadline.weight(filter == item ? .bold : .medium))
+                                    Text("\(count)").font(.caption2.weight(.bold)).monospacedDigit()
+                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                        .background((filter == item ? Eclipse.accent : Color.white.opacity(0.12)), in: Capsule())
+                                }
+                                .foregroundStyle(filter == item ? Color.white : Color.secondary)
+                                Capsule().fill(filter == item ? Eclipse.accent : Color.clear).frame(height: 3)
+                            }
+                            .padding(.horizontal, 10).padding(.top, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(filter == item ? .isSelected : [])
+                    }
+                }.padding(.horizontal, 8)
+            }
+            Rectangle().fill(Eclipse.hairline).frame(height: 0.5)
         }
+        .background(.black.opacity(0.55))
+        .background(.ultraThinMaterial)
+    }
+    private func barButton(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 17, weight: .semibold)).frame(width: 40, height: 40)
+        }.accessibilityLabel(label)
     }
 }
 
-/// Greeting and a one-line summary at the top of the library.
-struct LibraryGreeting: View {
+/// Mihon's library sheet: sort order and how the grid looks.
+struct LibraryOptionsSheet: View {
     @EnvironmentObject private var model: LibraryModel
-    private var greeting: String {
-        switch Calendar.current.component(.hour, from: Date()) {
-        case 5..<12: "Good morning"
-        case 12..<17: "Good afternoon"
-        case 17..<22: "Good evening"
-        default: "Reading late"
-        }
-    }
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("librarySort") private var sortRaw = LibrarySort.recent.rawValue
+    @AppStorage("libraryDensity") private var density = LibraryDensity.comfortable.rawValue
+    @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
+    @AppStorage("libraryShowContinue") private var showContinue = true
     var body: some View {
-        let series = model.librarySeries
-        let read = series.reduce(0) { $0 + model.readCount($1) }
-        VStack(alignment: .leading, spacing: 4) {
-            Text(greeting).font(.system(.largeTitle, design: .serif).weight(.bold))
-            Text("\(series.count) series · \(read) chapters read\(model.downloaded.isEmpty ? "" : " · \(model.downloaded.count) offline")")
-                .font(.subheadline).foregroundStyle(.secondary)
-        }.padding(.top, 4)
+        NavigationStack {
+            Form {
+                Section("Sort") {
+                    Picker("Sort", selection: $sortRaw) {
+                        ForEach(LibrarySort.allCases) { Text($0.title).tag($0.rawValue) }
+                    }.pickerStyle(.inline).labelsHidden()
+                }
+                Section("Display") {
+                    Picker("Cover size", selection: $density) {
+                        ForEach(LibraryDensity.allCases) { Text($0.title).tag($0.rawValue) }
+                    }.pickerStyle(.segmented)
+                    Toggle("Titles on covers", isOn: $titlesOnCovers)
+                    Toggle("Continue reading bar", isOn: $showContinue)
+                }
+            }
+            .scrollContentBackground(.hidden).background(Eclipse.surface)
+            .navigationTitle("Library").navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done") { dismiss() }.fontWeight(.semibold) }
+        }.preferredColorScheme(.dark)
     }
 }
 
-/// Large "continue reading" card with the cover blurred behind it.
-struct ContinueHero: View {
+/// One slim row to pick up where you left off.
+struct ContinueBar: View {
     @EnvironmentObject private var model: LibraryModel
     let chapter: Chapter
     let resume: () -> Void
     let open: () -> Void
     var body: some View {
         let series = model.series(id: model.seriesID(for: chapter))
-        let cover = series.flatMap { model.cover(for: $0) }
         let progress = model.state.progress[chapter.id]
-        ZStack(alignment: .bottomLeading) {
-            CoverView(url: cover, referer: chapter)
-                .frame(maxWidth: .infinity).frame(height: 210)
-                .blur(radius: 28).opacity(0.6)
-            LinearGradient(colors: [Eclipse.accent.opacity(0.18), .black.opacity(0.92)], startPoint: .top, endPoint: .bottom)
-            HStack(alignment: .bottom, spacing: 16) {
-                CoverView(url: cover, referer: chapter)
-                    .frame(width: 104, height: 149)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.08)))
-                    .shadow(color: .black.opacity(0.6), radius: 14, y: 6)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("CONTINUE READING").font(.caption2.weight(.bold)).tracking(1.4).foregroundStyle(Eclipse.highlight.opacity(0.9))
-                    Text(series?.title ?? "Berserk").font(.title3.weight(.heavy)).lineLimit(2).minimumScaleFactor(0.85)
-                    Text(ChapterText.split(chapter.title).name).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                    if let progress {
-                        HStack(spacing: 8) {
-                            ProgressView(value: progress.fraction).tint(Eclipse.accent)
-                            Text("\(progress.page + 1)/\(progress.pageCount)").font(.caption2).monospacedDigit().foregroundStyle(.secondary)
-                        }
+        HStack(spacing: 12) {
+            Button(action: open) {
+                HStack(spacing: 12) {
+                    CoverView(url: series.flatMap { model.cover(for: $0) }, referer: chapter)
+                        .frame(width: 42, height: 60).clipShape(RoundedRectangle(cornerRadius: 6))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("CONTINUE READING").font(.caption2.weight(.heavy)).tracking(1.2).foregroundStyle(Eclipse.highlight)
+                        Text(series?.title ?? chapter.title).font(.subheadline.weight(.bold)).lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(ChapterText.split(chapter.title).name).lineLimit(1)
+                            if let progress { Text("· \(progress.page + 1)/\(progress.pageCount)").monospacedDigit() }
+                        }.font(.caption).foregroundStyle(.secondary)
                     }
-                    Button(action: resume) {
-                        Label("Resume", systemImage: "play.fill").font(.subheadline.weight(.bold))
-                            .frame(maxWidth: .infinity).frame(height: 40)
-                            .background(.white, in: Capsule()).foregroundStyle(.black)
-                    }.buttonStyle(PressableStyle())
-                        .accessibilityIdentifier("continueReading")
-                }
-            }.padding(16)
-        }
-        .frame(height: 210)
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Eclipse.hairline))
-        .shadow(color: Eclipse.accent.opacity(0.25), radius: 24, y: 10)
-        .contentShape(RoundedRectangle(cornerRadius: 24))
-        .onTapGesture(perform: open)
-    }
-}
-
-/// Recently read series, newest first, each resuming where you stopped.
-struct RecentStrip: View {
-    @EnvironmentObject private var model: LibraryModel
-    @Binding var reader: Chapter?
-    var body: some View {
-        let recent = model.librarySeries.compactMap { s in model.lastRead(s).map { (s, $0) } }
-            .sorted { $0.1 > $1.1 }.map(\.0).prefix(12)
-        if recent.count >= 2 {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Jump back in").font(.title3.weight(.bold))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 14) {
-                        ForEach(Array(recent)) { series in
-                            Button { reader = model.resume(series) } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    CoverView(url: model.cover(for: series), referer: series.chapters.first)
-                                        .frame(width: 96, height: 137).clipShape(RoundedRectangle(cornerRadius: 9))
-                                    Text(series.title).font(.caption.weight(.semibold)).lineLimit(1)
-                                    if let chapter = model.resume(series) {
-                                        Text(chapter.title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                }.frame(width: 96)
-                            }.buttonStyle(.plain)
-                        }
-                    }
-                }
+                    Spacer(minLength: 4)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            Button(action: resume) {
+                Image(systemName: "play.fill").font(.system(size: 15, weight: .bold)).foregroundStyle(.black)
+                    .frame(width: 42, height: 42).background(Color.white, in: Circle())
             }
+            .buttonStyle(PressableStyle())
+            .accessibilityLabel("Resume").accessibilityIdentifier("continueReading")
         }
+        .padding(10)
+        .background(
+            LinearGradient(colors: [Eclipse.accent.opacity(0.35), Eclipse.surface], startPoint: .leading, endPoint: .trailing),
+            in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Eclipse.hairline))
     }
 }
 
-/// The library as a cover grid. Berserk comes first, built in.
+/// The library as a cover grid.
 struct LibraryGrid: View {
     @EnvironmentObject private var model: LibraryModel
     let series: [MangaSeries]
@@ -398,7 +377,7 @@ struct ChapterBrowser: View {
         }.overlay {
             if chapters.isEmpty {
                 ContentUnavailableView(model.loading ? "Loading chapters…" : "No chapters", systemImage: "books.vertical",
-                    description: Text(query.isEmpty ? "Pull to refresh, or open readberserk.com from the library menu." : "Try another chapter number."))
+                    description: Text(query.isEmpty ? "Pull to refresh." : "Try another chapter number."))
                     .allowsHitTesting(false)
             }
         }.searchable(text: $query, prompt: "Chapter number or title")
@@ -439,7 +418,7 @@ struct SettingsView: View {
                         SettingsRow(title: "Reader", detail: "Page turns, direction, webtoons, translation", symbol: "book.pages.fill", tint: Eclipse.accent)
                     }
                     NavigationLink { LibrarySettingsPage() } label: {
-                        SettingsRow(title: "Library", detail: "Layout, new chapters, sections", symbol: "books.vertical.fill", tint: .indigo)
+                        SettingsRow(title: "Library", detail: "Cover size, sorting, new chapters", symbol: "books.vertical.fill", tint: .indigo)
                     }
                     NavigationLink { DownloadSettingsPage() } label: {
                         SettingsRow(title: "Downloads", detail: model.downloaded.isEmpty ? "Offline reading" : "\(model.downloaded.count) chapters offline",
@@ -561,7 +540,6 @@ struct LibrarySettingsPage: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("libraryDensity") private var density = LibraryDensity.comfortable.rawValue
     @AppStorage("libraryShowContinue") private var showContinue = true
-    @AppStorage("libraryShowRecent") private var showRecent = true
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     var body: some View {
         Form {
@@ -570,8 +548,7 @@ struct LibrarySettingsPage: View {
                     ForEach(LibraryDensity.allCases) { Text($0.title).tag($0.rawValue) }
                 }.pickerStyle(.segmented)
                 Toggle("Titles on covers", isOn: $titlesOnCovers)
-                Toggle("“Continue reading” card", isOn: $showContinue)
-                Toggle("“Jump back in” row", isOn: $showRecent)
+                Toggle("Continue reading bar", isOn: $showContinue)
             }
             Section {
                 Button {
@@ -770,7 +747,6 @@ struct AboutPage: View {
             }
             Section {
                 Link(destination: URL(string: "https://mihon.app/")!) { Label("Inspired by Mihon", systemImage: "heart") }
-                Link(destination: ReadBerserkParser.home) { Label("readberserk.com", systemImage: "globe") }
             }
         }.settingsPage("About")
     }
@@ -1216,7 +1192,7 @@ struct SeriesHeader: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(series.title).font(.title2.weight(.heavy)).lineLimit(4).minimumScaleFactor(0.8)
                         .fixedSize(horizontal: false, vertical: true)
-                    Label(builtIn ? "readberserk.com" : series.kind == .web ? (series.url.host?.replacingOccurrences(of: "www.", with: "") ?? "Website") : "On this device",
+                    Label(builtIn ? "Built in" : series.kind == .web ? (series.url.host?.replacingOccurrences(of: "www.", with: "") ?? "Website") : "On this device",
                           systemImage: series.kind == .local ? "internaldrive" : "globe")
                         .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                     HStack(spacing: 6) {

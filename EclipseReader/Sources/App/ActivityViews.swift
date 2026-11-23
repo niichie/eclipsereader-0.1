@@ -61,7 +61,7 @@ struct UpdatesView: View {
             .overlay {
                 if items.isEmpty && !model.checking {
                     ContentUnavailableView("No new chapters", systemImage: "sparkles",
-                                           description: Text("New chapters from Berserk and your website series appear here. eclipsereader checks every few hours when you open it."))
+                                           description: Text("New chapters from the series in your library appear here. eclipsereader checks every few hours when you open it."))
                 }
             }
             .scrollContentBackground(.hidden).background(EclipseBackground())

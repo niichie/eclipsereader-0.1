@@ -490,15 +490,20 @@ final class LibraryModel: ObservableObject {
         state.customCovers = map
         save()
     }
-    /// Uses a page as the cover. Pages that live in removable downloads are copied, so the cover survives.
-    func chooseCoverPage(_ page: MangaPage, seriesID: String) async throws {
-        if page.url.scheme == "eclipselib", page.url.host == "offline" {
-            let chapter = series(id: seriesID)?.chapters.first ?? Chapter(url: page.url, title: "", number: "")
-            let data = try await pipeline.data(for: page, chapter: chapter)
-            try await setCoverPhoto(data, for: seriesID)
-        } else {
-            setCustomCover(page.url, for: seriesID)
-        }
+    /// Uses a page as the cover. The picture is saved on the device (cropped to a cover's shape
+    /// when it's a tall webtoon strip), so it shows instantly and survives the site or a download going away.
+    func chooseCoverPage(_ page: MangaPage, seriesID: String, chapter: Chapter? = nil) async throws {
+        let source = chapter ?? series(id: seriesID)?.chapters.first ?? Chapter(url: page.url, title: "", number: "")
+        let data = try await pipeline.data(for: page, chapter: source)
+        let shaped = await Task.detached(priority: .userInitiated) { Self.coverShaped(data) }.value
+        try await setCoverPhoto(shaped, for: seriesID)
+    }
+    /// Keeps the top of very tall images in cover proportions; other images are returned as they are.
+    nonisolated static func coverShaped(_ data: Data) -> Data {
+        guard let image = UIImage(data: data), let cg = image.cgImage, cg.height > Int(Double(cg.width) * 1.6),
+              let top = cg.cropping(to: CGRect(x: 0, y: 0, width: cg.width, height: Int(Double(cg.width) / 0.7))),
+              let jpeg = UIImage(cgImage: top).jpegData(compressionQuality: 0.9) else { return data }
+        return jpeg
     }
     func setCoverPhoto(_ data: Data, for seriesID: String) async throws {
         let url = try await OfflineStore.shared.saveCover(data, seriesID: seriesID)
