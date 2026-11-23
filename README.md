@@ -25,7 +25,7 @@
 - Tabs with counts: All, your own **categories**, Reading, New, Downloaded, Manga, Manhwa, Manhua, Webtoons, Comics, Books, On device.
 - **Select several series** to mark read, download, file into a category, hide or remove in one go.
 - A new **quote on every launch**, only from top-rated works on MyAnimeList and Goodreads. *Read* takes you to that series. Close it, or hide it in Settings.
-- A **live pick** on every launch from MyAnimeList's top manga and Open Library's best-rated books, plus **"Because you read…"** recommendations (MangaDex titles sharing the genres of what you read last).
+- A **live pick** on every launch from AniList's top-rated manga (MyAnimeList as backup) and Standard Ebooks' most-read classics (one tap to download), plus **"Because you read…"** recommendations (MangaDex titles sharing the genres of what you read last).
 - **Full cover control:** Photos, Files, an image link, any page of the series, or the automatic cover. Covers tint the series page.
 - Hidden series behind Face ID, an app lock, reading stats with streaks, and Spotlight search for your library.
 
@@ -41,10 +41,12 @@
 - Reads **EPUB, MOBI, AZW3, FB2, TXT, RTF, HTML, DOCX and ODT**, set like a printed book: left to right, page curl, two pages side by side in landscape, running heads and page numbers.
 - Eight typefaces, size, spacing, margins, justification, and night, dusk, sepia or paper themes.
 - Covers fetched automatically from Open Library and Google Books.
-- Search and download public-domain books from Project Gutenberg in the app, with links to Standard Ebooks, Open Library, Internet Archive and Wikisource. Files downloaded in the browser are added straight to the library.
+- Search and download public-domain books from **Standard Ebooks** and **Project Gutenberg** in the app (Gutenberg downloads fall back to its mirror when gutenberg.org is down).
+- In the browser, a book's page (Standard Ebooks, Gutenberg, Wikisource or any page linking an EPUB) shows **Add book**; any EPUB, Kindle or FB2 download goes straight into the library.
 
 ### Browse
-- **Native connections:** MangaDex (official API), WeebCentral and WEBTOON. **Global search** across them and your saved sites.
+- **Native connections:** MangaDex (official API), WeebCentral and WEBTOON. **Global search** across them, Asura Scans, MangaDot and your saved sites.
+- More sites that add and read in the app: Asura Scans, MangaDot and Tapas. Every listed source is checked against the live site by the **Probe sources** workflow.
 - Built-in browser for any other site, with ads, trackers and "get the app" banners blocked.
 - The **Add** button only appears where a series can be read; elsewhere a guide explains why, with *Try anyway*.
 - **Migrate** a series to another site, keeping your progress.

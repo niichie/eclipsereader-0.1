@@ -295,4 +295,25 @@ final class LiveProbeTests: XCTestCase {
             dump("mangadot try \(guess)", "\(st) \(type) \(text.count)B chapter links \(count) :: \(text.prefix(300))")
         }
     }
+
+    func testDiagnostics4() async {
+        let (_, _, series) = await body("https://mangadot.net/manga/118")
+        // React Router streams its data as a JSON array inside enqueue("…") calls.
+        let calls = LinkedSource.matches(#"(?s)\.enqueue\((".*?")\);"#, series).map { $0[0] }
+        dump("mangadot stream", "\(calls.count) enqueue calls, sizes \(calls.map(\.count))")
+        for call in calls {
+            guard let decoded = try? JSONSerialization.jsonObject(with: Data(call.utf8), options: .fragmentsAllowed) as? String,
+                  let array = try? JSONSerialization.jsonObject(with: Data(decoded.utf8)) as? [Any] else { dump("mangadot decode", "failed \(call.prefix(200))"); continue }
+            let keyIndex = array.firstIndex { ($0 as? String) == "chapter_number" }
+            let idIndex = array.firstIndex { ($0 as? String) == "id" }
+            var objects = 0, numbers: [String] = []
+            for case let object as [String: Any] in array {
+                if let keyIndex, let ref = object["_\(keyIndex)"] as? Int {
+                    objects += 1
+                    if ref >= 0, ref < array.count { numbers.append("\(array[ref])") }
+                }
+            }
+            dump("mangadot decoded", "array \(array.count) items; chapter_number key at \(keyIndex ?? -1), id key at \(idIndex ?? -1); objects using it: \(objects); numbers: \(numbers.prefix(6))…\(numbers.suffix(4))")
+        }
+    }
 }
