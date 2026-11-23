@@ -20,3 +20,13 @@ final class RecommendationTests: XCTestCase {
         XCTAssertEqual(items.first?.cover?.absoluteString, "https://covers.openlibrary.org/b/id/7362153-L.jpg")
     }
 }
+
+final class FreeBooksTests: XCTestCase {
+    func testGutendexResults() throws {
+        let json = #"{"results":[{"id":1342,"title":"Pride and Prejudice","authors":[{"name":"Austen, Jane"}],"formats":{"application/epub+zip":"https://www.gutenberg.org/ebooks/1342.epub3.images","image/jpeg":"https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg"},"download_count":51234}]}"#
+        let books = try FreeBooks.parseGutendex(Data(json.utf8))
+        XCTAssertEqual(books.first?.author, "Jane Austen")
+        XCTAssertEqual(books.first?.download?.absoluteString, "https://www.gutenberg.org/ebooks/1342.epub3.images")
+        XCTAssertEqual(books.first?.cover?.lastPathComponent, "pg1342.cover.medium.jpg")
+    }
+}
