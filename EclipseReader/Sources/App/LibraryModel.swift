@@ -12,6 +12,8 @@ final class LibraryModel: ObservableObject {
     @Published var downloads: [String: DownloadState] = [:]
     enum DownloadState: Equatable { case queued, running(Double), failed(String) }
     private var downloadQueue: [Chapter] = []
+    /// A page sent to the app (eclipsereader://open?url=…) to open in the browser.
+    @Published var incoming: BrowseTarget?
     /// Website series whose chapter list was refreshed since launch.
     var sessionRefreshed = Set<String>()
     private var downloadTask: Task<Void, Never>?

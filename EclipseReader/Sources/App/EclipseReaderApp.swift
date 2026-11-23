@@ -19,6 +19,15 @@ struct EclipseReaderApp: App {
                 .tint(.white)
                 // Files and the share sheet can hand CBZ/ZIP/PDF files straight to the library.
                 .onOpenURL { url in
+                    // eclipsereader://open?url=https://… (Safari bookmarklet, Shortcuts, share sheet):
+                    // opens that page in the in-app browser, ready to add.
+                    if url.scheme == "eclipsereader" {
+                        if let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "url" })?.value,
+                           let target = WebLink.parse(raw) {
+                            model.incoming = BrowseTarget(url: target)
+                        }
+                        return
+                    }
                     guard url.isFileURL else { return }
                     Task { do { _ = try await model.importFiles([url], copy: true) } catch { model.error = error.localizedDescription } }
                 }

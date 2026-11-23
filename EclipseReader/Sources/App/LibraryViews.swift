@@ -16,6 +16,7 @@ struct RootView: View {
             BrowseView().tabItem { Label("Browse", systemImage: "safari") }
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }
         }
+        .fullScreenCover(item: $model.incoming) { target in MangaBrowserView(start: target.url).environmentObject(model) }
     }
 }
 
@@ -181,8 +182,11 @@ struct LibraryView: View {
                     Button("Cancel") { withAnimation(.snappy) { query = ""; searching = false; searchFocused = false } }
                         .padding(.leading, 6)
                 } else {
-                    EclipseWordmark(size: 22)
-                        .accessibilityAddTraits(.isHeader)
+                    ViewThatFits(in: .horizontal) {
+                        EclipseWordmark(size: 22)
+                        EclipseMark(size: 26)
+                    }
+                    .accessibilityAddTraits(.isHeader)
                     Spacer(minLength: 8)
                     barButton("magnifyingglass", "Search library") {
                         withAnimation(.snappy) { searching = true }
@@ -599,11 +603,13 @@ struct ReaderSettingsPage: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("readerWarmth") private var warmth = 0.0
     @AppStorage("keepScreenOn") private var keepScreenOn = true
+    @AppStorage("readerPageNumber") private var showPageNumber = true
     var body: some View {
         Form {
             ReaderPreferencesForm(preferences: Binding(get: { model.preferences }, set: { model.preferences = $0 }))
             Section {
                 Toggle("Keep the screen on while reading", isOn: $keepScreenOn)
+                Toggle("Show page number", isOn: $showPageNumber)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack { Text("Warm night filter"); Spacer(); Text(warmth == 0 ? "Off" : "\(Int(warmth * 100))%").foregroundStyle(.secondary).monospacedDigit() }
                     Slider(value: $warmth, in: 0...0.6).tint(Eclipse.highlight)
@@ -690,6 +696,51 @@ struct DownloadSettingsPage: View {
             } footer: {
                 Text("Downloading ahead saves the next two chapters while you read, so you can keep going offline.")
             }
+            let index = model.chapterIndex
+            if !model.downloads.isEmpty {
+                Section("Queue") {
+                    ForEach(model.downloads.keys.sorted(), id: \.self) { id in
+                        if let entry = index[id], let state = model.downloads[id] {
+                            let series = entry.0, chapter = entry.1
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(series.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                                    Text(ChapterText.split(chapter.title).name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    switch state {
+                                    case .queued: Text("Waiting…").font(.caption2).foregroundStyle(.secondary)
+                                    case .running(let progress): ProgressView(value: progress).tint(Eclipse.accent)
+                                    case .failed(let reason): Text(reason).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+                                    }
+                                }
+                                Spacer(minLength: 4)
+                                Button { model.cancelDownload(chapter) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                                    .buttonStyle(.borderless).accessibilityLabel("Cancel download")
+                            }
+                        }
+                    }
+                }
+            }
+            let offline = model.librarySeries.filter { model.downloadedCount($0) > 0 }
+            if !offline.isEmpty {
+                Section("On this device") {
+                    ForEach(offline) { series in
+                        HStack(spacing: 12) {
+                            CoverView(url: model.cover(for: series), referer: series.chapters.first)
+                                .frame(width: 34, height: 48).clipShape(RoundedRectangle(cornerRadius: 5))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(series.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                                Text("\(model.downloadedCount(series)) chapter\(model.downloadedCount(series) == 1 ? "" : "s")")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                for chapter in series.chapters where model.isDownloaded(chapter) { model.removeDownload(chapter) }
+                            } label: { Label("Remove", systemImage: "trash") }
+                        }
+                    }
+                }
+            }
             Section {
                 Button("Delete all downloads", role: .destructive) { confirmDelete = true }
                     .disabled(model.downloaded.isEmpty && model.downloads.isEmpty)
@@ -717,6 +768,14 @@ struct BrowserSettingsPage: View {
                 LabeledContent("“Get the app” banners", value: "Hidden")
             } footer: {
                 Text("The browser blocks common ad, pop-up and tracking networks and hides app-install banners. The reader itself only loads page images, so it never shows ads.")
+            }
+            Section {
+                Button {
+                    UIPasteboard.general.string = "javascript:location.href='eclipsereader://open?url='+encodeURIComponent(location.href)"
+                    message = "Bookmarklet copied. In Safari, bookmark any page, edit the bookmark and paste this as its address."
+                } label: { Label("Copy the Safari bookmarklet", systemImage: "bookmark") }
+            } header: { Text("Send pages from Safari") } footer: {
+                Text("Tap the bookmark on any manga page in Safari and it opens here, ready to add. Shortcuts can open eclipsereader://open?url=… too.")
             }
             if let sites = model.state.sites, !sites.isEmpty {
                 Section("Saved sites") {

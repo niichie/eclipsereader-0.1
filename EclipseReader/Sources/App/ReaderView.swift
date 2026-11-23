@@ -18,6 +18,7 @@ struct ReaderView: View {
     @State private var dimming = 0.0
     @AppStorage("readerWarmth") private var warmth = 0.0
     @AppStorage("keepScreenOn") private var keepScreenOn = true
+    @AppStorage("readerPageNumber") private var showPageNumber = true
     @State private var webtoon = false
     @StateObject private var translator = TranslateModel()
     @State private var handle = ReaderHandle()
@@ -124,6 +125,16 @@ struct ReaderView: View {
                         .padding(.bottom, 18)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .accessibilityLabel("Next chapter, \(next.title)")
+                    } else if !pages.isEmpty && showPageNumber {
+                        // Quiet page counter while the controls are hidden, like Mihon.
+                        Text("\(page + 1) / \(pages.count)")
+                            .font(.caption.weight(.semibold)).monospacedDigit()
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .padding(.bottom, 6)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                 }
             }.foregroundStyle(.white)
