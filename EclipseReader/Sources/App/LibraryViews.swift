@@ -316,6 +316,7 @@ struct LibraryGrid: View {
     @Binding var openSeries: MangaSeries?
     let zoom: Namespace.ID
     @AppStorage("libraryDensity") private var densityRaw = LibraryDensity.comfortable.rawValue
+    @State private var coverFor: MangaSeries?
     var body: some View {
         let density = LibraryDensity(rawValue: densityRaw) ?? .comfortable
         let columns = [GridItem(.adaptive(minimum: density.minimum, maximum: density.maximum), spacing: 12, alignment: .top)]
@@ -326,8 +327,9 @@ struct LibraryGrid: View {
                     .accessibilityIdentifier(item.id == LibraryModel.berserkID ? "chapterBrowser" : "series-\(item.title)")
                     .contextMenu {
                         if let chapter = model.resume(item) {
-                            Button { reader = chapter } label: { Label("Continue \(chapter.title)", systemImage: "book") }
+                            Button { reader = chapter } label: { Label("Continue \(ChapterText.split(chapter.title).name)", systemImage: "book") }
                         }
+                        Button { coverFor = item } label: { Label("Change cover…", systemImage: "photo") }
                         Picker("Reads as", selection: Binding(get: { model.styleOverride(item.id) },
                                                               set: { model.setStyle($0, for: item.id) })) {
                             ForEach(ReadingStyle.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol).tag($0) }
@@ -338,6 +340,7 @@ struct LibraryGrid: View {
                     }
             }
         }
+        .sheet(item: $coverFor) { series in CoverPicker(series: series).environmentObject(model) }
     }
 }
 
@@ -1351,6 +1354,8 @@ struct DownloadButton: View {
 }
 
 /// Pick a cover: any of the first pages, or a picture from Photos.
+/// Full cover control: a picture from Photos or Files, an image link, any page of the series,
+/// or back to the automatic cover.
 struct CoverPicker: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.dismiss) private var dismiss
@@ -1358,54 +1363,113 @@ struct CoverPicker: View {
     @State private var choices: [MangaPage] = []
     @State private var loading = true
     @State private var photo: PhotosPickerItem?
+    @State private var importing = false
+    @State private var link = ""
+    @State private var working = false
     @State private var error: String?
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    PhotosPicker(selection: $photo, matching: .images) {
-                        Label("Choose from Photos", systemImage: "photo.on.rectangle.angled").font(.headline)
-                            .frame(maxWidth: .infinity).padding(16)
-                            .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 14))
-                    }
-                    if model.state.customCovers?[series.id] != nil {
-                        Button { model.setCustomCover(nil, for: series.id); dismiss() } label: {
-                            Label("Use the automatic cover", systemImage: "arrow.uturn.backward").frame(maxWidth: .infinity)
-                        }.buttonStyle(.bordered)
-                    }
-                    Text("Or choose a page").font(.headline)
-                    if loading { ProgressView().frame(maxWidth: .infinity) }
-                    if !loading && choices.isEmpty { Text("Pages couldn’t be loaded. Check your connection.").foregroundStyle(.secondary) }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 12)], spacing: 12) {
-                        ForEach(choices) { page in
-                            Button {
-                                Task {
-                                    do { try await model.chooseCoverPage(page, seriesID: series.id); dismiss() }
-                                    catch { self.error = error.localizedDescription }
-                                }
-                            } label: {
-                                CoverView(url: page.url, referer: series.chapters.first)
-                                    .aspectRatio(0.7, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 8))
-                            }.buttonStyle(.plain).accessibilityLabel(page.label)
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack(alignment: .bottom, spacing: 16) {
+                        CoverView(url: model.cover(for: series), referer: series.chapters.first)
+                            .aspectRatio(0.7, contentMode: .fit).frame(width: 96)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay { if working { ZStack { Color.black.opacity(0.5); ProgressView() }.clipShape(RoundedRectangle(cornerRadius: 10)) } }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(series.title).font(.headline).lineLimit(3)
+                            Text(model.state.customCovers?[series.id] != nil ? "Custom cover" : "Automatic cover")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    if let error { Text(error).foregroundStyle(.orange) }
-                }.padding(20)
+                    VStack(spacing: 10) {
+                        PhotosPicker(selection: $photo, matching: .images) {
+                            option("Choose from Photos", "photo.on.rectangle.angled")
+                        }.buttonStyle(PressableStyle())
+                        Button { importing = true } label: { option("Choose from Files", "folder") }
+                            .buttonStyle(PressableStyle())
+                        HStack(spacing: 8) {
+                            Image(systemName: "link").foregroundStyle(.secondary)
+                            TextField("Paste an image link", text: $link)
+                                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .submitLabel(.done).onSubmit(useLink)
+                            Button("Use", action: useLink).fontWeight(.semibold)
+                                .disabled(WebLink.parse(link) == nil || working)
+                        }
+                        .padding(.horizontal, 14).frame(height: 52).eclipseCard(cornerRadius: 14)
+                        if model.state.customCovers?[series.id] != nil {
+                            Button { model.setCustomCover(nil, for: series.id); dismiss() } label: {
+                                option("Back to the automatic cover", "arrow.uturn.backward")
+                            }.buttonStyle(PressableStyle())
+                        }
+                    }
+                    if let error { Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
+                    if !series.chapters.isEmpty {
+                        Text("Or use a page").font(.headline)
+                        if loading { ProgressView().frame(maxWidth: .infinity) }
+                        if !loading && choices.isEmpty { Text("Pages couldn’t be loaded. Check your connection.").foregroundStyle(.secondary) }
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 12)], spacing: 12) {
+                            ForEach(choices) { page in
+                                Button { apply { try await model.chooseCoverPage(page, seriesID: series.id) } } label: {
+                                    CoverView(url: page.url, referer: series.chapters.first)
+                                        .aspectRatio(0.7, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 8))
+                                }.buttonStyle(PressableStyle()).accessibilityLabel(page.label)
+                            }
+                        }
+                    }
+                }
+                .padding(20).frame(maxWidth: 640).frame(maxWidth: .infinity)
             }
+            .background(EclipseBackground())
             .navigationTitle("Cover").navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Cancel") { dismiss() } }
+            .toolbar { Button("Done") { dismiss() }.fontWeight(.semibold) }
             .task { choices = await model.coverChoices(series); loading = false }
             .onChange(of: photo) { _, item in
                 guard let item else { return }
-                Task {
-                    do {
-                        guard let data = try await item.loadTransferable(type: Data.self) else { return }
-                        try await model.setCoverPhoto(data, for: series.id)
-                        dismiss()
-                    } catch { self.error = error.localizedDescription }
+                apply {
+                    guard let data = try await item.loadTransferable(type: Data.self) else { throw BookError.invalid("That photo couldn’t be read.") }
+                    try await model.setCoverPhoto(LibraryModel.coverShaped(data), for: series.id)
+                }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.image]) { result in
+                switch result {
+                case .success(let url):
+                    apply {
+                        let scoped = url.startAccessingSecurityScopedResource()
+                        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                        let data = try Data(contentsOf: url)
+                        guard UIImage(data: data) != nil else { throw BookError.invalid("That file isn’t a picture.") }
+                        try await model.setCoverPhoto(LibraryModel.coverShaped(data), for: series.id)
+                    }
+                case .failure(let e): error = e.localizedDescription
                 }
             }
         }.preferredColorScheme(.dark)
+    }
+    private func option(_ title: String, _ symbol: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol).font(.body.weight(.semibold)).foregroundStyle(Eclipse.highlight).frame(width: 24)
+            Text(title).font(.body.weight(.semibold))
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14).frame(height: 52).eclipseCard(cornerRadius: 14)
+    }
+    private func useLink() {
+        guard let url = WebLink.parse(link) else { return }
+        apply {
+            let page = MangaPage(url: url, label: "Cover")
+            let data = try await model.pipeline.data(for: page, chapter: series.chapters.first ?? Chapter(url: url, title: "", number: ""))
+            try await model.setCoverPhoto(LibraryModel.coverShaped(data), for: series.id)
+        }
+    }
+    private func apply(_ work: @escaping @MainActor () async throws -> Void) {
+        working = true; error = nil
+        Task {
+            defer { working = false }
+            do { try await work(); dismiss() }
+            catch { self.error = error.localizedDescription }
+        }
     }
 }
 
