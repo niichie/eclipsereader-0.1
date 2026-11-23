@@ -1,0 +1,86 @@
+name: Build eclipsereader IPA
+on:
+  workflow_dispatch:
+  push:
+permissions:
+  contents: read
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    # Same macOS image the earlier working builds used (Xcode 27.x, iOS 27 SDK).
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick Xcode 27 or newer
+        run: |
+          set -euo pipefail
+          XCODE=$(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode_28*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$XCODE" ]; then echo "No Xcode 27 on this runner:"; ls -d /Applications/Xcode*; exit 1; fi
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+          echo "Using $XCODE"
+
+      - name: Unpack source into a clean folder
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/eclipse && mkdir -p /tmp/eclipse/unzip /tmp/eclipse/src
+          ZIP=$(ls *.zip 2>/dev/null | head -1 || true)
+          if [ -z "$ZIP" ]; then echo "Upload eclipsereader-source.zip to the top of the repo."; exit 1; fi
+          unzip -q -o "$ZIP" -d /tmp/eclipse/unzip
+          PROJECT=$(find /tmp/eclipse/unzip -maxdepth 3 -name project.json | head -1)
+          cp -R "$(dirname "$PROJECT")"/. /tmp/eclipse/src/
+          test -f /tmp/eclipse/src/Sources/Core/Models.swift
+          xcodebuild -version
+
+      - name: Core tests (informational)
+        continue-on-error: true
+        working-directory: /tmp/eclipse/src
+        run: swift test
+
+      - name: Generate Xcode project
+        working-directory: /tmp/eclipse/src
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
+          xcodegen generate --spec project.json
+
+      - name: Build unsigned app
+        working-directory: /tmp/eclipse/src
+        run: |
+          set -euo pipefail
+          xcodebuild build -project EclipseReader.xcodeproj -scheme EclipseReader \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DeviceData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1 \
+            || { echo "::error::Build failed. Errors:"; grep -E "error:" build.log | sort -u | head -60; exit 1; }
+          echo "BUILD SUCCEEDED"
+
+      - name: Package IPA (must be iOS 27 SDK so the Duo runs it full-screen)
+        working-directory: /tmp/eclipse/src
+        run: |
+          set -euo pipefail
+          APP='build/DeviceData/Build/Products/Release-iphoneos/EclipseReader.app'
+          SDK=$(/usr/libexec/PlistBuddy -c 'Print DTSDKName' "$APP/Info.plist")
+          echo "Built with $SDK"
+          MAJOR=$(echo "$SDK" | sed 's/iphoneos//' | cut -d. -f1)
+          if [ "$MAJOR" -lt 27 ]; then echo "Built with $SDK: the Duo would letterbox it."; exit 1; fi
+          python3 scripts/package_ipa.py "$APP" "$GITHUB_WORKSPACE/EclipseReader-unsigned.ipa"
+          shasum -a 256 "$GITHUB_WORKSPACE/EclipseReader-unsigned.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: EclipseReader-unsigned-IPA
+          path: EclipseReader-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/eclipse/src/build.log
+          if-no-files-found: ignore
