@@ -121,3 +121,22 @@ final class BookLinksTests: XCTestCase {
         XCTAssertNil(BookLinks.best(in: #"<a href="/ebooks/84">Frankenstein</a>"#, base: URL(string: "https://www.gutenberg.org/")!))
     }
 }
+
+final class CoverAndTextTests: XCTestCase {
+    func testEscapedHTMLDescriptionsReadAsText() {
+        let raw = #"<p><i>Pride and Prejudice</i> may today be one of <a href="https://standardebooks.org/ebooks/jane-austen">Jane Austen’s</a> most famous novels.</p><p>Second.</p>"#
+        XCTAssertEqual(BookText.richText(raw), "Pride and Prejudice may today be one of Jane Austen’s most famous novels. Second.")
+        XCTAssertEqual(BookText.richText("Plain words & more"), "Plain words & more")
+    }
+    func testSocialCardsComeLastAsCovers() {
+        let html = """
+        <meta property="og:image" content="https://asurascans.com/og/comics/murim-login.jpg">
+        <h1>Murim Login</h1><img alt="Murim Login" src="https://cdn.asurascans.com/asura-images/covers/murim-login.407650-400.webp">
+        """
+        XCTAssertEqual(LinkedSource.cover(in: html, base: URL(string: "https://asurascans.com/comics/murim-login-7de80a82")!)?.host,
+                       "cdn.asurascans.com")
+        let only = #"<meta property="og:image" content="https://mangadot.net/og/manga/118">"#
+        XCTAssertEqual(LinkedSource.cover(in: only, base: URL(string: "https://mangadot.net/manga/118")!)?.path, "/og/manga/118")
+        XCTAssertFalse(LinkedSource.isSocialCard(URL(string: "https://example.com/wp-content/uploads/cover-logo.jpg")!))
+    }
+}

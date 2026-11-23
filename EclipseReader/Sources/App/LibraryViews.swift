@@ -375,6 +375,8 @@ struct LibraryView: View {
                 } else {
                     ViewThatFits(in: .horizontal) {
                         EclipseWordmark(size: 22)
+                        EclipseWordmark(size: 18)
+                        EclipseWordmark(size: 15)
                         EclipseMark(size: 26)
                     }
                     .accessibilityAddTraits(.isHeader)
@@ -1709,7 +1711,7 @@ struct SeriesView: View {
                     }
                 } header: {
                     HStack(spacing: 12) {
-                        Text("\(series.chapters.count) chapter\(series.chapters.count == 1 ? "" : "s")")
+                        Text(series.kind == .book ? "Contents" : "\(series.chapters.count) chapter\(series.chapters.count == 1 ? "" : "s")")
                             .font(.headline).foregroundStyle(.primary).textCase(nil)
                         Spacer()
                         Button { searching.toggle(); searchFocused = searching; if !searching { query = "" } } label: {
@@ -1837,6 +1839,8 @@ struct SeriesHeader: View {
     @Binding var website: Bool
     /// Colour from the cover; the page glows with it.
     @State private var tint: Color = Eclipse.accent
+    /// Pale cover colours (cream, sand, pastel) need dark lettering on the button.
+    @State private var lightTint = false
     var body: some View {
         let builtIn = series.id == LibraryModel.berserkID
         let cover = model.cover(for: series)
@@ -1862,12 +1866,14 @@ struct SeriesHeader: View {
                         if series.kind == .book { chip("Book", symbol: "text.book.closed") } else { chip(style.title, symbol: style.symbol) }
                         if model.downloadedCount(series) > 0 { chip("\(model.downloadedCount(series))", symbol: "arrow.down.circle.fill") }
                     }
-                    Text(series.chapters.isEmpty ? "Loading chapters…" : "\(read) of \(series.chapters.count) read")
+                    Text(series.chapters.isEmpty ? "Loading chapters…"
+                         : series.kind == .book ? (read == 0 ? "Not started" : read >= series.chapters.count ? "Finished" : "\(Int(Double(read) / Double(series.chapters.count) * 100))% read")
+                         : "\(read) of \(series.chapters.count) read")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
-            if let summary = series.summary, !summary.isEmpty { SynopsisText(text: summary) }
+            if let summary = series.summary, !summary.isEmpty { SynopsisText(text: BookText.richText(summary)) }
             HStack(spacing: 10) {
                 Button { if let resume { reader = resume } } label: {
                     HStack(spacing: 10) {
@@ -1881,10 +1887,10 @@ struct SeriesHeader: View {
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 18).frame(height: 54)
-                    .foregroundStyle(.white)
-                    .background(LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .leading, endPoint: .trailing),
+                    .foregroundStyle(lightTint ? Color.black : Color.white)
+                    .background(LinearGradient(colors: [tint, tint.opacity(lightTint ? 0.85 : 0.7)], startPoint: .leading, endPoint: .trailing),
                                 in: RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).fill(.black.opacity(0.18)))
+                    .overlay(RoundedRectangle(cornerRadius: 16).fill(.black.opacity(lightTint ? 0 : 0.18)))
                     .shadow(color: tint.opacity(0.45), radius: 14, y: 6)
                 }
                 .buttonStyle(PressableStyle()).disabled(resume == nil)
@@ -1932,7 +1938,7 @@ struct SeriesHeader: View {
             let referer = series.chapters.first ?? Chapter(url: cover, title: "", number: "")
             guard let data = try? await model.pipeline.data(for: page, chapter: referer) else { return }
             let found = await Task.detached(priority: .utility) { CoverTint.from(data) }.value
-            if let found { withAnimation(.easeOut(duration: 0.6)) { tint = found.color } }
+            if let found { withAnimation(.easeOut(duration: 0.6)) { tint = found.color; lightTint = found.isLight } }
         }
     }
     private func chip(_ text: String, symbol: String) -> some View {

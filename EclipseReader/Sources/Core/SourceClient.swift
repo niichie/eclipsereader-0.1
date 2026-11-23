@@ -31,6 +31,8 @@ private final class SourceRedirectPolicy: NSObject, URLSessionTaskDelegate, @unc
 
 public actor WebsiteHTTPClient: HTTPTransport {
     public static let appAgent = "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"
+    /// Hosts that serve apps, not browsers (besides any api.* host).
+    static let appAgentHosts: Set<String> = ["uploads.mangadex.org"]
     private let session: URLSession
     public init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -48,9 +50,12 @@ public actor WebsiteHTTPClient: HTTPTransport {
         var request = URLRequest(url: url)
         // Webtoons sends phones a script-built mobile viewer; its desktop pages list every image.
         let desktop = !image && (url.host?.lowercased().hasSuffix("webtoons.com") ?? false)
-        let api = url.host?.lowercased().hasPrefix("api.") ?? false
-        // APIs want to know which app is asking (MangaDex answers a browser with its website, not JSON).
-        request.setValue(api ? Self.appAgent : desktop
+        let host = url.host?.lowercased() ?? ""
+        let api = host.hasPrefix("api.")
+        // APIs want to know which app is asking: MangaDex answers a browser with its website instead of
+        // JSON, and sends a browser asking for a cover to a challenge page instead of the picture.
+        let identify = api || Self.appAgentHosts.contains(host)
+        request.setValue(identify ? Self.appAgent : desktop
             ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
             : "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
             forHTTPHeaderField: "User-Agent")

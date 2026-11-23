@@ -131,6 +131,8 @@ enum AutoBackup {
 struct CoverTint: Sendable, Equatable {
     let red: Double, green: Double, blue: Double
     var color: Color { Color(red: red, green: green, blue: blue) }
+    /// Bright enough that white text on it is hard to read.
+    var isLight: Bool { 0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.58 }
 
     /// The cover's most vivid colour, brightened so it reads well on black. Nil for grey covers.
     static func from(_ data: Data) -> CoverTint? {

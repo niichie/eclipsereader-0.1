@@ -3,7 +3,9 @@
   "options": {
     "minimumXcodeGenVersion": "2.44.1",
     "xcodeVersion": "27.1",
-    "deploymentTarget": { "iOS": "17.0" },
+    "deploymentTarget": {
+      "iOS": "17.0"
+    },
     "createIntermediateGroups": true
   },
   "settings": {
@@ -28,7 +30,12 @@
       "sources": [
         "Sources/Core",
         "Sources/App",
-        { "path": "Resources", "excludes": ["Info.plist"] }
+        {
+          "path": "Resources",
+          "excludes": [
+            "Info.plist"
+          ]
+        }
       ],
       "settings": {
         "base": {
@@ -44,8 +51,14 @@
     "EclipseReaderUITests": {
       "type": "bundle.ui-testing",
       "platform": "iOS",
-      "sources": ["Tests/AppUITests"],
-      "dependencies": [{ "target": "EclipseReader" }],
+      "sources": [
+        "Tests/AppUITests"
+      ],
+      "dependencies": [
+        {
+          "target": "EclipseReader"
+        }
+      ],
       "settings": {
         "base": {
           "PRODUCT_BUNDLE_IDENTIFIER": "$(APP_BUNDLE_ID).uitests",
@@ -53,14 +66,55 @@
           "TEST_TARGET_NAME": "EclipseReader"
         }
       }
+    },
+    "EclipseReaderAppTests": {
+      "type": "bundle.unit-test",
+      "platform": "iOS",
+      "sources": [
+        "Tests/AppTests"
+      ],
+      "dependencies": [
+        {
+          "target": "EclipseReader"
+        }
+      ],
+      "settings": {
+        "base": {
+          "PRODUCT_BUNDLE_IDENTIFIER": "$(APP_BUNDLE_ID).apptests",
+          "GENERATE_INFOPLIST_FILE": "YES",
+          "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/EclipseReader.app/EclipseReader",
+          "BUNDLE_LOADER": "$(TEST_HOST)",
+          "SWIFT_STRICT_CONCURRENCY": "minimal"
+        }
+      }
     }
   },
   "schemes": {
     "EclipseReader": {
-      "build": { "targets": { "EclipseReader": "all", "EclipseReaderUITests": ["test"] } },
-      "test": { "targets": ["EclipseReaderUITests"], "gatherCoverageData": false },
-      "run": { "config": "Debug" },
-      "archive": { "config": "Release" }
+      "build": {
+        "targets": {
+          "EclipseReader": "all",
+          "EclipseReaderUITests": [
+            "test"
+          ],
+          "EclipseReaderAppTests": [
+            "test"
+          ]
+        }
+      },
+      "test": {
+        "targets": [
+          "EclipseReaderUITests",
+          "EclipseReaderAppTests"
+        ],
+        "gatherCoverageData": false
+      },
+      "run": {
+        "config": "Debug"
+      },
+      "archive": {
+        "config": "Release"
+      }
     }
   }
 }

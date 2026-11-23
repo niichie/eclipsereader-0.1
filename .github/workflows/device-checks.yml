@@ -1,0 +1,43 @@
+name: Device checks
+# Runs the app on an iPhone simulator and checks real books and chapters open in the real reader screens.
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: Test to run (default all app checks)
+        default: EclipseReaderAppTests
+permissions:
+  contents: read
+jobs:
+  simulator:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick Xcode 27 or newer
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode_28*.app 2>/dev/null | sort -V | tail -1 || true)
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+      - name: Generate project
+        working-directory: EclipseReader
+        run: |
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
+          xcodegen generate --spec project.json
+      - name: Run on a simulator
+        working-directory: EclipseReader
+        run: |
+          set -o pipefail
+          UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k in sorted(d, reverse=True) if "iOS" in k for x in d[k] if x["name"].startswith("iPhone")))')
+          echo "Simulator $UDID"
+          xcodebuild test -project EclipseReader.xcodeproj -scheme EclipseReader \
+            -destination "id=$UDID" -only-testing:"${{ inputs.only || 'EclipseReaderAppTests' }}" \
+            -resultBundlePath checks.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee checks.log | grep -E "CHECK\||error:|Test Case|XCTAssert|failed|passed|\*\* TEST" || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" checks.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: device-checks
+          path: |
+            EclipseReader/checks.log
+            EclipseReader/checks.xcresult
+          if-no-files-found: ignore

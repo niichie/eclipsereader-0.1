@@ -106,6 +106,16 @@ public enum BookReader {
 // MARK: - Text helpers
 
 enum BookText {
+    /// Text that may itself be escaped HTML ("&lt;p&gt;&lt;i&gt;Title&lt;/i&gt;…", as Standard Ebooks writes
+    /// descriptions): tags removed after the entities are decoded, paragraphs kept apart.
+    static func richText(_ text: String) -> String {
+        let decoded = entities(text)
+        guard decoded.range(of: #"<[a-zA-Z/][^>]*>"#, options: .regularExpression) != nil else { return decoded }
+        // Inline tags vanish ("<i>Emma</i>," stays "Emma,"); block tags become spaces.
+        let inline = decoded.replacingOccurrences(of: #"(?i)</?(i|b|em|strong|a|span|abbr|small|sup|sub|cite|q|u)\b[^>]*>"#,
+                                                  with: "", options: .regularExpression)
+        return plain(inline)
+    }
     /// Bytes to text: BOM, UTF-8, then Windows-1252.
     static func decode(_ data: Data) -> String {
         if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) { return String(data: data, encoding: .utf16) ?? "" }
@@ -399,7 +409,7 @@ enum EPUBReader {
             .first { $0.count == 13 || $0.count == 10 }
         return BookDocument(title: meta("title") ?? BookReader.niceName(file.deletingPathExtension().lastPathComponent),
                             author: meta("creator"), language: meta("language"), isbn: isbn,
-                            summary: meta("description"), cover: coverPath.flatMap(data), sections: sections)
+                            summary: meta("description").map(BookText.richText), cover: coverPath.flatMap(data), sections: sections)
     }
 }
 

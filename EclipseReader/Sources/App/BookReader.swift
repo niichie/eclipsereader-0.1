@@ -135,7 +135,11 @@ enum BookTypesetter {
         var pages: [BookPageRef] = []
         var starts: [Int] = []
         for (index, section) in document.sections.enumerated() {
-            let text = attributed(section, images: images, style: style, pageSize: pageSize)
+            var text = attributed(section, images: images, style: style, pageSize: pageSize)
+            if text.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // A title page drawn as a picture iOS can't show (SVG): set the title as type instead.
+                text = titlePage(document: document, section: section, index: index, style: style, pageSize: pageSize)
+            }
             sections.append(text)
             starts.append(pages.count)
             let ranges = paginate(text, size: pageSize)
@@ -250,6 +254,26 @@ enum BookTypesetter {
                 out.append(NSAttributedString(string: "⁂\n", attributes: [.font: style.font.font(size), .foregroundColor: style.theme.secondary, .paragraphStyle: p]))
                 afterBreak = true
             }
+        }
+        return out
+    }
+
+    static func titlePage(document: BookDocument, section: BookSection, index: Int, style: BookStyle, pageSize: CGSize) -> NSAttributedString {
+        let name = (section.title ?? "").trimmingCharacters(in: .whitespaces)
+        let generic = ["", "titlepage", "title page", "title", "cover", "half title", "halftitle"].contains(name.lowercased())
+        let size = CGFloat(style.size)
+        let out = NSMutableAttributedString()
+        let p = NSMutableParagraphStyle()
+        p.alignment = .center
+        p.paragraphSpacingBefore = pageSize.height * 0.24
+        p.paragraphSpacing = size * 1.2
+        out.append(NSAttributedString(string: (generic ? document.title : name) + "\n", attributes: [
+            .font: style.font.font(size * (generic ? 1.9 : 1.5), bold: false), .foregroundColor: style.theme.text, .paragraphStyle: p]))
+        if generic, let author = document.author, !author.isEmpty {
+            let a = NSMutableParagraphStyle()
+            a.alignment = .center
+            out.append(NSAttributedString(string: author + "\n", attributes: [
+                .font: style.font.font(size * 1.05, bold: false, italic: true), .foregroundColor: style.theme.secondary, .paragraphStyle: a]))
         }
         return out
     }
@@ -529,7 +553,9 @@ struct BookReaderView: View {
                 }
                 if chrome || typeset == nil { controls(pages: typeset?.pages.count ?? 0) }
             }
-            .task(id: "\(Int(pageSize.width))x\(Int(pageSize.height))|\(style.key)|\(twoUp)") {
+            // Runs again when the book finishes loading (it usually isn't loaded yet when the page first appears),
+            // and whenever the page size or type settings change.
+            .task(id: "\(document == nil ? "loading" : "ready")|\(Int(pageSize.width))x\(Int(pageSize.height))|\(style.key)|\(twoUp)") {
                 await layout(pageSize: pageSize)
             }
         }

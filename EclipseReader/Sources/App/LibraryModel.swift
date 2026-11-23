@@ -74,6 +74,17 @@ final class LibraryModel: ObservableObject {
             restored.coverChecked = nil
             restored.defaultsVersion = 4
         }
+        // v5: share-card banners (…/og/…) were taken as covers; some sit behind a bot check and never load.
+        if (restored.defaultsVersion ?? 0) < 5 {
+            var reset: [String] = []
+            restored.series = restored.series?.map { item in
+                var item = item
+                if let cover = item.cover, LinkedSource.isSocialCard(cover) { item.cover = nil; reset.append(item.id) }
+                return item
+            }
+            restored.coverChecked = restored.coverChecked?.filter { !reset.contains($0) }
+            restored.defaultsVersion = 5
+        }
         #if DEBUG
         if ReaderTestFixture.demo { restored = ReaderTestFixture.demoState() }
         #endif

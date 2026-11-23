@@ -279,8 +279,13 @@ public struct LinkedSource: Sendable {
             #"(?is)<link[^>]+rel=["']image_src["'][^>]*href=["']([^"']+)"#,
             #"(?is)"(?:image|thumbnailUrl)"\s*:\s*"(https?:[^"]+?\.(?:jpe?g|png|webp|avif)[^"]*)""#,
         ]
+        // Social-card images made by the site (…/og/…, opengraph) are banners with the title written on
+        // them, and some sit behind a bot check: the real cover art on the page comes first.
+        var socialCard: URL?
         for pattern in patterns {
-            if let raw = firstMatch(pattern, html), let url = resolve(raw, base: base), !looksLikeLogo(url) { return url }
+            guard let raw = firstMatch(pattern, html), let url = resolve(raw, base: base), !looksLikeLogo(url) else { continue }
+            if isSocialCard(url) { if socialCard == nil { socialCard = url }; continue }
+            return url
         }
         // Cover-like <img>: class, alt or file name mentions a cover, poster or thumbnail; an image
         // whose alt text is the series title wins over the rest (related-series covers come later).
@@ -312,7 +317,11 @@ public struct LinkedSource: Sendable {
         // Data written into scripts by modern sites (Next.js and similar).
         let keyed = #"(?is)"(?:cover|coverUrl|cover_url|coverImage|poster|thumbnail|thumb)"\s*:\s*"(https?:[^"]+?\.(?:jpe?g|png|webp|avif)[^"]*)""#
         if let raw = firstMatch(keyed, html), let url = resolve(raw, base: base), !looksLikeLogo(url) { return url }
-        return nil
+        return socialCard
+    }
+    /// A generated share image (a banner with the title on it) rather than the cover art itself.
+    public static func isSocialCard(_ url: URL) -> Bool {
+        url.path.lowercased().range(of: #"(^|/)(og|opengraph|og-image|social|share-image)(/|[-_.])"#, options: .regularExpression) != nil
     }
     static func resolve(_ raw: String, base: URL) -> URL? {
         let clean = decodeEntities(raw).trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\/", with: "/")
