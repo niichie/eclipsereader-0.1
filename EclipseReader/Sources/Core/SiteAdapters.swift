@@ -62,7 +62,7 @@ struct MangaDex {
         let coverFile = (relations.first { $0["type"] as? String == "cover_art" }?["attributes"] as? [String: Any])?["fileName"] as? String
         let cover = coverFile.flatMap { URL(string: "https://uploads.mangadex.org/covers/\(mangaID)/\($0).512.jpg") }
         let original = (attributes["originalLanguage"] as? String ?? "").lowercased()
-        let style: ReadingStyle? = original.hasPrefix("ko") || original.hasPrefix("zh") ? .manhwa : original == "ja" ? .manga : .comic
+        let style = Self.style(language: original, tags: attributes["tags"])
 
         var chapters: [Chapter] = []
         var seen = Set<String>()
@@ -90,7 +90,12 @@ struct MangaDex {
         chapters = ChapterOrder.sorted(chapters)
         var pages: [MangaPage] = []
         if Self.chapterID(url) != nil { pages = (try? await self.pages(url)) ?? [] }
-        return LinkInspection(title: title, cover: cover, pages: pages, chapters: chapters, style: style)
+        let about = Self.localized(attributes["description"]).map {
+            // MangaDex descriptions are Markdown; keep the first paragraph-ish part, without links.
+            $0.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
+              .components(separatedBy: "\n---").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? $0
+        }
+        return LinkInspection(title: title, cover: cover, pages: pages, chapters: chapters, style: style, summary: about)
     }
 
     func pages(_ url: URL) async throws -> [MangaPage] {
@@ -104,6 +109,15 @@ struct MangaDex {
         }
     }
 
+    /// Korean → manhwa, Chinese → manhua, Japanese → manga; other long-strip titles are webtoons.
+    static func style(language: String, tags: Any?) -> ReadingStyle {
+        let names = ((tags as? [[String: Any]]) ?? []).compactMap { (($0["attributes"] as? [String: Any])?["name"] as? [String: String])?["en"] }
+        let strip = names.contains("Long Strip") || names.contains("Web Comic")
+        if language.hasPrefix("ko") { return .manhwa }
+        if language.hasPrefix("zh") { return .manhua }
+        if language == "ja" { return strip ? .webtoon : .manga }
+        return strip ? .webtoon : .comic
+    }
     static func localized(_ value: Any?) -> String? {
         guard let map = value as? [String: String], !map.isEmpty else { return nil }
         return map["en"] ?? map["ja-ro"] ?? map["ko-ro"] ?? map.values.first
@@ -149,7 +163,7 @@ struct WeebCentral {
                let series = URL(string: href) {
                 var found = try await inspect(series)
                 found = LinkInspection(title: found.title, cover: found.cover, pages: (try? await pages(url)) ?? [],
-                                       chapters: found.chapters, style: found.style)
+                                       chapters: found.chapters, style: found.style, summary: found.summary)
                 _ = chapter
                 return found
             }
@@ -165,9 +179,9 @@ struct WeebCentral {
         }
         if chapters.isEmpty { chapters = Self.chapters(in: html) }
         let lower = html.lowercased()
-        let style: ReadingStyle? = lower.contains("manhwa") ? .manhwa : lower.contains("manhua") ? .manhwa : lower.contains("manga") ? .manga : nil
+        let style: ReadingStyle? = lower.contains("manhua") ? .manhua : lower.contains("manhwa") ? .manhwa : lower.contains("manga") ? .manga : nil
         return LinkInspection(title: LinkedSource.seriesTitle(in: html) ?? "WeebCentral", cover: LinkedSource.cover(in: html, base: url),
-                              pages: [], chapters: chapters, style: style)
+                              pages: [], chapters: chapters, style: style, summary: LinkedSource.synopsis(in: html))
     }
 
     static func chapters(in html: String) -> [Chapter] {
@@ -233,7 +247,7 @@ public enum Discover {
             let file = (relations.first { $0["type"] as? String == "cover_art" }?["attributes"] as? [String: Any])?["fileName"] as? String
             let cover = file.flatMap { URL(string: "https://uploads.mangadex.org/covers/\(id)/\($0).256.jpg") }
             let language = (a["originalLanguage"] as? String ?? "").lowercased()
-            let kind = language.hasPrefix("ko") ? "Manhwa" : language.hasPrefix("zh") ? "Manhua" : language == "ja" ? "Manga" : "Comic"
+            let kind = MangaDex.style(language: language, tags: a["tags"]).title
             let year = (a["year"] as? Int).map { " · \($0)" } ?? ""
             return DiscoverItem(id: id, title: title, url: page, cover: cover, detail: kind + year)
         }

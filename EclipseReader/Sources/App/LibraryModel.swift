@@ -12,6 +12,8 @@ final class LibraryModel: ObservableObject {
     @Published var downloads: [String: DownloadState] = [:]
     enum DownloadState: Equatable { case queued, running(Double), failed(String) }
     private var downloadQueue: [Chapter] = []
+    /// Website series whose chapter list was refreshed since launch.
+    var sessionRefreshed = Set<String>()
     private var downloadTask: Task<Void, Never>?
     let source: any MangaSource
     let pipeline: ImagePipeline
@@ -293,7 +295,7 @@ final class LibraryModel: ObservableObject {
         // No cover art on the page: leave it empty so the library looks for the site's art later,
         // then falls back to a cropped first page.
         let series = MangaSeries(id: "web-" + url.absoluteString, url: url, title: found.title, cover: found.cover,
-                                 kind: .web, chapters: found.chapters)
+                                 kind: .web, chapters: found.chapters, summary: found.summary)
         state.series = [series] + allSeries
         if let style = found.style { var map = state.detectedStyles ?? [:]; map[series.id] = style; state.detectedStyles = map }
         save()
@@ -318,6 +320,7 @@ final class LibraryModel: ObservableObject {
         let fresh = found.chapters.filter { !known.contains(LinkedSource.key($0.url)) }
         if !fresh.isEmpty { list[i].chapters = ChapterOrder.sorted(list[i].chapters + fresh) }
         if list[i].cover == nil { list[i].cover = found.cover }
+        if list[i].summary == nil { list[i].summary = found.summary }
         state.series = list
         if let style = found.style, state.detectedStyles?[series.id] == nil {
             var map = state.detectedStyles ?? [:]; map[series.id] = style; state.detectedStyles = map

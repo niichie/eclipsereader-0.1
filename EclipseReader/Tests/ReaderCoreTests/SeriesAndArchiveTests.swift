@@ -85,6 +85,8 @@ final class SeriesAndArchiveTests: XCTestCase {
         let manhwa = defaults.applying(.manhwa)
         XCTAssertEqual(manhwa.mode, .vertical)
         XCTAssertEqual(manhwa.trimMargins, false)
+        XCTAssertEqual(defaults.applying(.manhua).mode, .vertical)
+        XCTAssertEqual(defaults.applying(.webtoon).mode, .vertical)
         let comic = defaults.applying(.comic)
         XCTAssertEqual(comic.direction, .leftToRight)
         XCTAssertTrue(comic.advanceOnLeftSwipe)
@@ -113,7 +115,7 @@ final class SeriesAndArchiveTests: XCTestCase {
         XCTAssertEqual(Webtoons.episodeNumber(episodes[9].url), 10)
         XCTAssertEqual(Webtoons.listURL(for: episodes.last!.url)?.absoluteString,
                        "https://www.webtoons.com/en/drama/lookism/list?title_no=1049")
-        XCTAssertEqual(LinkedSource.styleHint(in: "", url: base), .manhwa)
+        XCTAssertEqual(LinkedSource.styleHint(in: "", url: base), .webtoon)
     }
 
     func testCoverFoundInEveryCommonPlace() {

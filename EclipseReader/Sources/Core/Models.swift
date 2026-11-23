@@ -58,23 +58,31 @@ public struct SavedSite: Codable, Hashable, Identifiable, Sendable {
     public init(name: String, url: URL) { self.name = name; self.url = url }
 }
 
-/// How a series is read. Automatic resolves to a detected style, else manga.
+/// What a series is, which decides how it reads. Automatic resolves to a detected style, else manga.
+/// Manhwa (Korean), manhua (Chinese) and webtoons (vertical webcomics from anywhere) all scroll;
+/// manga turns pages right to left, Western comics left to right.
 public enum ReadingStyle: String, Codable, CaseIterable, Sendable {
-    case automatic, manga, manhwa, comic
+    case automatic, manga, manhwa, manhua, webtoon, comic
     public var title: String {
         switch self {
         case .automatic: "Automatic"
         case .manga: "Manga"
-        case .manhwa: "Manhwa / Webtoon"
+        case .manhwa: "Manhwa"
+        case .manhua: "Manhua"
+        case .webtoon: "Webtoon"
         case .comic: "Comic"
         }
     }
+    /// Short label for cover badges.
+    public var tag: String { self == .automatic ? "AUTO" : title.uppercased() }
     public var detail: String {
         switch self {
         case .automatic: "Detected from the site and page shapes"
-        case .manga: "Right to left, page turns"
-        case .manhwa: "Vertical scroll, top to bottom"
-        case .comic: "Left to right, page turns"
+        case .manga: "Japanese · right to left, page turns"
+        case .manhwa: "Korean · vertical scroll"
+        case .manhua: "Chinese · vertical scroll"
+        case .webtoon: "Webcomic strips · vertical scroll"
+        case .comic: "Western · left to right, page turns"
         }
     }
     public var symbol: String {
@@ -82,9 +90,13 @@ public enum ReadingStyle: String, Codable, CaseIterable, Sendable {
         case .automatic: "wand.and.stars"
         case .manga: "book"
         case .manhwa: "iphone.gen3"
+        case .manhua: "iphone.gen2"
+        case .webtoon: "scroll"
         case .comic: "book.pages"
         }
     }
+    /// Read as one continuous vertical strip.
+    public var scrolls: Bool { self == .manhwa || self == .manhua || self == .webtoon }
 }
 
 public struct ReaderPreferences: Codable, Equatable, Sendable {
@@ -116,7 +128,7 @@ public struct ReaderPreferences: Codable, Equatable, Sendable {
         var p = self
         switch style {
         case .automatic, .manga: break
-        case .manhwa:
+        case .manhwa, .manhua, .webtoon:
             p.mode = .vertical; p.direction = .leftToRight; p.trimMargins = false
         case .comic:
             p.direction = .leftToRight; p.advanceOnLeftSwipe = true
@@ -237,8 +249,11 @@ public struct MangaSeries: Codable, Hashable, Identifiable, Sendable {
     /// Chapters in reading order (first chapter first).
     public var chapters: [Chapter]
     public var added: Date
-    public init(id: String, url: URL, title: String, cover: URL? = nil, kind: Kind, chapters: [Chapter], added: Date = Date()) {
+    /// Synopsis from the site, when it has one.
+    public var summary: String?
+    public init(id: String, url: URL, title: String, cover: URL? = nil, kind: Kind, chapters: [Chapter], added: Date = Date(), summary: String? = nil) {
         self.id = id; self.url = url; self.title = title; self.cover = cover; self.kind = kind; self.chapters = chapters; self.added = added
+        self.summary = summary
     }
 }
 

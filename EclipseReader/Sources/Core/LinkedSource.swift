@@ -44,6 +44,8 @@ public struct LinkInspection: Sendable {
     public let chapters: [Chapter]
     /// Manga / manhwa / comic hint from the page's own tags, when it states one.
     public var style: ReadingStyle? = nil
+    /// The series' synopsis, when the page has one.
+    public var summary: String? = nil
 }
 
 /// Reads manga from ordinary web pages the user linked.
@@ -84,7 +86,7 @@ public struct LinkedSource: Sendable {
            let listHTML = try? await page(list), let series = try? Self.analyze(html: listHTML, url: list) {
             let episode = try Self.analyze(html: html, url: url)
             return LinkInspection(title: series.title, cover: series.cover, pages: episode.pages,
-                                  chapters: series.chapters.count >= episode.chapters.count ? series.chapters : episode.chapters, style: .manhwa)
+                                  chapters: series.chapters.count >= episode.chapters.count ? series.chapters : episode.chapters, style: .webtoon)
         }
         var extra: [Chapter] = []
         if Self.chapterLinks(in: html, base: url).count < 2, html.contains("wp-manga") || html.contains("manga-chapters-holder") {
@@ -111,7 +113,7 @@ public struct LinkedSource: Sendable {
             chapters = ChapterOrder.sorted(chapters + [Chapter(url: url, title: name, number: n.map { format($0) } ?? "")])
         }
         return LinkInspection(title: title, cover: cover(in: html, base: url), pages: pages, chapters: chapters,
-                              style: styleHint(in: html, url: url))
+                              style: styleHint(in: html, url: url), summary: pages.isEmpty ? synopsis(in: html) : nil)
     }
 
     static let listingWords: Set<String> = [
@@ -155,6 +157,15 @@ public struct LinkedSource: Sendable {
         case unknown
     }
     public static func summarize(html: String, url: URL) -> PageSummary {
+        // Built-in connections know their pages from the address alone.
+        let name = seriesTitle(in: html) ?? title(in: html) ?? url.host ?? ""
+        if MangaDex.chapterID(url) != nil || WeebCentral.chapterID(url) != nil
+            || (Webtoons.handles(url) && url.path.hasSuffix("/viewer")) { return .chapter(title: name, chapters: 0) }
+        if MangaDex.titleID(url) != nil || WeebCentral.seriesID(url) != nil
+            || (Webtoons.handles(url) && url.path.hasSuffix("/list")) {
+            let count = Webtoons.handles(url) ? Webtoons.episodes(in: html, base: url).count : 0
+            return .series(title: name, chapters: count)
+        }
         do {
             let found = try analyze(html: html, url: url)
             if !found.pages.isEmpty { return .chapter(title: found.title, chapters: found.chapters.count) }
@@ -164,6 +175,33 @@ public struct LinkedSource: Sendable {
         } catch {
             return .unknown
         }
+    }
+
+    /// The series description: the page's synopsis block, else its meta description when that
+    /// reads like a story rather than "Read X online for free".
+    public static func synopsis(in html: String) -> String? {
+        let blocks = [
+            #"(?is)<div[^>]+class=["'][^"']*(?:summary__content|description-summary|manga-excerpt|entry-content|synopsis|series-synopsis|summary-content)[^"']*["'][^>]*>(.*?)</div>"#,
+            #"(?is)<[a-z]+[^>]+itemprop=["']description["'][^>]*>(.*?)</[a-z]+>"#,
+            #"(?is)<p[^>]+class=["'][^"']*(?:description|synopsis|summary)[^"']*["'][^>]*>(.*?)</p>"#,
+        ]
+        for pattern in blocks {
+            if let raw = firstMatch(pattern, html) {
+                let text = plain(raw)
+                if text.count >= 40 { return String(text.prefix(1200)) }
+            }
+        }
+        let metas = [#"(?is)<meta[^>]+(?:property|name)=["'](?:og:)?description["'][^>]*content=["']([^"']+)"#,
+                     #"(?is)<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:)?description["']"#]
+        for pattern in metas {
+            if let raw = firstMatch(pattern, html) {
+                let text = plain(raw)
+                let lower = text.lowercased()
+                let seo = (lower.contains("read ") && (lower.contains("online") || lower.contains("free"))) || lower.contains("latest chapter")
+                if text.count >= 60 && !seo { return String(text.prefix(1200)) }
+            }
+        }
+        return nil
     }
 
     /// Finds just the cover of a series page (used to fill in missing covers later).
@@ -213,11 +251,20 @@ public struct LinkedSource: Sendable {
         let text = (url.absoluteString + " " + plain(String(html.prefix(400_000)))).lowercased()
         func count(_ word: String) -> Int { text.components(separatedBy: word).count - 1 }
         let host = url.host?.lowercased() ?? ""
-        let hostVertical = ["webtoon", "manhwa", "manhua", "asura", "toon"].contains(where: host.contains) ? 3 : 0
-        let vertical = count("manhwa") + count("manhua") + count("webtoon") + count("korean") + count("long strip") + hostVertical
+        // Webcomic platforms: vertical strips from creators anywhere.
+        if ["webtoons.com", "tapas.io", "webcomicsapp.com", "manta.net"].contains(where: host.hasSuffix) { return .webtoon }
+        let korean = count("manhwa") + count("korean")
+        let chinese = count("manhua") + count("chinese")
+        let strips = count("webtoon") + count("long strip") + count("webcomic")
+        let hostVertical = ["manhwa", "asura", "toon"].contains(where: host.contains) ? 3 : 0
+        let vertical = korean + chinese + strips + hostVertical + (host.contains("manhua") ? 3 : 0)
         let japanese = count("japanese manga") + count("type: manga") + count("right to left")
         let western = count("western comic") + count("type: comic") + count("american comic")
-        if vertical >= 2 && vertical > japanese { return .manhwa }
+        if vertical >= 2 && vertical > japanese {
+            if chinese > korean || host.contains("manhua") { return .manhua }
+            if korean > 0 || hostVertical > 0 { return .manhwa }
+            return .webtoon
+        }
         if western >= 1 && western > vertical { return .comic }
         if japanese >= 1 { return .manga }
         return nil
@@ -394,6 +441,10 @@ public struct LinkedSource: Sendable {
     }
 
     public static func detect(in html: String, base: URL) throws -> [MangaPage] {
+        // Reader themes that hand the page list to a script (MangaThemesia's ts_reader, Madara's preload list).
+        if let listed = themeImages(in: html, base: base), listed.count >= 1 {
+            return listed.enumerated().map { MangaPage(url: $1, label: "Page \($0 + 1)") }
+        }
         let inert = html.replacingOccurrences(of: #"(?is)<!--.*?-->|<(script|style|template|noscript)\b[^>]*>.*?</\1\s*>"#,
                                               with: "", options: .regularExpression)
         struct Candidate { let url: URL; let alt: String?; let width: Double?; let height: Double?; let marked: Bool }
@@ -456,6 +507,32 @@ public struct LinkedSource: Sendable {
         let listed = scriptImages(in: html)
         if listed.count >= 3 { return listed.enumerated().map { MangaPage(url: $1, label: "Page \($0 + 1)") } }
         throw SourceError.unsupportedStructure
+    }
+
+    /// Page lists that popular manga site themes put in a script:
+    /// MangaThemesia `ts_reader.run({... "sources":[{"images":[…]}]})`, Madara `chapter_preloaded_images = […]`.
+    static func themeImages(in html: String, base: URL) -> [URL]? {
+        func urls(_ list: [Any]) -> [URL] {
+            list.compactMap { ($0 as? String).flatMap { resolve($0, base: base) } }
+                .filter { !junk.contains(where: $0.absoluteString.lowercased().contains) }
+        }
+        if let json = firstMatch(#"(?s)ts_reader\.run\((\{.*?\})\);"#, html),
+           let data = json.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let sources = object["sources"] as? [[String: Any]] {
+            for source in sources {
+                if let images = source["images"] as? [Any] {
+                    let found = urls(images)
+                    if !found.isEmpty { return found }
+                }
+            }
+        }
+        if let list = firstMatch(#"(?s)chapter_preloaded_images\s*=\s*(\[.*?\])"#, html),
+           let data = list.data(using: .utf8), let images = try? JSONSerialization.jsonObject(with: data) as? [Any] {
+            let found = urls(images)
+            if !found.isEmpty { return found }
+        }
+        return nil
     }
 
     /// Image addresses written into a page's scripts (JSON chapter data), in order, grouped

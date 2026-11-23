@@ -30,7 +30,7 @@ struct ReaderView: View {
     private var effective: ReaderPreferences {
         let seriesID = library.seriesID(for: chapter)
         var style = library.style(for: seriesID)
-        if webtoon && (library.preferences.autoWebtoon ?? true) && library.styleOverride(seriesID) == .automatic { style = .manhwa }
+        if webtoon && (library.preferences.autoWebtoon ?? true) && library.styleOverride(seriesID) == .automatic && !style.scrolls { style = .webtoon }
         return library.preferences.applying(style)
     }
     /// Only real webtoon strips (much taller than a printed page, even after margin trimming) count.
@@ -40,7 +40,7 @@ struct ReaderView: View {
         webtoon = true
         let seriesID = library.seriesID(for: chapter)
         if library.styleOverride(seriesID) == .automatic && (library.preferences.autoWebtoon ?? true) {
-            library.rememberDetected(.manhwa, for: seriesID)
+            if !library.style(for: seriesID).scrolls { library.rememberDetected(.webtoon, for: seriesID) }
         }
     }
     init(chapter: Chapter) { _chapter = State(initialValue: chapter) }
@@ -102,6 +102,28 @@ struct ReaderView: View {
                     }
                     if showBars && !pages.isEmpty {
                         navigationBar(groups: groups).transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else if !pages.isEmpty, page >= pages.count - 1, let next = library.next(after: chapter) {
+                        // Reached the end: offer the next chapter right where your thumb is.
+                        Button {
+                            library.record(chapter, page: max(0, pages.count - 1), count: pages.count, completed: true)
+                            open(next)
+                        } label: {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("NEXT").font(.caption2.weight(.heavy)).tracking(1.2).foregroundStyle(.black.opacity(0.6))
+                                    Text(ChapterText.split(next.title).name).font(.subheadline.weight(.bold)).lineLimit(1)
+                                }
+                                Image(systemName: "arrow.right").font(.subheadline.weight(.heavy))
+                            }
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 18).frame(height: 52)
+                            .background(Eclipse.highlight, in: Capsule())
+                            .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
+                        }
+                        .buttonStyle(PressableStyle())
+                        .padding(.bottom, 18)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .accessibilityLabel("Next chapter, \(next.title)")
                     }
                 }
             }.foregroundStyle(.white)

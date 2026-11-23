@@ -87,4 +87,20 @@ final class AdapterTests: XCTestCase {
         let found = try LinkedSource.analyze(html: "<h1>Solo Hunter</h1>" + chapters + related, url: series)
         XCTAssertEqual(found.chapters.count, 30)
     }
+
+    func testMangaThemesiaReaderScript() throws {
+        let base = URL(string: "https://scans.example.com/solo-hunter-chapter-3/")!
+        let html = #"<div id="readerarea"></div><script>ts_reader.run({"prevUrl":"","nextUrl":"","mode":"full","sources":[{"source":"Server 1","images":["https:\/\/cdn.example.com\/a\/01.jpg","https:\/\/cdn.example.com\/a\/02.jpg"]}],"lazyload":true});</script>"#
+        let pages = try LinkedSource.detect(in: html, base: base)
+        XCTAssertEqual(pages.map(\.url.lastPathComponent), ["01.jpg", "02.jpg"])
+    }
+
+    func testStylesSplitManhwaManhuaAndWebtoons() {
+        let base = URL(string: "https://read.example.com/series/x/")!
+        XCTAssertEqual(LinkedSource.styleHint(in: "<span>Type: Manhua</span><a>Chinese</a>", url: base), .manhua)
+        XCTAssertEqual(LinkedSource.styleHint(in: "<span>Type: Manhwa</span><a>Korean</a>", url: base), .manhwa)
+        XCTAssertEqual(LinkedSource.styleHint(in: "", url: URL(string: "https://tapas.io/series/x")!), .webtoon)
+        XCTAssertEqual(MangaDex.style(language: "zh", tags: nil), .manhua)
+        XCTAssertEqual(MangaDex.style(language: "ja", tags: nil), .manga)
+    }
 }

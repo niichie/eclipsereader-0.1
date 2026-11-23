@@ -289,6 +289,8 @@ struct MangaBrowserView: View {
     @State private var reader: Chapter?
     @State private var lastAdded: MangaSeries?
     @State private var summary: LinkedSource.PageSummary = .unknown
+    @State private var checking = true
+    @State private var guiding = false
     @State private var pending: PendingAdd?
     @State private var viewing: MangaSeries?
     var body: some View {
@@ -341,7 +343,8 @@ struct MangaBrowserView: View {
             }
             if let error = browser.error { Text(error).font(.footnote).foregroundStyle(.orange).padding(8) }
 
-            BrowserToolbar(browser: browser, adding: adding, summary: summary, add: addCurrent, read: readCurrent)
+            BrowserToolbar(browser: browser, adding: adding, summary: summary, checking: checking,
+                           add: { addCurrent(force: false) }, guide: { guiding = true }, read: readCurrent)
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
@@ -364,12 +367,25 @@ struct MangaBrowserView: View {
         }
         .sheet(item: $viewing) { series in SeriesSheet(series: series).environmentObject(model) }
         // Read what the page is (series, chapter, or a list of many series) so the Add button can say.
+        .sheet(isPresented: $guiding) {
+            AddGuideSheet(summary: summary, host: browser.currentURL?.host?.replacingOccurrences(of: "www.", with: "") ?? "",
+                          tryAnyway: { addCurrent(force: true) })
+                .presentationDetents([.medium, .large])
+        }
         .task(id: browser.pageVersion) {
-            summary = .unknown
-            try? await Task.sleep(for: .milliseconds(700))
-            guard let url = browser.currentURL, WebLink.publicHTTPS(url), let html = await browser.pageHTML() else { return }
-            let result = await Task.detached(priority: .utility) { LinkedSource.summarize(html: html, url: url) }.value
-            if !Task.isCancelled { summary = result }
+            checking = true
+            defer { checking = false }
+            // Read the page twice: once soon after it loads, again after scripts fill in chapter lists.
+            for delay in [700, 1800] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard !Task.isCancelled, let url = browser.currentURL, WebLink.publicHTTPS(url), let html = await browser.pageHTML() else { return }
+                let result = await Task.detached(priority: .utility) { LinkedSource.summarize(html: html, url: url) }.value
+                if Task.isCancelled { return }
+                summary = result
+                if case .series = result { return }
+                if case .chapter = result { return }
+                checking = false
+            }
         }
     }
     private func rootURL(_ url: URL) -> URL {
@@ -383,9 +399,9 @@ struct MangaBrowserView: View {
             withAnimation(.snappy) { if toast == text { toast = nil } }
         }
     }
-    private func addCurrent() {
+    private func addCurrent(force: Bool) {
         guard let url = browser.currentURL ?? browser.webView.url else { return }
-        if summary == .listing {
+        if summary == .listing && !force {
             show("This page lists many series. Open the one you want, then tap Add.")
             return
         }
@@ -434,29 +450,64 @@ private struct BrowserToolbar: View {
     @ObservedObject var browser: WebsiteBrowser
     let adding: Bool
     let summary: LinkedSource.PageSummary
+    let checking: Bool
     let add: () -> Void
+    let guide: () -> Void
     let read: () -> Void
+    private var addable: Bool {
+        switch summary { case .series, .chapter: true; default: false }
+    }
     var body: some View {
         HStack(spacing: 2) {
             barButton("chevron.left", "Back") { browser.webView.goBack() }.disabled(!browser.canGoBack)
             barButton("chevron.right", "Forward") { browser.webView.goForward() }.disabled(!browser.canGoForward)
             Spacer(minLength: 6)
-            Button(action: add) {
-                ViewThatFits(in: .horizontal) {
-                    addLabel(longTitle)
-                    addLabel(shortTitle)
-                    addLabel(nil)
+            Group {
+                if addable {
+                    // Only on pages a series can be read from: series pages and chapters.
+                    Button(action: add) {
+                        ViewThatFits(in: .horizontal) {
+                            addLabel(longTitle)
+                            addLabel("Add")
+                            addLabel(nil)
+                        }
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(adding)
+                    .accessibilityLabel("Add to library")
+                    .accessibilityIdentifier("browserAdd")
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                } else if checking || browser.loading {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Reading page…").font(.footnote.weight(.semibold)).lineLimit(1).fixedSize()
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14).frame(height: 40)
+                    .transition(.opacity)
+                } else {
+                    // Wrong kind of page: explain how to get a series in, instead of a button that fails.
+                    Button(action: guide) {
+                        ViewThatFits(in: .horizontal) {
+                            hintLabel(summary == .listing ? "Pick a series to add" : "Open a series to add")
+                            hintLabel("How to add")
+                            hintLabel(nil)
+                        }
+                    }
+                    .buttonStyle(PressableStyle())
+                    .accessibilityLabel("How to add a series")
+                    .accessibilityIdentifier("browserAddGuide")
+                    .transition(.opacity)
                 }
             }
-            .buttonStyle(PressableStyle())
-            .disabled(adding)
-            .accessibilityLabel("Add to library")
-            .accessibilityIdentifier("browserAdd")
+            .animation(.spring(response: 0.35, dampingFraction: 0.75), value: addable)
+            .sensoryFeedback(.success, trigger: addable) { _, now in now }
             Spacer(minLength: 6)
             barButton(browser.loading ? "xmark" : "arrow.clockwise", browser.loading ? "Stop" : "Reload") {
                 browser.loading ? browser.webView.stopLoading() : browser.reload()
             }
             barButton("book", "Read this page in the reader", action: read)
+                .disabled(!addable)
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(.ultraThinMaterial)
@@ -467,47 +518,94 @@ private struct BrowserToolbar: View {
             Image(systemName: symbol).font(.system(size: 19, weight: .medium)).frame(width: 44, height: 44)
         }.accessibilityLabel(label)
     }
-    private var listing: Bool { summary == .listing }
     private var longTitle: String {
         switch summary {
         case .series(_, let count) where count > 0: "Add · \(count) ch"
         case .chapter: "Add series"
-        case .listing: "Open a series to add"
         default: "Add to library"
         }
     }
-    private var shortTitle: String { listing ? "Pick one" : "Add" }
     private func addLabel(_ text: String?) -> some View {
         HStack(spacing: 6) {
             if adding { ProgressView().controlSize(.small).tint(.black) }
-            else { Image(systemName: listing ? "hand.point.up.left" : "plus").font(.subheadline.weight(.heavy)) }
+            else { Image(systemName: "plus").font(.subheadline.weight(.heavy)) }
             if let text { Text(text).font(.subheadline.weight(.bold)).lineLimit(1).fixedSize() }
         }
         .padding(.horizontal, text == nil ? 13 : 18).frame(height: 40)
-        .background(listing ? AnyShapeStyle(Color.white.opacity(0.14)) : AnyShapeStyle(Eclipse.highlight), in: Capsule())
-        .foregroundStyle(listing ? Color.white.opacity(0.75) : Color.black)
-        .shadow(color: listing ? .clear : Eclipse.highlight.opacity(0.35), radius: 10, y: 2)
-        .animation(.snappy, value: summary)
+        .background(Eclipse.highlight, in: Capsule())
+        .foregroundStyle(.black)
+        .shadow(color: Eclipse.highlight.opacity(0.4), radius: 10, y: 2)
+    }
+    private func hintLabel(_ text: String?) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "questionmark.circle").font(.subheadline.weight(.semibold))
+            if let text { Text(text).font(.footnote.weight(.semibold)).lineLimit(1).fixedSize() }
+        }
+        .padding(.horizontal, text == nil ? 12 : 14).frame(height: 36)
+        .foregroundStyle(.white.opacity(0.8))
+        .background(Color.white.opacity(0.1), in: Capsule())
+        .overlay(Capsule().strokeBorder(Eclipse.hairline))
     }
 }
 
-/// A series opened from Browse: its page in a sheet, with the reader on top.
-private struct SeriesSheet: View {
-    @EnvironmentObject private var model: LibraryModel
+/// Why there's no Add button here, and how to get a series into the library.
+private struct AddGuideSheet: View {
+    let summary: LinkedSource.PageSummary
+    let host: String
+    let tryAnyway: () -> Void
     @Environment(\.dismiss) private var dismiss
-    let series: MangaSeries
-    @State private var reader: Chapter?
     var body: some View {
-        NavigationStack {
-            SeriesView(seriesID: series.id, reader: $reader)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Done") { dismiss() }.fontWeight(.semibold)
-                    }
+        VStack(alignment: .leading, spacing: 18) {
+            Capsule().fill(Color.white.opacity(0.25)).frame(width: 40, height: 5).frame(maxWidth: .infinity).padding(.top, 8)
+            HStack(spacing: 12) {
+                Image(systemName: summary == .listing ? "square.grid.2x2" : "doc.text.magnifyingglass")
+                    .font(.title2).foregroundStyle(Eclipse.highlight)
+                    .frame(width: 48, height: 48).background(Eclipse.accent.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(summary == .listing ? "This page lists many series" : "No series on this page yet").font(.headline)
+                    Text(host).font(.footnote).foregroundStyle(.secondary)
                 }
+            }
+            VStack(alignment: .leading, spacing: 14) {
+                step(1, "Open a series", "Tap a title to go to its own page: the one with the cover and the list of chapters.")
+                step(2, "Let it finish loading", "Some sites show their chapter list a moment after the page appears.")
+                step(3, "Tap Add", "The yellow Add button appears with the chapter count when eclipsereader can read the series.")
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Label("A chapter page works too: the whole series is added from its chapter menu.", systemImage: "book")
+                Label("If a site asks whether you're human, answer it once here, then the page can be added.", systemImage: "checkmark.shield")
+                Label("Home, latest, genre and search pages can't be added: they're lists of many series.", systemImage: "list.bullet")
+            }
+            .font(.footnote).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button { dismiss(); tryAnyway() } label: {
+                    Text("Try adding anyway").font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity).frame(height: 46)
+                        .background(Eclipse.surfaceHigh, in: RoundedRectangle(cornerRadius: 14))
+                }
+                Button { dismiss() } label: {
+                    Text("Got it").font(.subheadline.weight(.bold)).foregroundStyle(.black)
+                        .frame(maxWidth: .infinity).frame(height: 46)
+                        .background(Eclipse.highlight, in: RoundedRectangle(cornerRadius: 14))
+                }
+            }
+            .buttonStyle(PressableStyle())
+            Spacer(minLength: 0)
         }
-        .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+        .padding(.horizontal, 20)
+        .frame(maxWidth: 560).frame(maxWidth: .infinity)
+        .background(Eclipse.surface.ignoresSafeArea())
         .preferredColorScheme(.dark)
+    }
+    private func step(_ n: Int, _ title: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(n)").font(.subheadline.weight(.heavy)).foregroundStyle(.black)
+                .frame(width: 26, height: 26).background(Eclipse.highlight, in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.bold))
+                Text(detail).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

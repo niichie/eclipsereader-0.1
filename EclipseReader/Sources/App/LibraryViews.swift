@@ -20,7 +20,7 @@ struct RootView: View {
 }
 
 enum LibraryFilter: String, CaseIterable, Identifiable {
-    case all, new, reading, downloaded, manga, manhwa, comic, files
+    case all, new, reading, downloaded, manga, manhwa, manhua, webtoon, comic, files
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -30,6 +30,8 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .downloaded: "Downloaded"
         case .manga: "Manga"
         case .manhwa: "Manhwa"
+        case .manhua: "Manhua"
+        case .webtoon: "Webtoons"
         case .comic: "Comics"
         case .files: "On device"
         }
@@ -58,6 +60,7 @@ struct LibraryView: View {
     @State private var filter: LibraryFilter = .all
     @AppStorage("librarySort") private var sortRaw = LibrarySort.recent.rawValue
     @AppStorage("libraryShowContinue") private var showContinue = true
+    @AppStorage("libraryShowQuote") private var showQuote = true
     @Namespace private var zoom
     @FocusState private var searchFocused: Bool
 
@@ -70,6 +73,8 @@ struct LibraryView: View {
         case .reading: model.lastRead(series) != nil && model.readCount(series) < series.chapters.count
         case .manga: model.style(for: series.id) == .manga
         case .manhwa: model.style(for: series.id) == .manhwa
+        case .manhua: model.style(for: series.id) == .manhua
+        case .webtoon: model.style(for: series.id) == .webtoon
         case .comic: model.style(for: series.id) == .comic
         case .files: series.kind == .local
         }
@@ -100,13 +105,21 @@ struct LibraryView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 topBar
+                GeometryReader { geometry in
+                let contentWidth = min(geometry.size.width, 1280) - 28
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if query.isEmpty, showQuote, filter == .all {
+                            QuoteCard(compact: geometry.size.width < 420)
+                        }
                         if query.isEmpty, showContinue, filter == .all, let chapter = model.lastChapter {
                             ContinueBar(chapter: chapter, resume: { reader = chapter },
                                         open: { openSeries = model.series(id: model.seriesID(for: chapter)) })
                         }
-                        LibraryGrid(series: visible, reader: $reader, openSeries: $openSeries, zoom: zoom)
+                        LibraryGrid(series: visible, reader: $reader, openSeries: $openSeries, zoom: zoom, width: contentWidth)
+                        if query.isEmpty && filter == .all && model.librarySeries.count < 12 {
+                            DiscoverStrip(openSeries: $openSeries, width: contentWidth)
+                        }
                         if visible.isEmpty {
                             ContentUnavailableView {
                                 Label(query.isEmpty ? "Nothing here yet" : "No matches", systemImage: "books.vertical")
@@ -125,6 +138,7 @@ struct LibraryView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await model.checkForUpdates(force: true); await model.ensureCovers() }
+                }
             }
             .background(EclipseBackground())
             .toolbar(.hidden, for: .navigationBar)    // the bar below adapts to every screen shape
@@ -167,11 +181,8 @@ struct LibraryView: View {
                     Button("Cancel") { withAnimation(.snappy) { query = ""; searching = false; searchFocused = false } }
                         .padding(.leading, 6)
                 } else {
-                    HStack(spacing: 8) {
-                        EclipseMark(size: 22)
-                        Text("Library").font(.title2.weight(.bold))
-                    }
-                    .accessibilityElement(children: .combine)
+                    EclipseWordmark(size: 22)
+                        .accessibilityAddTraits(.isHeader)
                     Spacer(minLength: 8)
                     barButton("magnifyingglass", "Search library") {
                         withAnimation(.snappy) { searching = true }
@@ -245,6 +256,7 @@ struct LibraryOptionsSheet: View {
     @AppStorage("libraryDensity") private var density = LibraryDensity.comfortable.rawValue
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     @AppStorage("libraryShowContinue") private var showContinue = true
+    @AppStorage("libraryShowQuote") private var showQuote = true
     var body: some View {
         NavigationStack {
             Form {
@@ -259,12 +271,79 @@ struct LibraryOptionsSheet: View {
                     }.pickerStyle(.segmented)
                     Toggle("Titles on covers", isOn: $titlesOnCovers)
                     Toggle("Continue reading bar", isOn: $showContinue)
+                    Toggle("Quote of the launch", isOn: $showQuote)
                 }
             }
             .scrollContentBackground(.hidden).background(Eclipse.surface)
             .navigationTitle("Library").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { dismiss() }.fontWeight(.semibold) }
         }.preferredColorScheme(.dark)
+    }
+}
+
+/// "Find something new" under a small library: popular MangaDex titles, one tap to add.
+struct DiscoverStrip: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Binding var openSeries: MangaSeries?
+    var width: CGFloat = 390
+    @State private var items: [DiscoverItem] = []
+    @State private var adding: String?
+    @State private var error: String?
+    var body: some View {
+        let cardWidth = min(150, max(104, width / 3.6))
+        VStack(alignment: .leading, spacing: 10) {
+            if !items.isEmpty {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Discover").font(.title3.weight(.bold))
+                    Text("Popular on MangaDex").font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 12) {
+                        ForEach(items.filter { item in !model.allSeries.contains { $0.url == item.url } }) { item in
+                            Button { add(item) } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    CoverView(url: item.cover, referer: nil)
+                                        .aspectRatio(0.7, contentMode: .fit)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                        .overlay {
+                                            if adding == item.id {
+                                                ZStack { Color.black.opacity(0.5); ProgressView().tint(.white) }
+                                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                            }
+                                        }
+                                        .overlay(alignment: .bottomTrailing) {
+                                            Image(systemName: "plus").font(.caption.weight(.heavy)).foregroundStyle(.black)
+                                                .frame(width: 24, height: 24).background(Eclipse.highlight, in: Circle()).padding(6)
+                                        }
+                                    Text(item.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                                    if let detail = item.detail { Text(detail).font(.caption2).foregroundStyle(.secondary) }
+                                }.frame(width: cardWidth)
+                            }
+                            .buttonStyle(PressableStyle())
+                            .disabled(adding != nil)
+                        }
+                    }
+                }
+                if let error { Text(error).font(.footnote).foregroundStyle(.orange) }
+            }
+        }
+        .padding(.top, 8)
+        .task {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
+            #endif
+            if items.isEmpty { items = (try? await Discover.mangaDex(limit: 16)) ?? [] }
+        }
+    }
+    private func add(_ item: DiscoverItem) {
+        adding = item.id; error = nil
+        Task {
+            defer { adding = nil }
+            do {
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString) { openSeries = series }
+            } catch { self.error = "Couldn’t add \(item.title)." }
+        }
     }
 }
 
@@ -315,14 +394,19 @@ struct LibraryGrid: View {
     @Binding var reader: Chapter?
     @Binding var openSeries: MangaSeries?
     let zoom: Namespace.ID
+    /// Width available to the grid; columns and card text scale with it.
+    var width: CGFloat = 390
     @AppStorage("libraryDensity") private var densityRaw = LibraryDensity.comfortable.rawValue
     @State private var coverFor: MangaSeries?
     var body: some View {
         let density = LibraryDensity(rawValue: densityRaw) ?? .comfortable
-        let columns = [GridItem(.adaptive(minimum: density.minimum, maximum: density.maximum), spacing: 12, alignment: .top)]
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+        let spacing: CGFloat = width > 700 ? 18 : 12
+        let count = density.columns(for: width, spacing: spacing)
+        let cardWidth = (width - spacing * CGFloat(count - 1)) / CGFloat(count)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: .top), count: count)
+        LazyVGrid(columns: columns, alignment: .leading, spacing: spacing + 6) {
             ForEach(series) { item in
-                Button { openSeries = item } label: { SeriesCard(series: item).zoomSource(item.id, in: zoom) }
+                Button { openSeries = item } label: { SeriesCard(series: item, width: cardWidth).zoomSource(item.id, in: zoom) }
                     .buttonStyle(PressableStyle())
                     .accessibilityIdentifier(item.id == LibraryModel.berserkID ? "chapterBrowser" : "series-\(item.title)")
                     .contextMenu {
@@ -536,14 +620,18 @@ enum LibraryDensity: Int, CaseIterable, Identifiable {
     case compact, comfortable, large
     var id: Int { rawValue }
     var title: String { ["Compact", "Comfortable", "Large"][rawValue] }
-    var minimum: CGFloat { [96, 118, 150][rawValue] }
-    var maximum: CGFloat { [130, 160, 210][rawValue] }
+    /// Ideal cover width; the grid fits as many as the screen holds, then stretches them to fill.
+    var target: CGFloat { [116, 156, 212][rawValue] }
+    func columns(for width: CGFloat, spacing: CGFloat = 12) -> Int {
+        max(2, Int((width + spacing) / (target + spacing)))
+    }
 }
 
 struct LibrarySettingsPage: View {
     @EnvironmentObject private var model: LibraryModel
     @AppStorage("libraryDensity") private var density = LibraryDensity.comfortable.rawValue
     @AppStorage("libraryShowContinue") private var showContinue = true
+    @AppStorage("libraryShowQuote") private var showQuote = true
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     var body: some View {
         Form {
@@ -553,6 +641,7 @@ struct LibrarySettingsPage: View {
                 }.pickerStyle(.segmented)
                 Toggle("Titles on covers", isOn: $titlesOnCovers)
                 Toggle("Continue reading bar", isOn: $showContinue)
+                Toggle("Quote of the launch", isOn: $showQuote)
             }
             Section {
                 Button {
@@ -807,9 +896,11 @@ struct ReaderPreferencesForm: View {
 
 /// A library cover in Mihon's compact style: artwork edge to edge, the title on a dark gradient,
 /// unread / downloaded counts as one badge, reading progress along the bottom edge.
+/// Text and badges scale with the card, so covers look right from the Duo's front screen to an iPad.
 struct SeriesCard: View {
     @EnvironmentObject private var model: LibraryModel
     let series: MangaSeries
+    var width: CGFloat = 156
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     var body: some View {
         let read = model.readCount(series)
@@ -817,9 +908,11 @@ struct SeriesCard: View {
         let unread = max(0, total - read)
         let new = model.newCount(series)
         let offline = model.downloadedCount(series)
-        let style = model.style(for: series.id)
+        let style = series.kind == .local ? nil : Optional(model.style(for: series.id))
         let reading = model.lastRead(series) != nil && read < total
-        VStack(alignment: .leading, spacing: 6) {
+        let k = min(1.45, max(0.8, width / 156))
+        let radius = 10 * min(1.3, k)
+        VStack(alignment: .leading, spacing: 6 * k) {
             CoverView(url: model.cover(for: series), referer: series.chapters.first, onFail: { model.coverFailed(series) })
                 .aspectRatio(0.7, contentMode: .fit)
                 .overlay(alignment: .bottom) {
@@ -827,12 +920,12 @@ struct SeriesCard: View {
                         LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.55), location: 0.45),
                                                .init(color: .black.opacity(0.92), location: 1)],
                                        startPoint: .top, endPoint: .bottom)
-                            .frame(height: 86)
+                            .frame(height: 90 * k)
                             .overlay(alignment: .bottomLeading) {
-                                Text(series.title).font(.footnote.weight(.bold)).lineLimit(2)
+                                Text(series.title).font(.system(size: 13.5 * k, weight: .bold)).lineLimit(2)
                                     .multilineTextAlignment(.leading)
                                     .shadow(color: .black, radius: 2)
-                                    .padding(.horizontal, 8).padding(.bottom, reading ? 11 : 8)
+                                    .padding(.horizontal, 8 * k).padding(.bottom, (reading ? 11 : 8) * k)
                             }
                     }
                 }
@@ -844,43 +937,52 @@ struct SeriesCard: View {
                                 Rectangle().fill(Eclipse.accent)
                                     .frame(width: max(4, g.size.width * Double(read) / Double(max(total, 1))))
                             }
-                        }.frame(height: 3)
+                        }.frame(height: 3 * k)
                     }
                 }
                 .overlay(alignment: .topLeading) {
                     HStack(spacing: 0) {
                         if offline > 0 {
-                            Text("\(offline)").padding(.horizontal, 6).padding(.vertical, 3)
+                            Text("\(offline)").padding(.horizontal, 6 * k).padding(.vertical, 3 * k)
                                 .background(Eclipse.accent).foregroundStyle(.white)
                                 .accessibilityLabel("\(offline) downloaded")
                         }
                         if new > 0 {
-                            Text("\(new) NEW").padding(.horizontal, 6).padding(.vertical, 3)
+                            Text("\(new) NEW").padding(.horizontal, 6 * k).padding(.vertical, 3 * k)
                                 .background(Eclipse.highlight).foregroundStyle(.black)
                         } else if unread > 0 && total > 0 {
-                            Text("\(unread)").padding(.horizontal, 6).padding(.vertical, 3)
+                            Text("\(unread)").padding(.horizontal, 6 * k).padding(.vertical, 3 * k)
                                 .background(Color.white).foregroundStyle(.black)
                                 .accessibilityLabel("\(unread) unread")
                         }
                     }
-                    .font(.caption2.weight(.heavy)).monospacedDigit()
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .padding(6)
+                    .font(.system(size: 11 * k, weight: .heavy)).monospacedDigit()
+                    .clipShape(RoundedRectangle(cornerRadius: 5 * k))
+                    .padding(6 * k)
                 }
                 .overlay(alignment: .topTrailing) {
-                    Image(systemName: series.kind == .local ? "internaldrive.fill" : style.symbol)
-                        .font(.system(size: 10, weight: .bold)).frame(width: 22, height: 22)
-                        .background(.ultraThinMaterial, in: Circle()).padding(6)
-                        .accessibilityLabel(series.kind == .local ? "On this device" : style.title)
+                    Group {
+                        if let style {
+                            Text(style.tag).font(.system(size: 8.5 * k, weight: .heavy)).tracking(0.6)
+                                .padding(.horizontal, 5 * k).padding(.vertical, 3 * k)
+                        } else {
+                            Image(systemName: "internaldrive.fill").font(.system(size: 9 * k, weight: .bold))
+                                .padding(4 * k)
+                        }
+                    }
+                    .foregroundStyle(.white.opacity(0.9))
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(6 * k)
+                    .accessibilityLabel(style?.title ?? "On this device")
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.06)))
-                .shadow(color: .black.opacity(0.45), radius: 8, y: 4)
+                .clipShape(RoundedRectangle(cornerRadius: radius))
+                .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(Color.white.opacity(0.07)))
+                .shadow(color: .black.opacity(0.5), radius: 8 * k, y: 4 * k)
             if !titlesOnCovers {
-                Text(series.title).font(.footnote.weight(.semibold)).lineLimit(2)
+                Text(series.title).font(.system(size: 13 * k, weight: .semibold)).lineLimit(2)
             }
             Text(total == 0 ? "Loading chapters…" : reading ? "\(read) of \(total) read" : "\(total) chapter\(total == 1 ? "" : "s")")
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                .font(.system(size: 11 * k)).foregroundStyle(.secondary).lineLimit(1)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(series.title), \(total) chapters, \(unread) unread")
@@ -1098,7 +1200,13 @@ struct SeriesView: View {
             .navigationTitle(series.title).navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
             .refreshable { await update(series) }
-            .task { if builtIn && series.chapters.isEmpty { await model.refresh() } }
+            .task {
+                if builtIn && series.chapters.isEmpty { await model.refresh() }
+                // Fresh chapter list the first time a website series is opened each session.
+                if series.kind == .web && !builtIn && model.sessionRefreshed.insert(series.id).inserted {
+                    try? await model.update(series)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .principal) { Text("") }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -1208,6 +1316,7 @@ struct SeriesHeader: View {
                 }
                 Spacer(minLength: 0)
             }
+            if let summary = series.summary, !summary.isEmpty { SynopsisText(text: summary) }
             HStack(spacing: 10) {
                 Button { if let resume { reader = resume } } label: {
                     HStack(spacing: 10) {
@@ -1270,6 +1379,30 @@ struct SeriesHeader: View {
             .frame(width: 54, height: 54)
             .background(Eclipse.surfaceHigh, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Eclipse.hairline))
+    }
+}
+
+/// A series synopsis: three lines, tap to read it all.
+struct SynopsisText: View {
+    let text: String
+    @State private var expanded = false
+    var body: some View {
+        Button { withAnimation(.snappy) { expanded.toggle() } } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(text).font(.subheadline).foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(expanded ? nil : 3)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 4) {
+                    Text(expanded ? "Less" : "More")
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                }.font(.caption.weight(.bold)).foregroundStyle(Eclipse.highlight)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(expanded ? "Shows less" : "Shows the full description")
     }
 }
 
