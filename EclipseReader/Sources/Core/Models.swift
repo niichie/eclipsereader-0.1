@@ -122,6 +122,12 @@ public struct ReaderPreferences: Codable, Equatable, Sendable {
     public var verticalGap: Bool?
     /// Tap the left/right edge of a page to turn it. nil means on.
     public var tapZones: Bool?
+    /// Sharpen and upscale low-resolution scans while decoding. nil means off.
+    public var enhance: Bool?
+    /// Show two-page scans as two single pages in portrait. nil means on.
+    public var splitSpreads: Bool?
+    /// Guided view: step through a page panel by panel. nil means off.
+    public var guided: Bool?
     public init() {}
     /// Global settings are the manga defaults; other styles adjust only what they must.
     public func applying(_ style: ReadingStyle) -> ReaderPreferences {
@@ -171,6 +177,21 @@ public struct LibraryState: Codable, Sendable {
     public var coverChecked: [String]?
     /// Notify about new chapters (background checks, notifications, icon badge). nil means off.
     public var notifyNew: Bool?
+    /// Seconds spent reading per day ("2026-11-23" → seconds).
+    public var readingLog: [String: Double]?
+    /// Chapters finished per day.
+    public var finishedLog: [String: Int]?
+    /// Series hidden from the library until unlocked.
+    public var hiddenSeries: [String]?
+    /// Your own shelves: category name → series ids, in display order.
+    public var categories: [LibraryCategory]?
+    /// Downloads: only on Wi-Fi; remove a chapter's download once it's read.
+    public var downloadWiFiOnly: Bool?
+    public var deleteAfterReading: Bool?
+    /// AniList: linked media per series, and the signed-in token.
+    public var aniListLinks: [String: Int]?
+    public var aniListToken: String?
+    public var aniListUser: String?
     /// History shows only reading after this moment (set by "Clear history").
     public var historyCleared: Date?
     /// Covers the user picked (a page or a photo); these win over automatic ones.
@@ -237,6 +258,16 @@ public enum SourceError: Error, LocalizedError, Equatable, Sendable {
         case .invalidImage: "This page didn’t load as an image. Try again, or open it in the browser."
         case .insecureURL: "The site sent the reader to an unsafe address, so it was blocked."
         }
+    }
+}
+
+/// A shelf of the user's own making ("Plan to read", "Favourites"…).
+public struct LibraryCategory: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var seriesIDs: [String]
+    public init(id: String = UUID().uuidString, name: String, seriesIDs: [String] = []) {
+        self.id = id; self.name = name; self.seriesIDs = seriesIDs
     }
 }
 

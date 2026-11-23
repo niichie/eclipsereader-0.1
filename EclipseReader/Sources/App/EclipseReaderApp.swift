@@ -4,6 +4,9 @@ import SwiftUI
 struct EclipseReaderApp: App {
     @StateObject private var model = LibraryModel()
     @Environment(\.scenePhase) private var phase
+    @AppStorage("appLock") private var appLock = false
+    /// Locked at launch and whenever the app goes to the background (when the lock is on).
+    @State private var locked = UserDefaults.standard.bool(forKey: "appLock")
     var body: some Scene {
         WindowGroup {
             Group {
@@ -15,6 +18,12 @@ struct EclipseReaderApp: App {
                 RootView()
                 #endif
             }.environmentObject(model)
+                .overlay {
+                    if locked && appLock {
+                        LockScreen { withAnimation(.easeOut(duration: 0.25)) { locked = false } }
+                            .transition(.opacity)
+                    }
+                }
                 .preferredColorScheme(.dark)
                 .tint(.white)
                 // Files and the share sheet can hand CBZ/ZIP/PDF files straight to the library.
@@ -34,6 +43,8 @@ struct EclipseReaderApp: App {
                 .onChange(of: phase) { _, phase in
                     if phase != .active { model.save() }
                     if phase == .background && model.state.notifyNew == true { ChapterAlerts.schedule() }
+                    if phase == .background && appLock { locked = true; model.showHidden = false }
+                    if phase == .active { AutoBackup.runIfDue(model) }
                     if phase == .active { Task { await model.checkForUpdates() } }
                     if phase == .background { Task { try? await model.pipeline.cache.prune() } }
                 }

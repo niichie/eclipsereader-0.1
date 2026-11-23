@@ -19,6 +19,8 @@ struct ReaderView: View {
     @AppStorage("readerWarmth") private var warmth = 0.0
     @AppStorage("keepScreenOn") private var keepScreenOn = true
     @AppStorage("readerPageNumber") private var showPageNumber = true
+    @AppStorage("pageHaptics") private var haptics = true
+    @State private var lastActivity = Date()
     @State private var webtoon = false
     @StateObject private var translator = TranslateModel()
     @State private var handle = ReaderHandle()
@@ -150,10 +152,16 @@ struct ReaderView: View {
                     let start = min(last + 1, pages.count)
                     await library.pipeline.prefetch(Array(pages.dropFirst(start).prefix(2)), chapter: chapter)
                 }
-                .onChange(of: page) { _, _ in remember() }
-                .onChange(of: phase) { _, phase in if phase != .active { remember() } }
-                .onDisappear { remember(); UIApplication.shared.isIdleTimerDisabled = false }
-                .onAppear { UIApplication.shared.isIdleTimerDisabled = keepScreenOn }
+                .onChange(of: page) { _, _ in logTime(); remember() }
+                .onChange(of: phase) { _, phase in
+                    if phase != .active { logTime(); remember() } else { lastActivity = Date() }
+                }
+                .onDisappear { logTime(); remember(); UIApplication.shared.isIdleTimerDisabled = false }
+                .onAppear { lastActivity = Date(); UIApplication.shared.isIdleTimerDisabled = keepScreenOn }
+                // A soft tap of the Taptic Engine for each page turn, like paper under the thumb.
+                .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.55), trigger: page) { _, _ in
+                    haptics && effective.mode == .paged
+                }
                 .sheet(isPresented: $settings) {
                     NavigationStack {
                         Form {
@@ -387,6 +395,12 @@ struct ReaderView: View {
             autoScrolling = reader.isAutoScrolling
             if autoScrolling { controls = false }
         }
+    }
+    /// Reading time since the last page turn, idle gaps capped at five minutes.
+    private func logTime() {
+        let now = Date()
+        library.logReading(seconds: min(300, now.timeIntervalSince(lastActivity)))
+        lastActivity = now
     }
     private func toggleTrim() {
         library.preferences.trimMargins = !(library.preferences.trimMargins ?? true)

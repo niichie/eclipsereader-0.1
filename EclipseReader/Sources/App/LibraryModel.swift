@@ -95,6 +95,7 @@ final class LibraryModel: ObservableObject {
         Task { try? await pipeline.cache.prune() }
         Task { downloaded = await OfflineStore.shared.downloadedIDs() }
         Self.current = self
+        NetworkWatch.shared.onChange = { [weak self] in self?.startDownloads() }
     }
     var preferences: ReaderPreferences {
         get { state.preferences }
@@ -113,7 +114,11 @@ final class LibraryModel: ObservableObject {
                     cover: state.covers?[Self.berserkID], kind: .web, chapters: state.chapters, added: .distantPast)
     }
     /// Berserk first, then everything the user added.
-    var librarySeries: [MangaSeries] { [berserk] + allSeries }
+    var librarySeries: [MangaSeries] {
+        let all = [berserk] + allSeries
+        guard !showHidden, let hidden = state.hiddenSeries, !hidden.isEmpty else { return all }
+        return all.filter { !hidden.contains($0.id) }
+    }
     func series(id: String) -> MangaSeries? { id == Self.berserkID ? berserk : allSeries.first { $0.id == id } }
     func seriesID(for chapter: Chapter) -> String { series(containing: chapter)?.id ?? Self.berserkID }
     func cover(for series: MangaSeries) -> URL? {
@@ -553,9 +558,19 @@ final class LibraryModel: ObservableObject {
             downloadQueue.append(chapter)
             downloads[chapter.id] = .queued
         }
+        startDownloads()
+    }
+    /// Set while downloads wait for Wi-Fi (Settings › Downloads › Wi-Fi only).
+    @Published var waitingForWiFi = false
+    func startDownloads() {
         guard downloadTask == nil, !downloadQueue.isEmpty else { return }
         downloadTask = Task { [weak self] in
             while let self, !self.downloadQueue.isEmpty {
+                if self.state.downloadWiFiOnly == true && NetworkWatch.shared.expensive {
+                    self.waitingForWiFi = true
+                    break
+                }
+                self.waitingForWiFi = false
                 let next = self.downloadQueue.removeFirst()
                 await self.runDownload(next)
             }
@@ -764,7 +779,87 @@ final class LibraryModel: ObservableObject {
         if state.incognito == true && !completed { return }
         if state.lastChapterID == chapter.id, let old = state.progress[chapter.id],
            old.page == page && old.pageCount == count && (!completed || old.completed) { return }
-        state.record(chapter, page: page, count: count, completed: completed); save()
+        let newlyFinished = completed && state.progress[chapter.id]?.completed != true
+        state.record(chapter, page: page, count: count, completed: completed)
+        if newlyFinished {
+            var log = state.finishedLog ?? [:]
+            log[Self.day(Date()), default: 0] += 1
+            state.finishedLog = log
+            if state.deleteAfterReading == true && isDownloaded(chapter) { removeDownload(chapter) }
+            finishedChapter(chapter)
+        }
+        save()
+    }
+    /// Hook for tracking services when a chapter is finished.
+    private func finishedChapter(_ chapter: Chapter) {
+        Task { await AniList.chapterFinished(chapter, model: self) }
+    }
+
+    // MARK: Reading stats
+
+    nonisolated static func day(_ date: Date) -> String {
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+    /// Adds reading time to today (the reader logs it between page turns, idle gaps capped).
+    func logReading(seconds: Double) {
+        guard seconds > 0.5, state.incognito != true else { return }
+        var log = state.readingLog ?? [:]
+        log[Self.day(Date()), default: 0] += seconds
+        // Keep a year of days.
+        if log.count > 400, let oldest = log.keys.sorted().first { log[oldest] = nil }
+        state.readingLog = log
+    }
+
+    // MARK: Hidden series and categories
+
+    /// Hidden series show only after Face ID / passcode in this session.
+    @Published var showHidden = false
+    func isHidden(_ series: MangaSeries) -> Bool { state.hiddenSeries?.contains(series.id) == true }
+    func setHidden(_ hidden: Bool, _ series: MangaSeries) {
+        var list = state.hiddenSeries ?? []
+        list.removeAll { $0 == series.id }
+        if hidden { list.append(series.id) }
+        state.hiddenSeries = list
+        save()
+    }
+    var categories: [LibraryCategory] { state.categories ?? [] }
+    func addCategory(_ name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, !categories.contains(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) else { return }
+        state.categories = categories + [LibraryCategory(name: clean)]
+        save()
+    }
+    func removeCategory(_ category: LibraryCategory) {
+        state.categories = categories.filter { $0.id != category.id }
+        save()
+    }
+    func renameCategory(_ category: LibraryCategory, to name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, var list = state.categories, let i = list.firstIndex(where: { $0.id == category.id }) else { return }
+        list[i].name = clean
+        state.categories = list
+        save()
+    }
+    func moveCategories(from: IndexSet, to: Int) {
+        var list = categories
+        list.move(fromOffsets: from, toOffset: to)
+        state.categories = list
+        save()
+    }
+    func isIn(_ category: LibraryCategory, _ series: MangaSeries) -> Bool {
+        categories.first { $0.id == category.id }?.seriesIDs.contains(series.id) == true
+    }
+    func set(_ series: [MangaSeries], in category: LibraryCategory, _ member: Bool) {
+        guard var list = state.categories, let i = list.firstIndex(where: { $0.id == category.id }) else { return }
+        var ids = list[i].seriesIDs
+        for item in series {
+            ids.removeAll { $0 == item.id }
+            if member { ids.append(item.id) }
+        }
+        list[i].seriesIDs = ids
+        state.categories = list
+        save()
     }
     func save() {
         do { try repository.save(state); persistenceError = nil }

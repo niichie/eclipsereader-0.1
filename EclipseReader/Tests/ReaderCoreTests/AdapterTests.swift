@@ -113,4 +113,12 @@ final class AdapterTests: XCTestCase {
         XCTAssertTrue(LinkedSource.isChapterAddress(URL(string: "https://x.example.com/manga/solo/12/")!))
         XCTAssertFalse(LinkedSource.isChapterAddress(URL(string: "https://x.example.com/manga/solo-hunter/")!))
     }
+
+    func testMangaDexKeepsOneConsistentTranslation() {
+        func chapter(_ n: String, _ g: String) -> (key: String, group: String, chapter: Chapter) {
+            (key: n, group: g, chapter: Chapter(url: URL(string: "https://mangadex.org/chapter/\(g)-\(n)")!, title: "Chapter \(n)", number: n))
+        }
+        let picked = MangaDex.oneTranslation([chapter("1", "solo"), chapter("1", "main"), chapter("2", "main"), chapter("3", "main"), chapter("3", "solo")])
+        XCTAssertEqual(picked.map(\.url.lastPathComponent), ["main-1", "main-2", "main-3"])
+    }
 }

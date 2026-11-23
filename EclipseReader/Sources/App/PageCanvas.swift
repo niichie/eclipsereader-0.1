@@ -35,7 +35,7 @@ private enum PageDecoder {
         if height > width * 2.5 && width <= 1600 { return min(long, 16384) }
         return min(long, limit)
     }
-    static func decode(_ data: Data, trim: Bool = true, limit: Double = 4096) throws -> DecodedImage {
+    static func decode(_ data: Data, trim: Bool = true, limit: Double = 4096, enhance: Bool = false) throws -> DecodedImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Double,
@@ -47,7 +47,13 @@ private enum PageDecoder {
                  kCGImageSourceShouldCacheImmediately: true,
                  kCGImageSourceThumbnailMaxPixelSize: maxPixels(width: width, height: height, limit: limit)] as CFDictionary)
         else { throw SourceError.invalidImage }
-        let final = trim ? (cropMargins(cg) ?? cg) : cg
+        var final = trim ? (cropMargins(cg) ?? cg) : cg
+        // Low-resolution scans: upscale toward the screen's size and clean them up.
+        // Tall webtoon strips are only enhanced when they're narrow.
+        if enhance, final.height <= final.width * 3 || final.width < 720,
+           let better = PageEnhancer.enhance(final, targetLongSide: final.height > final.width * 3 ? 1440 * Double(final.height) / Double(max(1, final.width)) : limit * 0.66) {
+            final = better
+        }
         return DecodedImage(image: UIImage(cgImage: final), ratio: Double(final.width) / Double(final.height))
     }
     /// Removes plain white or black scan margins (the bars beside single pages).
@@ -158,12 +164,13 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
             guard let self else { return }
             work?.cancel(); imageView.image = nil; imageView.isAccessibilityElement = false; message.text = nil; retry.isHidden = true; spinner.startAnimating()
             let trim = preferences.trimMargins ?? true
+            let enhance = preferences.enhance ?? false
             let limit = DisplayQuality.longSide(preferences.quality ?? .automatic)
             work = Task { [weak self] in
                 do {
                     let data = try await pipeline.data(for: page, chapter: chapter)
                     try Task.checkCancellation()
-                    let decoded = try await Task.detached(priority: .userInitiated) { [trim, limit] in try PageDecoder.decode(data, trim: trim, limit: limit) }.value
+                    let decoded = try await Task.detached(priority: .userInitiated) { [trim, limit, enhance] in try PageDecoder.decode(data, trim: trim, limit: limit, enhance: enhance) }.value
                     try Task.checkCancellation()
                     guard let self else { return }
                     spinner.stopAnimating(); imageView.image = decoded.image

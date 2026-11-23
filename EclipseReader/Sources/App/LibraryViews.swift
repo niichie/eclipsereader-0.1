@@ -63,6 +63,10 @@ struct LibraryView: View {
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
     @State private var searchingEverywhere = false
+    /// Closed with × for this launch (turn it off for good in sort & display options).
+    @State private var quoteClosed = false
+    @State private var quoteSearch: QuoteSearch?
+    struct QuoteSearch: Identifiable { let query: String; var id: String { query } }
     @Namespace private var zoom
     @FocusState private var searchFocused: Bool
 
@@ -111,8 +115,11 @@ struct LibraryView: View {
                 let contentWidth = min(geometry.size.width, 1280) - 28
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        if query.isEmpty, showQuote, filter == .all {
-                            QuoteCard(compact: geometry.size.width < 420)
+                        if query.isEmpty, showQuote, !quoteClosed, filter == .all {
+                            QuoteCard(compact: geometry.size.width < 420, read: { readQuote($0) }, close: {
+                                withAnimation(.snappy) { quoteClosed = true }
+                            })
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                         if query.isEmpty, showContinue, filter == .all, let chapter = model.lastChapter {
                             ContinueBar(chapter: chapter, resume: { reader = chapter },
@@ -171,6 +178,7 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $options) { LibraryOptionsSheet().environmentObject(model).presentationDetents([.medium, .large]) }
             .sheet(isPresented: $searchingEverywhere) { GlobalSearchSheet(query: query).environmentObject(model) }
+            .sheet(item: $quoteSearch) { item in GlobalSearchSheet(query: item.query).environmentObject(model) }
             .navigationDestination(item: $openSeries) { series in
                 SeriesView(seriesID: series.id, reader: $reader).zoomDestination(series.id, in: zoom)
             }
@@ -181,6 +189,17 @@ struct LibraryView: View {
             }
             .onChange(of: model.librarySeries.count) { _, _ in Task { await model.ensureCovers() } }
             .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+        }
+    }
+
+    /// The quote's series: straight to it when it's in your library, otherwise every site is searched for it.
+    private func readQuote(_ quote: MangaQuote) {
+        let work = quote.work.lowercased()
+        if let owned = model.librarySeries.first(where: { $0.title.lowercased() == work })
+            ?? model.librarySeries.first(where: { $0.title.lowercased().contains(work) || ($0.title.count >= 4 && work.contains($0.title.lowercased())) }) {
+            openSeries = owned
+        } else {
+            quoteSearch = QuoteSearch(query: quote.work)
         }
     }
 
@@ -222,6 +241,13 @@ struct LibraryView: View {
                         }
                         if let random = model.librarySeries.randomElement() {
                             Button { openSeries = random } label: { Label("Open a random series", systemImage: "shuffle") }
+                        }
+                        if model.showHidden {
+                            Button { model.showHidden = false } label: { Label("Hide hidden series", systemImage: "eye.slash") }
+                        } else if (model.state.hiddenSeries?.count ?? 0) > 0 {
+                            Button {
+                                Task { if await Biometrics.unlock(reason: "Show hidden series") { model.showHidden = true } }
+                            } label: { Label("Show hidden series", systemImage: "eye") }
                         }
                     } label: {
                         Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: 40, height: 40)
@@ -440,6 +466,19 @@ struct LibraryGrid: View {
                                                               set: { model.setStyle($0, for: item.id) })) {
                             ForEach(ReadingStyle.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol).tag($0) }
                         }
+                        if !model.categories.isEmpty {
+                            Menu {
+                                ForEach(model.categories) { category in
+                                    let member = model.isIn(category, item)
+                                    Button { model.set([item], in: category, !member) } label: {
+                                        Label(category.name, systemImage: member ? "checkmark" : "folder")
+                                    }
+                                }
+                            } label: { Label("Categories", systemImage: "folder") }
+                        }
+                        Button { model.setHidden(!model.isHidden(item), item) } label: {
+                            Label(model.isHidden(item) ? "Unhide" : "Hide", systemImage: model.isHidden(item) ? "eye" : "eye.slash")
+                        }
                         if item.id != LibraryModel.berserkID {
                             Button(role: .destructive) { model.remove(item) } label: { Label("Remove from library", systemImage: "trash") }
                         }
@@ -539,6 +578,9 @@ struct SettingsView: View {
                     }
                 }
                 Section {
+                    NavigationLink { StatsPage() } label: {
+                        SettingsRow(title: "Reading stats", detail: "Time read, streaks, chapters finished", symbol: "chart.bar.fill", tint: .green)
+                    }
                     NavigationLink { BackupSettingsPage() } label: {
                         SettingsRow(title: "Backup & restore", detail: "Move your library to another device", symbol: "externaldrive.fill", tint: .orange)
                     }
@@ -622,12 +664,14 @@ struct ReaderSettingsPage: View {
     @AppStorage("readerWarmth") private var warmth = 0.0
     @AppStorage("keepScreenOn") private var keepScreenOn = true
     @AppStorage("readerPageNumber") private var showPageNumber = true
+    @AppStorage("pageHaptics") private var haptics = true
     var body: some View {
         Form {
             ReaderPreferencesForm(preferences: Binding(get: { model.preferences }, set: { model.preferences = $0 }))
             Section {
                 Toggle("Keep the screen on while reading", isOn: $keepScreenOn)
                 Toggle("Show page number", isOn: $showPageNumber)
+                Toggle("Page-turn haptics", isOn: $haptics)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack { Text("Warm night filter"); Spacer(); Text(warmth == 0 ? "Off" : "\(Int(warmth * 100))%").foregroundStyle(.secondary).monospacedDigit() }
                     Slider(value: $warmth, in: 0...0.6).tint(Eclipse.highlight)
@@ -715,6 +759,20 @@ struct DownloadSettingsPage: View {
                 LabeledContent("Downloaded chapters", value: "\(model.downloaded.count)")
                 LabeledContent("Space used", value: ByteCountFormatter.string(fromByteCount: downloadBytes, countStyle: .file))
                 if !model.downloads.isEmpty { LabeledContent("In progress", value: "\(model.downloads.count)") }
+            }
+            Section {
+                Toggle("Download on Wi-Fi only", isOn: Binding(
+                    get: { model.state.downloadWiFiOnly == true },
+                    set: { model.state.downloadWiFiOnly = $0; model.save(); if !$0 { model.startDownloads() } }))
+                if model.waitingForWiFi {
+                    Label("Waiting for Wi-Fi to continue downloading", systemImage: "wifi.exclamationmark")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+                Toggle("Delete downloads after reading", isOn: Binding(
+                    get: { model.state.deleteAfterReading == true },
+                    set: { model.state.deleteAfterReading = $0; model.save() }))
+            } footer: {
+                Text("Finished chapters free their space as soon as you finish them.")
             }
             Section {
                 Toggle("Download ahead while reading", isOn: Binding(
@@ -835,6 +893,8 @@ struct BackupSettingsPage: View {
     @State private var backupURL: URL?
     @State private var restoring = false
     @State private var message: String?
+    @State private var choosingFolder = false
+    @State private var autoFolder: String?
     var body: some View {
         Form {
             Section {
@@ -850,8 +910,32 @@ struct BackupSettingsPage: View {
             } footer: {
                 Text("Saves your reading positions, series, settings and styles to one file. Save it to iCloud Drive, then restore it on your other device; newer positions win and nothing is deleted.")
             }
+            Section {
+                if let folder = autoFolder {
+                    LabeledContent("Folder", value: folder)
+                    if let last = AutoBackup.lastBackup {
+                        LabeledContent("Last backup", value: last.formatted(.relative(presentation: .named)))
+                    }
+                    Button { message = AutoBackup.runIfDue(model, force: true) ?? "Backed up." } label: {
+                        Label("Back up now", systemImage: "arrow.clockwise.icloud")
+                    }
+                    Button("Stop automatic backups", role: .destructive) { AutoBackup.setFolder(nil); autoFolder = nil }
+                } else {
+                    Button { choosingFolder = true } label: { Label("Choose a backup folder…", systemImage: "folder.badge.plus") }
+                }
+            } header: { Text("Automatic backups") } footer: {
+                Text("Once a day, eclipsereader saves a backup into the folder you choose (pick one in iCloud Drive to keep it safe off the device). The last seven are kept.")
+            }
         }
         .settingsPage("Backup & restore")
+        .task { autoFolder = AutoBackup.folderName }
+        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result {
+                AutoBackup.setFolder(url)
+                autoFolder = AutoBackup.folderName
+                message = AutoBackup.runIfDue(model, force: true) ?? "Backups will be saved to \(autoFolder ?? "that folder") every day."
+            }
+        }
         .fileImporter(isPresented: $restoring, allowedContentTypes: [.json]) { result in
             switch result {
             case .success(let url):
@@ -865,8 +949,29 @@ struct BackupSettingsPage: View {
 struct PrivacySettingsPage: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var confirmHistory = false
+    @AppStorage("appLock") private var appLock = false
     var body: some View {
         Form {
+            Section {
+                Toggle(isOn: Binding(get: { appLock }, set: { on in
+                    Task {
+                        // Prove it's you before turning the lock on or off.
+                        if await Biometrics.unlock(reason: on ? "Lock eclipsereader" : "Turn off the lock") { appLock = on }
+                    }
+                })) {
+                    Label("Lock with \(Biometrics.symbol == "touchid" ? "Touch ID" : "Face ID")", systemImage: Biometrics.symbol)
+                }
+            } footer: { Text("Asks for Face ID, Touch ID or your passcode whenever eclipsereader opens.") }
+            Section {
+                LabeledContent("Hidden series", value: "\(model.state.hiddenSeries?.count ?? 0)")
+                if model.showHidden {
+                    Button("Hide them again") { model.showHidden = false }
+                } else if (model.state.hiddenSeries?.count ?? 0) > 0 {
+                    Button("Show hidden series") {
+                        Task { if await Biometrics.unlock(reason: "Show hidden series") { model.showHidden = true } }
+                    }
+                }
+            } footer: { Text("Long-press a cover in the library and choose Hide. Hidden series need Face ID to show.") }
             Section {
                 Toggle(isOn: Binding(get: { model.state.incognito == true }, set: { model.state.incognito = $0; model.save() })) {
                     Label("Incognito mode", systemImage: "eyeglasses")
@@ -959,6 +1064,12 @@ struct ReaderPreferencesForm: View {
             Toggle("Two-page spreads in landscape", isOn: $preferences.landscapeSpreads)
             Toggle("Keep wide artwork on one page", isOn: $preferences.detectWidePages)
             Toggle("Trim white scan margins", isOn: Binding(get: { preferences.trimMargins ?? true }, set: { preferences.trimMargins = $0 }))
+            Toggle(isOn: Binding(get: { preferences.enhance ?? false }, set: { preferences.enhance = $0 })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Enhance low-resolution pages")
+                    Text("Upscales and sharpens blurry scans on the device").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Picker("Image quality", selection: Binding(get: { preferences.quality ?? .automatic }, set: { preferences.quality = $0 })) {
                 ForEach(ImageQuality.allCases, id: \.self) { Text($0.title).tag($0) }
             }
@@ -1382,6 +1493,8 @@ struct SeriesHeader: View {
     let series: MangaSeries
     @Binding var reader: Chapter?
     @Binding var website: Bool
+    /// Colour from the cover; the page glows with it.
+    @State private var tint: Color = Eclipse.accent
     var body: some View {
         let builtIn = series.id == LibraryModel.berserkID
         let cover = model.cover(for: series)
@@ -1427,9 +1540,10 @@ struct SeriesHeader: View {
                     }
                     .padding(.horizontal, 18).frame(height: 54)
                     .foregroundStyle(.white)
-                    .background(LinearGradient(colors: [Eclipse.accent, Eclipse.accent.opacity(0.75)], startPoint: .leading, endPoint: .trailing),
+                    .background(LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .leading, endPoint: .trailing),
                                 in: RoundedRectangle(cornerRadius: 16))
-                    .shadow(color: Eclipse.accent.opacity(0.4), radius: 14, y: 6)
+                    .overlay(RoundedRectangle(cornerRadius: 16).fill(.black.opacity(0.18)))
+                    .shadow(color: tint.opacity(0.45), radius: 14, y: 6)
                 }
                 .buttonStyle(PressableStyle()).disabled(resume == nil)
                 .accessibilityIdentifier("seriesContinue")
@@ -1455,15 +1569,27 @@ struct SeriesHeader: View {
         }
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 14)
         .background(alignment: .top) {
-            CoverView(url: cover, referer: series.chapters.first)
-                .frame(height: 340)
-                .blur(radius: 34).opacity(0.5)
-                .overlay(LinearGradient(colors: [.black.opacity(0.2), .black.opacity(0.65), .black], startPoint: .top, endPoint: .bottom))
-                .padding(.top, -120)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            ZStack(alignment: .top) {
+                CoverView(url: cover, referer: series.chapters.first)
+                    .frame(height: 340)
+                    .blur(radius: 34).opacity(0.5)
+                RadialGradient(colors: [tint.opacity(0.45), .clear], center: .top, startRadius: 0, endRadius: 360)
+                    .frame(height: 420)
+            }
+            .overlay(LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.6), .black], startPoint: .top, endPoint: .bottom))
+            .padding(.top, -120)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
         .clipped()
+        .task(id: cover) {
+            guard let cover else { return }
+            let page = MangaPage(url: cover, label: "Cover")
+            let referer = series.chapters.first ?? Chapter(url: cover, title: "", number: "")
+            guard let data = try? await model.pipeline.data(for: page, chapter: referer) else { return }
+            let found = await Task.detached(priority: .utility) { CoverTint.from(data) }.value
+            if let found { withAnimation(.easeOut(duration: 0.6)) { tint = found.color } }
+        }
     }
     private func chip(_ text: String, symbol: String) -> some View {
         Label(text, systemImage: symbol).font(.caption2.weight(.semibold)).lineLimit(1)

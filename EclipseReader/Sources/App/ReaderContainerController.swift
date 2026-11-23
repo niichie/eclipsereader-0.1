@@ -26,7 +26,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
                    tap: @escaping (CGFloat) -> Void, dimensions: @escaping (Int, Double) -> Void) {
         loadViewIfNeeded()
         self.changed = changed; tapped = tap; self.dimensions = dimensions
-        let key = "\(chapter.id)|\(preferences.mode)|\(preferences.transition)|\(preferences.direction)|\(preferences.advanceOnLeftSwipe)|\(preferences.fit)|\(preferences.doubleTapZoom)|\(preferences.trimMargins ?? true)|\(preferences.quality?.rawValue ?? "auto")|\(preferences.verticalGap ?? false)|\(groups.map(\.indices))"
+        let key = "\(chapter.id)|\(preferences.mode)|\(preferences.transition)|\(preferences.direction)|\(preferences.advanceOnLeftSwipe)|\(preferences.fit)|\(preferences.doubleTapZoom)|\(preferences.trimMargins ?? true)|\(preferences.quality?.rawValue ?? "auto")|\(preferences.verticalGap ?? false)|\(preferences.enhance ?? false)|\(groups.map(\.indices))"
         // Freeze the presented data source until UIKit completes the interactive turn.
         // A late image size or a resize can otherwise change group indices mid-gesture.
         if turning {

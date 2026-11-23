@@ -64,8 +64,10 @@ struct MangaDex {
         let original = (attributes["originalLanguage"] as? String ?? "").lowercased()
         let style = Self.style(language: original, tags: attributes["tags"])
 
-        var chapters: [Chapter] = []
-        var seen = Set<String>()
+        // Every translation of every chapter first; then one per chapter number, preferring the
+        // group that translated the most, so a series reads in one consistent translation.
+        struct Entry { let key: String; let group: String; let chapter: Chapter }
+        var entries: [Entry] = []
         var offset = 0
         let ratings = ["safe", "suggestive", "erotica", "pornographic"].map { "contentRating[]=\($0)" }.joined(separator: "&")
         while offset < 5000 {
@@ -75,19 +77,19 @@ struct MangaDex {
                 guard let id = item["id"] as? String, let a = item["attributes"] as? [String: Any] else { continue }
                 if (a["pages"] as? Int ?? 1) == 0 { continue }
                 let number = a["chapter"] as? String ?? ""
-                // Several groups often translate the same chapter; keep the first.
                 let key = number.isEmpty ? id : number
-                guard seen.insert(key).inserted else { continue }
+                let group = ((item["relationships"] as? [[String: Any]]) ?? []).first { $0["type"] as? String == "scanlation_group" }?["id"] as? String ?? ""
                 let name = (a["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 let label = number.isEmpty ? (name ?? "Oneshot") : "Chapter \(number)" + (name.map { " · \($0)" } ?? "")
                 let published = (a["publishAt"] as? String).flatMap(Self.day)
-                chapters.append(Chapter(url: URL(string: "https://mangadex.org/chapter/\(id)")!, title: label, number: number, published: published))
+                entries.append(Entry(key: key, group: group,
+                                     chapter: Chapter(url: URL(string: "https://mangadex.org/chapter/\(id)")!, title: label, number: number, published: published)))
             }
             let total = feed["total"] as? Int ?? 0
             offset += 500
             if items.isEmpty || offset >= total { break }
         }
-        chapters = ChapterOrder.sorted(chapters)
+        let chapters = Self.oneTranslation(entries.map { (key: $0.key, group: $0.group, chapter: $0.chapter) })
         var pages: [MangaPage] = []
         if Self.chapterID(url) != nil { pages = (try? await self.pages(url)) ?? [] }
         let about = Self.localized(attributes["description"]).map {
@@ -109,6 +111,24 @@ struct MangaDex {
         }
     }
 
+    /// One chapter per number. When several groups translated a chapter, the group with the most
+    /// chapters overall wins, then the earliest listed.
+    static func oneTranslation(_ entries: [(key: String, group: String, chapter: Chapter)]) -> [Chapter] {
+        var counts: [String: Int] = [:]
+        for entry in entries { counts[entry.group, default: 0] += 1 }
+        var best: [String: (rank: Int, chapter: Chapter)] = [:]
+        var order: [String] = []
+        for entry in entries {
+            let rank = counts[entry.group] ?? 0
+            if let current = best[entry.key] {
+                if rank > current.rank { best[entry.key] = (rank, entry.chapter) }
+            } else {
+                order.append(entry.key)
+                best[entry.key] = (rank, entry.chapter)
+            }
+        }
+        return ChapterOrder.sorted(order.compactMap { best[$0]?.chapter })
+    }
     /// Korean → manhwa, Chinese → manhua, Japanese → manga; other long-strip titles are webtoons.
     static func style(language: String, tags: Any?) -> ReadingStyle {
         let names = ((tags as? [[String: Any]]) ?? []).compactMap { (($0["attributes"] as? [String: Any])?["name"] as? [String: String])?["en"] }
