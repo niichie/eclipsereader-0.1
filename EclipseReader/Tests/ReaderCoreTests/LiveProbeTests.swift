@@ -316,4 +316,60 @@ final class LiveProbeTests: XCTestCase {
             dump("mangadot decoded", "array \(array.count) items; chapter_number key at \(keyIndex ?? -1), id key at \(idIndex ?? -1); objects using it: \(objects); numbers: \(numbers.prefix(6))…\(numbers.suffix(4))")
         }
     }
+
+    // MARK: Pictures, fetched exactly the way the app does (ImagePipeline, same referer)
+
+    private lazy var pipeline = ImagePipeline(cache: DiskImageCache(directory: FileManager.default.temporaryDirectory
+        .appendingPathComponent("probe-\(UUID().uuidString)")), http: http)
+
+    private func image(_ name: String, _ url: URL?, referer: URL? = nil) async {
+        guard let url else { report("image " + name, false, "no address"); return }
+        let chapter = Chapter(url: referer ?? url, title: "", number: "")
+        let start = Date()
+        do {
+            let data = try await pipeline.data(for: MangaPage(url: url, label: "probe"), chapter: chapter)
+            report("image " + name, ImageSniffer.isImage(data.prefix(12)), String(format: "%.1fs ", Date().timeIntervalSince(start)) + "\(data.count)B <\(url.absoluteString)>")
+        } catch {
+            report("image " + name, false, "\(error) <\(url.absoluteString)>")
+            await raw("image \(name) as browser", url.absoluteString)
+        }
+    }
+
+    func testImages() async {
+        // Covers shown on the library home (Discover, Because you read) and in search.
+        let popular = (try? await Discover.mangaDex(limit: 3, http: http)) ?? []
+        for item in popular { await image("MangaDex discover cover \(item.title)", item.cover) }
+        let similar = (try? await Discover.similar(to: "Vinland Saga", http: http)) ?? []
+        for item in similar.prefix(2) { await image("MangaDex because cover \(item.title)", item.cover) }
+        let sources: [(String, SearchSource, String)] = [
+            ("MangaDex", SearchSource(name: "MangaDex", kind: .mangaDex), "Chainsaw Man"),
+            ("WeebCentral", SearchSource(name: "WeebCentral", kind: .weebCentral), "Jujutsu Kaisen"),
+            ("WEBTOON", SearchSource(name: "WEBTOON", kind: .webtoons), "Tower of God"),
+            ("Asura", SearchSource(name: "Asura", kind: .site(URL(string: "https://asurascans.com/comics")!)), "murim login"),
+            ("MangaDot", SearchSource(name: "MangaDot", kind: .site(URL(string: "https://mangadot.net/")!)), "Solo Leveling"),
+        ]
+        let linked = LinkedSource(http: http)
+        for (name, source, query) in sources {
+            guard let first = try? await GlobalSearch.search(source, query: query, http: http).first else {
+                report("image \(name)", false, "search failed"); continue
+            }
+            await image("\(name) search cover", first.cover)
+            guard let series = try? await linked.inspect(first.url) else { report("image \(name)", false, "inspect failed"); continue }
+            await image("\(name) series cover", series.cover, referer: first.url)
+            guard let chapter = series.chapters.first, let pages = try? await linked.pages(chapter.url) else { continue }
+            for page in pages.prefix(2) { await image("\(name) page \(page.label)", page.url, referer: chapter.url) }
+        }
+        if let tapas = URL(string: "https://tapas.io/series/205543"), let series = try? await linked.inspect(tapas) {
+            await image("Tapas cover", series.cover, referer: tapas)
+            if let chapter = series.chapters.first, let pages = try? await linked.pages(chapter.url) {
+                for page in pages.prefix(2) { await image("Tapas page \(page.label)", page.url, referer: chapter.url) }
+            }
+        }
+        // Books and picks.
+        for book in ((try? await FreeBooks.standardEbooks(http: http)) ?? []).prefix(2) { await image("Standard Ebooks cover \(book.title)", book.cover) }
+        for pick in ((try? await Recommendations.topManga(http: http)) ?? []).prefix(2) { await image("pick cover \(pick.title)", pick.cover) }
+        for cover in (await BookCovers.candidates(title: "Red Rising", author: "Pierce Brown", isbn: nil, http: http)).prefix(1) {
+            await image("Open Library cover", cover)
+        }
+    }
 }
