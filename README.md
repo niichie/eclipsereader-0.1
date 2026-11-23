@@ -21,36 +21,49 @@
 ## Features
 
 ### Library
-- Cover grid in three sizes, with titles on the covers, unread / **NEW** / downloaded badges and a progress bar.
-- Category tabs with counts: All, Reading, New, Downloaded, Manga, Manhwa, Comics, On device.
-- Sort by recently read, title or recently added. A slim *Continue reading* bar picks up where you stopped.
-- **Full cover control:** choose from Photos, Files, an image link or any page, or go back to the automatic cover.
+- Mihon-style home that scales with the screen: a cover grid in three sizes, unread / **NEW** / downloaded badges and progress bars.
+- Tabs with counts: All, your own **categories**, Reading, New, Downloaded, Manga, Manhwa, Manhua, Webtoons, Comics, Books, On device.
+- **Select several series** to mark read, download, file into a category, hide or remove in one go.
+- A new **quote on every launch**, only from top-rated works on MyAnimeList and Goodreads. *Read* takes you to that series. Close it, or hide it in Settings.
+- A **live pick** on every launch from MyAnimeList's top manga and Open Library's best-rated books, plus **"Because you read…"** recommendations (MangaDex titles sharing the genres of what you read last).
+- **Full cover control:** Photos, Files, an image link, any page of the series, or the automatic cover. Covers tint the series page.
+- Hidden series behind Face ID, an app lock, reading stats with streaks, and Spotlight search for your library.
 
-### Reader
-- **Manga by default:** right to left, paper-curl page turns, drag right or tap the left edge to go forward.
-- **Manhwa and webtoons** are detected from the site and the page shapes, then scroll as one seamless strip.
-- Two-page spreads in landscape (wide artwork stays on one page). Margin trimming keeps a little paper around the art.
-- Floating controls: chapter skip, a page slider that follows the reading direction, and quick toggles for mode, crop, gap and warm night filter.
-- Long-press a page to share it, save it to Photos or make it the cover.
-- On-device **tap-to-translate** (Vision text recognition and Apple Translation).
-- Image quality matched to the device's screen, memory and Low Power Mode.
+### Manga, manhwa, manhua, webtoons and comics
+- **Manga:** right to left with paper-curl page turns. **Manhwa, manhua and webtoons:** one seamless vertical strip. **Comics:** left to right.
+- Two-page spreads in landscape, or **split spreads** into two pages in portrait.
+- **Guided view:** finds the panels on a page and moves panel by panel (right to left for manga).
+- Keyboard and game controller page turns on iPad, auto-scroll for strips, haptics, and a warm night filter.
+- On-device **translation of raw chapters** (Vision text recognition and Apple Translation): bubbles are remembered, and a pinned raw series translates every chapter automatically.
+- Optional enhancement for low-resolution scans; image quality matched to the screen, memory and Low Power Mode.
+
+### Boring books without pictures
+- Reads **EPUB, MOBI, AZW3, FB2, TXT, RTF, HTML, DOCX and ODT**, set like a printed book: left to right, page curl, two pages side by side in landscape, running heads and page numbers.
+- Eight typefaces, size, spacing, margins, justification, and night, dusk, sepia or paper themes.
+- Covers fetched automatically from Open Library and Google Books.
+- Search and download public-domain books from Project Gutenberg in the app, with links to Standard Ebooks, Open Library, Internet Archive and Wikisource. Files downloaded in the browser are added straight to the library.
 
 ### Browse
-- **Native connections:** MangaDex (search and popular titles through its official API), WeebCentral and WEBTOON.
-- Built-in browser for any other site, including Asura Scans, MangaDot, MangaBall, Comix and official publishers. Ads, trackers and "get the app" banners are blocked.
-- The **Add** button knows what's on screen. It shows the chapter count on a series page, a preview before adding, and refuses listing and home pages.
+- **Native connections:** MangaDex (official API), WeebCentral and WEBTOON. **Global search** across them and your saved sites.
+- Built-in browser for any other site, with ads, trackers and "get the app" banners blocked.
+- The **Add** button only appears where a series can be read; elsewhere a guide explains why, with *Try anyway*.
+- **Migrate** a series to another site, keeping your progress.
 
 ### Everything else
-- **Downloads** for offline reading, optionally downloading ahead and new chapters automatically.
-- **Updates:** new chapters across the library. **History:** grouped by day, one entry per series.
-- **Files:** import CBZ, ZIP (including ZIP64), PDF, images or folders, copied or read in place from an external drive.
-- Backup and restore through iCloud Drive or Files. Incognito mode. No accounts, analytics or tracking.
+- **Downloads** for offline reading (Wi-Fi only if you like, delete after reading).
+- **Updates** with new-chapter notifications and an app badge. **History** grouped by day.
+- **AniList tracking:** link a series and finished chapters update your AniList list. Bring your own AniList client ID (Settings › Tracking).
+- **Siri and Shortcuts** ("Continue reading", "Check for new chapters") and **Handoff** between your devices.
+- **Files:** import CBZ, ZIP (including ZIP64), PDF, images, folders and every book format above.
+- Backup and restore (automatic backups too), incognito mode. No analytics or tracking.
 
 ## Install (sideload)
 
-1. Open **[Actions](https://github.com/niichie/eclipsereader-0.1/actions)** and pick the newest green **Build eclipsereader IPA** run.
-2. Download the **EclipseReader-unsigned-IPA** artifact and unzip it.
-3. Install `EclipseReader-unsigned.ipa` with AltStore, SideStore, Sideloadly or your usual signing tool.
+1. Download `EclipseReader-unsigned.ipa` from the newest **[release](https://github.com/niichie/eclipsereader-0.1/releases)**,
+   or from the newest green **[Actions](https://github.com/niichie/eclipsereader-0.1/actions)** run (artifact **EclipseReader-unsigned-IPA**).
+2. Install it with AltStore, SideStore, Sideloadly or your usual signing tool.
+
+Pushing a tag like `v1.0` builds the IPA and publishes it as a release.
 
 The app is built with the iOS 27 SDK, so the iPhone Duo runs it full-screen folded and unfolded.
 
@@ -65,28 +78,27 @@ xcodegen generate --spec project.json     # creates EclipseReader.xcodeproj
 open EclipseReader.xcodeproj
 ```
 
-Every push to `main` builds an unsigned IPA in GitHub Actions. To photograph every screen on iPhone, iPad and the Duo
-simulators, run the workflow by hand (**Actions › Build eclipsereader IPA › Run workflow**). The pictures come back as the
-**screenshots** artifact.
+Every push builds an unsigned IPA in GitHub Actions, after the core tests pass.
 
 ## Project layout
 
 | Path | What's there |
 | --- | --- |
-| `EclipseReader/Sources/Core` | Site reading (page and chapter detection, MangaDex / WeebCentral / WEBTOON adapters), models, archives. No UI. |
-| `EclipseReader/Sources/App` | SwiftUI app: library, series page, reader (UIKit page curl and vertical strips), browser, settings. |
-| `EclipseReader/Tests` | Core unit tests and UI tests, including the screenshot tour. |
+| `EclipseReader/Sources/Core` | Site reading (MangaDex / WeebCentral / WEBTOON adapters, generic page detection), search, book formats, panel detection, AniList, models, archives. No UI. |
+| `EclipseReader/Sources/App` | SwiftUI app: library, series page, manga and book readers (UIKit page curl and vertical strips), browser, settings. |
+| `EclipseReader/Tests` | Core unit tests and UI tests. |
 | `EclipseReader/Docs` | Architecture notes and troubleshooting. |
-| `.github/workflows/main.yml` | IPA build and the optional screenshot job. |
+| `.github/workflows/main.yml` | Tests, IPA build, and releases for version tags. |
 
 ## Privacy
 
 Pages are fetched directly from the sites you add. Reading progress, downloads, recognized text and translations
-stay on your device. There are no accounts, analytics or third-party SDKs.
+stay on your device. There are no analytics or third-party SDKs. AniList is contacted only if you sign in, and your
+AniList sign-in stays in the iOS Keychain.
 
 ## Disclaimer
 
 eclipsereader is a personal project and doesn't include any manga. It isn't affiliated with MangaDex, WEBTOON,
-WeebCentral or any other site it can open. Support the creators and official releases where you can.
+WeebCentral, AniList, MyAnimeList, Open Library, Project Gutenberg or any other site it can open. Support the creators and official releases where you can.
 
 Inspired by [Mihon](https://mihon.app/).
