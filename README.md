@@ -80,7 +80,12 @@ xcodegen generate --spec project.json     # creates EclipseReader.xcodeproj
 open EclipseReader.xcodeproj
 ```
 
-Every push builds an unsigned IPA in GitHub Actions, after the core tests pass.
+Every push builds an unsigned IPA in GitHub Actions, after the core tests pass. Two more checks run by hand from
+**Actions**:
+
+- **Probe sources** runs the app's own code against every listed site and book library, covers and page images included.
+- **Device checks** runs the app on an iPhone simulator, opens real books and chapters in the real reader screens and
+  waits for pages to appear.
 
 ## Project layout
 
@@ -88,7 +93,7 @@ Every push builds an unsigned IPA in GitHub Actions, after the core tests pass.
 | --- | --- |
 | `EclipseReader/Sources/Core` | Site reading (MangaDex / WeebCentral / WEBTOON adapters, generic page detection), search, book formats, panel detection, AniList, models, archives. No UI. |
 | `EclipseReader/Sources/App` | SwiftUI app: library, series page, manga and book readers (UIKit page curl and vertical strips), browser, settings. |
-| `EclipseReader/Tests` | Core unit tests and UI tests. |
+| `EclipseReader/Tests` | Core unit tests, the live source probe, and on-device reader checks. |
 | `EclipseReader/Docs` | Architecture notes and troubleshooting. |
 | `.github/workflows/main.yml` | Tests, IPA build, and releases for version tags. |
 
