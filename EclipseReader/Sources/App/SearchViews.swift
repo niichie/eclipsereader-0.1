@@ -109,7 +109,12 @@ struct GlobalSearchResults: View {
                     EmptyView()
                 }
             }
-            let empty = search.sections.filter { if case .done(let items) = $0.phase { return items.isEmpty } else { return $0.phase == .failed } }
+            let empty = search.sections.filter { if case .done(let items) = $0.phase { return items.isEmpty } else { return false } }
+            let failed = search.sections.filter { $0.phase == .failed }
+            if !failed.isEmpty && search.finished {
+                Text("Couldn’t search " + failed.map(\.source.name).joined(separator: ", ") + " (the site didn’t answer).")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             if !empty.isEmpty && search.finished {
                 Text("No matches on " + empty.map(\.source.name).joined(separator: ", ") + ".")
                     .font(.footnote).foregroundStyle(.secondary)

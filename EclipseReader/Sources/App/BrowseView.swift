@@ -17,27 +17,20 @@ enum SiteCatalog {
         CatalogSite(name: name, url: URL(string: url)!, note: note, symbol: symbol, native: native)
     }
     /// Built-in connections: chapters, covers and pages come from the site's own data.
+    /// Every site here is checked against the live site by the "Probe sources" workflow.
     static let connected: [CatalogSite] = [
         site("MangaDex", "https://mangadex.org/", "Huge community library, every language · native", "books.vertical", native: true),
         site("WeebCentral", "https://weebcentral.com/", "Manga with full chapter lists · native", "square.stack.3d.up", native: true),
-        site("WEBTOON", "https://www.webtoons.com/en/", "Official webtoons, every free episode · native", "iphone.gen3", native: true),
+        site("WEBTOON", "https://www.webtoons.com/en/", "Official webtoons and Canvas · native", "iphone.gen3", native: true),
     ]
-    /// Popular manga & manhwa sites: open a series and tap Add to library.
+    /// Manga & manhwa sites that search, add and read in the app: open a series and tap Add.
     static let popular: [CatalogSite] = [
         site("Asura Scans", "https://asurascans.com/comics", "Action manhwa, fast releases", "flame"),
         site("MangaDot", "https://mangadot.net/", "Manga, manhwa and manhua", "circle.grid.cross"),
-        site("MangaBall", "https://mangaball.com/", "Large mixed library", "circle.circle"),
-        site("Comix", "https://comix.to/", "Manga and manhwa, clean reader", "rectangle.on.rectangle.angled"),
-        site("WEBTOON Canvas", "https://www.webtoons.com/en/canvas", "Independent creators’ webcomics", "paintpalette"),
     ]
-    /// Official publishers with free chapters.
+    /// Official publishers whose free chapters add and read in the app.
     static let official: [CatalogSite] = [
-        site("MANGA Plus", "https://mangaplus.shueisha.co.jp/updates", "Shueisha’s free chapters · reads in the browser", "book"),
         site("Tapas", "https://tapas.io/", "Webcomics and novels, many free", "rectangle.stack"),
-        site("Tappytoon", "https://www.tappytoon.com/en", "Licensed manhwa", "t.circle"),
-        site("Manta", "https://manta.net/en", "Romance and fantasy manhwa", "m.circle"),
-        site("GlobalComix", "https://globalcomix.com/", "Comics and manga, free and premium", "globe"),
-        site("Comikey", "https://comikey.com/", "Licensed manga and manhwa, free chapters", "key"),
     ]
 }
 
@@ -116,11 +109,8 @@ struct BrowseView: View {
                     section("Connected", detail: "Chapters, covers and pages straight from the site") {
                         siteGrid(SiteCatalog.connected)
                     }
-                    section("Popular sites", detail: "Open a series, then tap Add to library") {
-                        siteGrid(SiteCatalog.popular)
-                    }
-                    section("Official & free", detail: nil) {
-                        siteGrid(SiteCatalog.official)
+                    section("More sites", detail: "Open a series, then tap Add to library") {
+                        siteGrid(SiteCatalog.popular + SiteCatalog.official)
                     }
                     BooksBrowseSection(browsing: $browsing, opened: $opened)
                 }

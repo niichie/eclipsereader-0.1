@@ -278,4 +278,21 @@ final class LiveProbeTests: XCTestCase {
         let (_, _, comix) = await body("https://comix.to/")
         dump("comix structure", "data-page: \(around(comix, "data-page", before: 50, after: 400)) || slug: \(around(comix, #"\"slug\""#, before: 300, after: 300)) || title-path: \(around(comix, #"/title/"#, before: 300, after: 300)) || hash: \(around(comix, #"hash_id|hid"#, before: 200, after: 300))")
     }
+
+    func testDiagnostics3() async {
+        let (_, _, series) = await body("https://mangadot.net/manga/118")
+        let plain = series.replacingOccurrences(of: "\\\"", with: "\"")
+        let numbers = LinkedSource.matches(#""chapter_number",([\d.]+)"#, plain).map { $0[0] }
+        dump("mangadot numbers", "\(numbers.count) chapter_number values, first: \(numbers.prefix(8)) last: \(numbers.suffix(5))")
+        dump("mangadot chapter keys", around(plain, #""chapter_number""#, before: 900, after: 600))
+        dump("mangadot totals", around(plain, #"(?i)"(total|count|chapter_count|chapters_count|total_chapters|hasMore|has_more|next_cursor|cursor)""#, before: 300, after: 400))
+        let scripts = LinkedSource.matches(#"<script[^>]+src=["']([^"']+)["']"#, series).map { $0[0] }
+        dump("mangadot scripts", scripts.joined(separator: " "))
+        for guess in ["https://mangadot.net/api/manga/118/chapters", "https://mangadot.net/api/manga/118/chapters?page=2",
+                      "https://mangadot.net/manga/118/chapters", "https://mangadot.net/manga/118?tab=chapters", "https://mangadot.net/manga/118?chapters=all"] {
+            let (st, type, text) = await body(guess)
+            let count = Set(LinkedSource.matches(#"/chapter/(\d+)"#, text).map { $0[0] }).count
+            dump("mangadot try \(guess)", "\(st) \(type) \(text.count)B chapter links \(count) :: \(text.prefix(300))")
+        }
+    }
 }
