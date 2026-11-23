@@ -122,3 +122,17 @@ final class AdapterTests: XCTestCase {
         XCTAssertEqual(picked.map(\.url.lastPathComponent), ["main-1", "main-2", "main-3"])
     }
 }
+
+final class SpreadSplitTests: XCTestCase {
+    func testHalvesShareTheWholeImage() {
+        let page = MangaPage(url: URL(string: "https://img.example.com/ch1/07.jpg")!, label: "7", width: 2400, height: 1700)
+        let right = page.halved(.right)
+        XCTAssertEqual(right.half, .right)
+        XCTAssertEqual(right.width, 1200)
+        XCTAssertNotEqual(right.id, page.halved(.left).id)
+        XCTAssertEqual(right.whole.url, page.url)
+        XCTAssertEqual(right.whole.width, 2400)
+        XCTAssertNil(page.half)
+        XCTAssertEqual(page.whole, page)
+    }
+}

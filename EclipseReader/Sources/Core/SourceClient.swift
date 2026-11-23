@@ -130,6 +130,8 @@ public actor ImagePipeline {
     }
     public func data(for page: MangaPage, chapter: Chapter) async throws -> Data {
         try Task.checkCancellation()
+        // Both halves of a split spread share the one downloaded image.
+        let page = page.whole
         // Imported books are read from the app's own library folder, never the network or page cache.
         if page.url.scheme == "eclipselib" {
             guard let localData else { throw SourceError.invalidImage }

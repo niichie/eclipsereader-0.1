@@ -538,6 +538,19 @@ struct BookReaderView: View {
         .preferredColorScheme(theme.dark ? .dark : .light)
         .animation(.snappy(duration: 0.2), value: chrome)
         .task { await load() }
+        .background(KeyTurnCatcher().frame(width: 0, height: 0))
+        .onReceive(NotificationCenter.default.publisher(for: PageTurnInput.notification)) { note in
+            if let forward = note.userInfo?["forward"] as? Bool { pager.turn(forward: forward) }
+            else if let edge = note.userInfo?["edge"] as? Double {
+                if edge == 0.5 { chrome.toggle() } else { pager.turn(forward: edge > 0.5) }
+            }
+        }
+        .userActivity(Handoff.readingType, isActive: typeset != nil) { activity in
+            guard let typeset, typeset.pages.indices.contains(page), let part = series?.chapters[safe: typeset.pages[page].section] else { return }
+            activity.title = series?.title
+            activity.userInfo = ["chapter": part.id, "section": typeset.pages[page].section, "offset": typeset.pages[page].range.location]
+            activity.isEligibleForHandoff = true
+        }
         .onChange(of: page) { old, new in pageChanged(from: old, to: new) }
         .onChange(of: phase) { _, now in if now != .active { logTime() } else { lastActivity = Date() } }
         .onAppear { lastActivity = Date(); UIApplication.shared.isIdleTimerDisabled = keepScreenOn }

@@ -15,6 +15,9 @@ struct ReaderView: View {
     @State private var end = false
     @State private var retry = 0
     @State private var wide = Set<Int>()
+    /// Split spreads: the chapter's pages as published, and for each shown page the published one it came from.
+    @State private var published: [MangaPage] = []
+    @State private var origin: [Int] = []
     @State private var dimming = 0.0
     @AppStorage("readerWarmth") private var warmth = 0.0
     @AppStorage("keepScreenOn") private var keepScreenOn = true
@@ -84,7 +87,10 @@ struct ReaderView: View {
                             preferences: effective, handle: handle, page: $page,
                             tap: { x in tapped(at: x, groups: groups) },
                             dimensions: { index, ratio in
-                                if ratio > 1.15 && effective.detectWidePages { wide.insert(index) }
+                                let portrait = !ReadingOrder.canPair(width: geometry.size.width, height: geometry.size.height)
+                                if ratio > 1.15 && portrait && effective.mode == .paged && (library.preferences.splitSpreads ?? false) {
+                                    split(index)
+                                } else if ratio > 1.15 && effective.detectWidePages { wide.insert(index) }
                                 if ratio < 0.36 { tallPages += 1; if tallPages >= 3 || pages.count == 1 { markWebtoon() } }
                             })
                     }
@@ -118,7 +124,7 @@ struct ReaderView: View {
                     } else if !pages.isEmpty, page >= pages.count - 1, let next = library.next(after: chapter) {
                         // Reached the end: offer the next chapter right where your thumb is.
                         Button {
-                            library.record(chapter, page: max(0, pages.count - 1), count: pages.count, completed: true)
+                            library.record(chapter, page: max(0, publishedCount - 1), count: publishedCount, completed: true)
                             open(next)
                         } label: {
                             HStack(spacing: 10) {
@@ -159,6 +165,18 @@ struct ReaderView: View {
                     let last = groups.first(where: { $0.indices.contains(page) })?.indices.last ?? page
                     let start = min(last + 1, pages.count)
                     await library.pipeline.prefetch(Array(pages.dropFirst(start).prefix(2)), chapter: chapter)
+                }
+                .onChange(of: ReadingOrder.canPair(width: geometry.size.width, height: geometry.size.height)) { _, landscape in
+                    if landscape { unsplit() }
+                }
+                .background(KeyTurnCatcher().frame(width: 0, height: 0))
+                .onReceive(NotificationCenter.default.publisher(for: PageTurnInput.notification)) { note in
+                    keyTurn(note.userInfo, groups: groups)
+                }
+                .userActivity(Handoff.readingType, isActive: !pages.isEmpty) { activity in
+                    activity.title = chapter.title
+                    activity.userInfo = ["chapter": chapter.id, "page": publishedPage, "count": publishedCount]
+                    activity.isEligibleForHandoff = true
                 }
                 .onChange(of: page) { _, _ in logTime(); remember() }
                 .onChange(of: phase) { _, phase in
@@ -234,12 +252,12 @@ struct ReaderView: View {
                 .confirmationDialog("End of chapter", isPresented: $end, titleVisibility: .visible) {
                     if let next = library.next(after: chapter) {
                         Button("Mark read & open \(next.title)") {
-                            library.record(chapter, page: max(0, pages.count - 1), count: pages.count, completed: true)
+                            library.record(chapter, page: max(0, publishedCount - 1), count: publishedCount, completed: true)
                             pages = []; loading = true; chapter = next
                         }
                     }
                     Button("Mark chapter read") {
-                        library.record(chapter, page: max(0, pages.count - 1), count: pages.count, completed: true)
+                        library.record(chapter, page: max(0, publishedCount - 1), count: publishedCount, completed: true)
                     }
                     Button("Keep reading", role: .cancel) {}
                 }
@@ -404,6 +422,16 @@ struct ReaderView: View {
             if autoScrolling { controls = false }
         }
     }
+    /// Arrow keys, space and game controllers: left/right follow the page edges, "forward" is always the next page.
+    private func keyTurn(_ info: [AnyHashable: Any]?, groups: [PageGroup]) {
+        guard !pages.isEmpty else { return }
+        if let forward = info?["forward"] as? Bool { move(forward ? 1 : -1, groups: groups); return }
+        guard let edge = info?["edge"] as? Double else { return }
+        if edge == 0.5 { controls.toggle(); return }
+        let leftward = edge < 0.5
+        let forward = effective.mode == .vertical ? !leftward : (effective.direction == .rightToLeft ? leftward : !leftward)
+        move(forward ? 1 : -1, groups: groups)
+    }
     /// Reading time since the last page turn, idle gaps capped at five minutes.
     private func logTime() {
         let now = Date()
@@ -430,7 +458,7 @@ struct ReaderView: View {
         }
     }
     private func load() async {
-        loading = true; failure = nil; pages = []; wide = []
+        loading = true; failure = nil; pages = []; wide = []; origin = []; published = []
         let requested = chapter
         do {
             let result = try await library.pages(for: requested)
@@ -462,7 +490,31 @@ struct ReaderView: View {
     }
     private func remember() {
         guard !loading, !pages.isEmpty else { return }
-        library.record(chapter, page: page, count: pages.count)
+        library.record(chapter, page: publishedPage, count: publishedCount)
+    }
+    /// Progress is saved against the chapter as published, so split spreads don't shift it.
+    private var publishedPage: Int { origin.isEmpty ? page : (origin.indices.contains(page) ? origin[page] : page) }
+    private var publishedCount: Int { origin.isEmpty ? pages.count : published.count }
+    /// Shows a wide spread as two pages, in reading order (right half first for manga).
+    private func split(_ index: Int) {
+        guard pages.indices.contains(index), pages[index].half == nil else { return }
+        if origin.isEmpty { published = pages; origin = Array(pages.indices) }
+        let first: MangaPage.Half = effective.direction == .rightToLeft ? .right : .left
+        let second: MangaPage.Half = first == .right ? .left : .right
+        let spread = pages[index]
+        pages.replaceSubrange(index...index, with: [spread.halved(first), spread.halved(second)])
+        origin.insert(origin[index], at: index + 1)
+        wide = Set(wide.compactMap { $0 == index ? nil : ($0 > index ? $0 + 1 : $0) })
+        if page > index { page += 1 }
+    }
+    /// Back to whole spreads (turned to landscape, where they show side by side anyway).
+    private func unsplit() {
+        guard !origin.isEmpty else { return }
+        let target = publishedPage
+        let spreads = Set(origin.enumerated().filter { i, o in i > 0 && origin[i - 1] == o }.map(\.element))
+        pages = published; origin = []; published = []
+        wide = effective.detectWidePages ? spreads : []
+        page = target
     }
     private func move(_ delta: Int, groups: [PageGroup]) {
         guard !groups.isEmpty else { return }

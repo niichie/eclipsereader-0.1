@@ -1,22 +1,52 @@
 import SwiftUI
 import WebKit
+import CoreSpotlight
 import UniformTypeIdentifiers
 import ImageIO
 import PhotosUI
 
 struct RootView: View {
     @EnvironmentObject private var model: LibraryModel
+    @State private var tab = 0
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             // Mihon's order: your shelf, what's new, what you read, where to find more, settings.
-            LibraryView().tabItem { Label("Library", systemImage: "books.vertical.fill") }
+            LibraryView().tabItem { Label("Library", systemImage: "books.vertical.fill") }.tag(0)
             UpdatesView().tabItem { Label("Updates", systemImage: "sparkles") }
-                .badge(model.totalNew)
-            HistoryView().tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
-            BrowseView().tabItem { Label("Browse", systemImage: "safari") }
-            SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }
+                .badge(model.totalNew).tag(1)
+            HistoryView().tabItem { Label("History", systemImage: "clock.arrow.circlepath") }.tag(2)
+            BrowseView().tabItem { Label("Browse", systemImage: "safari") }.tag(3)
+            SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
         }
-        .fullScreenCover(item: $model.incoming) { target in MangaBrowserView(start: target.url).environmentObject(model) }
+        .fullScreenCover(item: $model.requestedChapter) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+        .background {
+            Color.clear.fullScreenCover(item: $model.incoming) { target in MangaBrowserView(start: target.url).environmentObject(model) }
+        }
+        // Spotlight: tapping a series in iPhone search opens it in the library.
+        .onContinueUserActivity(CSSearchableItemActionType) { activity in
+            if let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String {
+                tab = 0
+                model.requestedSeriesID = id
+            }
+        }
+        // Handoff: carry on reading the chapter (and page) another device was on.
+        .onContinueUserActivity(Handoff.readingType) { activity in
+            guard let raw = activity.userInfo?["chapter"] as? String,
+                  let chapter = model.chapterIndex[raw]?.1 ?? model.state.chapters.first(where: { $0.id == raw }) else { return }
+            if let page = activity.userInfo?["page"] as? Int, let count = activity.userInfo?["count"] as? Int,
+               (model.state.progress[chapter.id]?.page ?? -1) < page {
+                model.record(chapter, page: page, count: count)
+            }
+            if let section = activity.userInfo?["section"] as? Int, let offset = activity.userInfo?["offset"] as? Int,
+               let series = model.series(containing: chapter) {
+                model.setBookPosition(BookPosition(section: section, offset: offset), for: series.id)
+            }
+            model.requestedChapter = chapter
+        }
+        .onAppear { ControllerInput.shared.start() }
+        .task(id: model.allSeries.count) {
+            SpotlightIndex.update(model.allSeries, hidden: Set(model.state.hiddenSeries ?? []))
+        }
     }
 }
 
@@ -64,6 +94,12 @@ struct LibraryView: View {
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
     @State private var searchingEverywhere = false
+    @State private var categoryID: String?
+    @State private var selecting = false
+    @State private var selection = Set<String>()
+    @State private var confirmRemove = false
+    @State private var newCategoryForSelection = false
+    @State private var newCategoryName = ""
     /// Closed with × for this launch (turn it off for good in sort & display options).
     @State private var quoteClosed = false
     @State private var pickClosed = false
@@ -94,8 +130,10 @@ struct LibraryView: View {
         }
     }
     private var visible: [MangaSeries] {
+        let shelf = categoryID.flatMap { id in model.categories.first { $0.id == id } }.map { Set($0.seriesIDs) }
         let list = model.librarySeries.filter { series in
             (query.isEmpty || series.title.localizedCaseInsensitiveContains(query)) && matches(series, filter)
+                && (shelf?.contains(series.id) ?? true)
         }
         switch sort {
         case .title: return list.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
@@ -123,19 +161,19 @@ struct LibraryView: View {
                 let contentWidth = min(geometry.size.width, 1280) - 28
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        if query.isEmpty, showQuote, !quoteClosed, filter == .all {
+                        if query.isEmpty, showQuote, !quoteClosed, filter == .all, categoryID == nil {
                             QuoteCard(compact: geometry.size.width < 420, read: { readQuote($0) }, close: {
                                 withAnimation(.snappy) { quoteClosed = true }
                             })
                             .transition(.opacity.combined(with: .move(edge: .top)))
                         }
-                        if query.isEmpty, showPick, !pickClosed, filter == .all, let pick = picks.manga {
+                        if query.isEmpty, showPick, !pickClosed, filter == .all, categoryID == nil, let pick = picks.manga {
                             PickCard(pick: pick, read: { readPick(pick) }, next: { withAnimation(.snappy) { picks.shuffle(book: false) } },
                                      close: { withAnimation(.snappy) { pickClosed = true } })
                                 .transition(.opacity)
                         }
                         // Books get their own quote and pick, once there are books in the library.
-                        if query.isEmpty, model.hasBooks, filter == .all || filter == .books {
+                        if query.isEmpty, model.hasBooks, categoryID == nil, filter == .all || filter == .books {
                             if showQuote && !bookQuoteClosed {
                                 QuoteCard(books: true, compact: geometry.size.width < 420, read: { readBook($0.work) }, close: {
                                     withAnimation(.snappy) { bookQuoteClosed = true }
@@ -146,11 +184,14 @@ struct LibraryView: View {
                                          close: { withAnimation(.snappy) { bookPickClosed = true } })
                             }
                         }
-                        if query.isEmpty, showContinue, filter == .all, let chapter = model.lastChapter {
+                        if query.isEmpty, showContinue, filter == .all, categoryID == nil, let chapter = model.lastChapter {
                             ContinueBar(chapter: chapter, resume: { reader = chapter },
                                         open: { openSeries = model.series(id: model.seriesID(for: chapter)) })
                         }
-                        LibraryGrid(series: visible, reader: $reader, openSeries: $openSeries, zoom: zoom, width: contentWidth)
+                        LibraryGrid(series: visible, reader: $reader, openSeries: $openSeries, zoom: zoom, width: contentWidth,
+                                    selection: selecting ? $selection : nil, startSelecting: { id in
+                                        withAnimation(.snappy) { selecting = true; selection = [id] }
+                                    })
                         if !query.trimmingCharacters(in: .whitespaces).isEmpty {
                             Button { searchingEverywhere = true } label: {
                                 HStack(spacing: 12) {
@@ -167,7 +208,7 @@ struct LibraryView: View {
                             .buttonStyle(PressableStyle())
                             .accessibilityIdentifier("searchEverywhere")
                         }
-                        if query.isEmpty && filter == .all && model.librarySeries.count < 12 {
+                        if query.isEmpty && filter == .all && categoryID == nil && model.librarySeries.count < 12 {
                             DiscoverStrip(openSeries: $openSeries, width: contentWidth)
                         }
                         if visible.isEmpty && query.isEmpty {
@@ -189,6 +230,27 @@ struct LibraryView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await model.checkForUpdates(force: true); await model.ensureCovers() }
                 }
+            }
+            .overlay(alignment: .bottom) {
+                if selecting { selectionBar.transition(.move(edge: .bottom).combined(with: .opacity)) }
+            }
+            .confirmationDialog("Remove \(selection.count) series from the library?", isPresented: $confirmRemove, titleVisibility: .visible) {
+                Button("Remove", role: .destructive) {
+                    for series in model.librarySeries where selection.contains(series.id) { model.remove(series) }
+                    endSelection()
+                }
+            } message: { Text("Reading progress and downloads for them are removed too.") }
+            .alert("New category", isPresented: $newCategoryForSelection) {
+                TextField("Name", text: $newCategoryName)
+                Button("Create") {
+                    model.addCategory(newCategoryName)
+                    if let category = model.categories.last {
+                        model.set(model.librarySeries.filter { selection.contains($0.id) }, in: category, true)
+                    }
+                    newCategoryName = ""
+                    endSelection()
+                }
+                Button("Cancel", role: .cancel) { newCategoryName = "" }
             }
             .background(EclipseBackground())
             .toolbar(.hidden, for: .navigationBar)    // the bar below adapts to every screen shape
@@ -219,6 +281,11 @@ struct LibraryView: View {
                 await model.checkForUpdates()
             }
             .onChange(of: model.librarySeries.count) { _, _ in Task { await model.ensureCovers() } }
+            .onChange(of: model.requestedSeriesID) { _, id in
+                guard let id, let series = model.series(id: id) else { return }
+                model.requestedSeriesID = nil
+                openSeries = series
+            }
             .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
         }
     }
@@ -286,6 +353,9 @@ struct LibraryView: View {
                                 Label("Mark all new chapters as seen", systemImage: "sparkles")
                             }
                         }
+                        Button { withAnimation(.snappy) { selecting = true; selection = [] } } label: {
+                            Label("Select…", systemImage: "checkmark.circle")
+                        }
                         if let random = model.librarySeries.randomElement() {
                             Button { openSeries = random } label: { Label("Open a random series", systemImage: "shuffle") }
                         }
@@ -311,23 +381,22 @@ struct LibraryView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
-                    ForEach(tabs, id: \.0) { entry in
-                        let item = entry.0, count = entry.1
-                        Button { withAnimation(.snappy) { filter = item } } label: {
-                            VStack(spacing: 7) {
-                                HStack(spacing: 5) {
-                                    Text(item.title).font(.subheadline.weight(filter == item ? .bold : .medium))
-                                    Text("\(count)").font(.caption2.weight(.bold)).monospacedDigit()
-                                        .padding(.horizontal, 5).padding(.vertical, 1)
-                                        .background((filter == item ? Eclipse.accent : Color.white.opacity(0.12)), in: Capsule())
-                                }
-                                .foregroundStyle(filter == item ? Color.white : Color.secondary)
-                                Capsule().fill(filter == item ? Eclipse.accent : Color.clear).frame(height: 3)
-                            }
-                            .padding(.horizontal, 10).padding(.top, 4)
+                    ForEach(Array(tabs.prefix(1)), id: \.0) { entry in
+                        tabButton(entry.0.title, count: entry.1, selected: categoryID == nil && filter == entry.0) {
+                            categoryID = nil; filter = entry.0
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(filter == item ? .isSelected : [])
+                    }
+                    // Your own shelves come right after "All".
+                    ForEach(model.categories) { category in
+                        tabButton(category.name, count: category.seriesIDs.filter { id in model.librarySeries.contains { $0.id == id } }.count,
+                                  selected: categoryID == category.id) {
+                            categoryID = category.id; filter = .all
+                        }
+                    }
+                    ForEach(Array(tabs.dropFirst()), id: \.0) { entry in
+                        tabButton(entry.0.title, count: entry.1, selected: categoryID == nil && filter == entry.0) {
+                            categoryID = nil; filter = entry.0
+                        }
                     }
                 }.padding(.horizontal, 8)
             }
@@ -340,6 +409,64 @@ struct LibraryView: View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 17, weight: .semibold)).frame(width: 40, height: 40)
         }.accessibilityLabel(label)
+    }
+    private func tabButton(_ title: String, count: Int, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button { withAnimation(.snappy) { action() } } label: {
+            VStack(spacing: 7) {
+                HStack(spacing: 5) {
+                    Text(title).font(.subheadline.weight(selected ? .bold : .medium)).lineLimit(1)
+                    Text("\(count)").font(.caption2.weight(.bold)).monospacedDigit()
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background((selected ? Eclipse.accent : Color.white.opacity(0.12)), in: Capsule())
+                }
+                .foregroundStyle(selected ? Color.white : Color.secondary)
+                Capsule().fill(selected ? Eclipse.accent : Color.clear).frame(height: 3)
+            }
+            .padding(.horizontal, 10).padding(.top, 4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+    /// Bulk actions for the selected series.
+    private var selectionBar: some View {
+        let chosen = model.librarySeries.filter { selection.contains($0.id) }
+        return HStack(spacing: 4) {
+            Text("\(selection.count) selected").font(.subheadline.weight(.semibold)).monospacedDigit().padding(.leading, 8)
+            Spacer(minLength: 4)
+            selectionAction("checkmark.circle", "Mark read") { model.markAllRead(chosen); endSelection() }
+            selectionAction("arrow.down.circle", "Download unread") {
+                for series in chosen where series.kind == .web {
+                    model.download(series.chapters.filter { model.state.progress[$0.id]?.completed != true })
+                }
+                endSelection()
+            }
+            Menu {
+                ForEach(model.categories) { category in
+                    Button(category.name) { model.set(chosen, in: category, true); endSelection() }
+                }
+                Button { newCategoryForSelection = true } label: { Label("New category…", systemImage: "plus") }
+            } label: {
+                Image(systemName: "folder.badge.plus").font(.system(size: 18, weight: .semibold)).frame(width: 42, height: 42)
+            }.accessibilityLabel("Add to category")
+            selectionAction("eye.slash", "Hide") { for series in chosen { model.setHidden(true, series) }; endSelection() }
+            selectionAction("trash", "Remove") { confirmRemove = true }
+            Button("Done") { endSelection() }.font(.subheadline.weight(.bold)).padding(.horizontal, 8)
+        }
+        .padding(.horizontal, 8).frame(height: 56)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Eclipse.hairline))
+        .padding(.horizontal, 12).padding(.bottom, 8)
+        .frame(maxWidth: 640)
+    }
+    private func selectionAction(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).frame(width: 42, height: 42)
+        }
+        .disabled(selection.isEmpty)
+        .accessibilityLabel(label)
+    }
+    private func endSelection() {
+        withAnimation(.snappy) { selecting = false; selection = [] }
     }
 }
 
@@ -493,6 +620,9 @@ struct LibraryGrid: View {
     let zoom: Namespace.ID
     /// Width available to the grid; columns and card text scale with it.
     var width: CGFloat = 390
+    /// Picking several covers for bulk actions (nil when not selecting).
+    var selection: Binding<Set<String>>? = nil
+    var startSelecting: ((String) -> Void)? = nil
     @AppStorage("libraryDensity") private var densityRaw = LibraryDensity.comfortable.rawValue
     @State private var coverFor: MangaSeries?
     var body: some View {
@@ -503,7 +633,28 @@ struct LibraryGrid: View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: .top), count: count)
         LazyVGrid(columns: columns, alignment: .leading, spacing: spacing + 6) {
             ForEach(series) { item in
-                Button { openSeries = item } label: { SeriesCard(series: item, width: cardWidth).zoomSource(item.id, in: zoom) }
+                Button {
+                    if let selection {
+                        if selection.wrappedValue.contains(item.id) { selection.wrappedValue.remove(item.id) } else { selection.wrappedValue.insert(item.id) }
+                    } else {
+                        openSeries = item
+                    }
+                } label: {
+                    SeriesCard(series: item, width: cardWidth).zoomSource(item.id, in: zoom)
+                        .overlay(alignment: .center) {
+                            if let selection {
+                                let on = selection.wrappedValue.contains(item.id)
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(on ? 0.35 : 0.15))
+                                    Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 30, weight: .semibold))
+                                        .foregroundStyle(on ? Eclipse.highlight : Color.white.opacity(0.85))
+                                        .shadow(radius: 4)
+                                }
+                                .allowsHitTesting(false)
+                            }
+                        }
+                }
                     .buttonStyle(PressableStyle())
                     .accessibilityIdentifier(item.id == LibraryModel.berserkID ? "chapterBrowser" : "series-\(item.title)")
                     .contextMenu {
@@ -511,6 +662,9 @@ struct LibraryGrid: View {
                             Button { reader = chapter } label: { Label("Continue \(ChapterText.split(chapter.title).name)", systemImage: "book") }
                         }
                         Button { coverFor = item } label: { Label("Change cover…", systemImage: "photo") }
+                        if let startSelecting {
+                            Button { startSelecting(item.id) } label: { Label("Select", systemImage: "checkmark.circle") }
+                        }
                         Picker("Reads as", selection: Binding(get: { model.styleOverride(item.id) },
                                                               set: { model.setStyle($0, for: item.id) })) {
                             ForEach(ReadingStyle.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol).tag($0) }
@@ -1114,6 +1268,12 @@ struct ReaderPreferencesForm: View {
             }
             Toggle("Two-page spreads in landscape", isOn: $preferences.landscapeSpreads)
             Toggle("Keep wide artwork on one page", isOn: $preferences.detectWidePages)
+            Toggle(isOn: Binding(get: { preferences.splitSpreads ?? false }, set: { preferences.splitSpreads = $0 })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Split double pages in portrait")
+                    Text("A two-page spread shows as two pages, in reading order").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Toggle("Trim white scan margins", isOn: Binding(get: { preferences.trimMargins ?? true }, set: { preferences.trimMargins = $0 }))
             Toggle(isOn: Binding(get: { preferences.enhance ?? false }, set: { preferences.enhance = $0 })) {
                 VStack(alignment: .leading, spacing: 2) {

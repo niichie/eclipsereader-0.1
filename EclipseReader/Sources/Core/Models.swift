@@ -22,6 +22,27 @@ public struct MangaPage: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+extension MangaPage {
+    /// One half of a double-page spread, shown on its own when spreads are split in portrait.
+    public enum Half: String, Sendable { case left, right }
+    private static let halfMarker = "eclipse-half="
+    public var half: Half? {
+        guard let fragment = url.fragment, fragment.hasPrefix(Self.halfMarker) else { return nil }
+        return Half(rawValue: String(fragment.dropFirst(Self.halfMarker.count)))
+    }
+    /// The full image this page shows (itself, unless it is a half).
+    public var whole: MangaPage {
+        guard half != nil, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return self }
+        parts.fragment = nil
+        return MangaPage(url: parts.url ?? url, label: label, width: width.map { $0 * 2 }, height: height)
+    }
+    public func halved(_ side: Half) -> MangaPage {
+        guard var parts = URLComponents(url: whole.url, resolvingAgainstBaseURL: false) else { return self }
+        parts.fragment = Self.halfMarker + side.rawValue
+        return MangaPage(url: parts.url ?? url, label: "\(label) (\(side.rawValue) half)", width: width.map { $0 / 2 }, height: height)
+    }
+}
+
 public enum ReadingDirection: String, Codable, CaseIterable, Sendable {
     case rightToLeft, leftToRight
     public var title: String { self == .rightToLeft ? "Right to left" : "Left to right" }

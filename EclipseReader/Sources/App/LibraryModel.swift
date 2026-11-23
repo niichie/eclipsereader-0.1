@@ -14,6 +14,10 @@ final class LibraryModel: ObservableObject {
     private var downloadQueue: [Chapter] = []
     /// A page sent to the app (eclipsereader://open?url=…) to open in the browser.
     @Published var incoming: BrowseTarget?
+    /// A chapter to open right away (Siri "Continue reading", Handoff from another device).
+    @Published var requestedChapter: Chapter?
+    /// A series to show (Spotlight).
+    @Published var requestedSeriesID: String?
     /// Website series whose chapter list was refreshed since launch.
     var sessionRefreshed = Set<String>()
     private var downloadTask: Task<Void, Never>?
@@ -822,6 +826,20 @@ final class LibraryModel: ObservableObject {
         // Keep a year of days.
         if log.count > 400, let oldest = log.keys.sorted().first { log[oldest] = nil }
         state.readingLog = log
+    }
+
+    /// Marks every chapter of these series read, in one save, keeping "Continue reading" where it was.
+    func markAllRead(_ list: [MangaSeries]) {
+        let last = state.lastChapterID
+        for series in list {
+            for chapter in series.chapters where state.progress[chapter.id]?.completed != true {
+                state.record(chapter, page: 0, count: 1, completed: true)
+            }
+            let ids = Set(series.chapters.map(\.id))
+            state.newChapterIDs?.removeAll { ids.contains($0) }
+        }
+        state.lastChapterID = last
+        save()
     }
 
     // MARK: Hidden series and categories
