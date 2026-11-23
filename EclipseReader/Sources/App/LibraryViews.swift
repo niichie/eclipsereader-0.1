@@ -1384,9 +1384,9 @@ struct CoverPicker: View {
                     }
                     VStack(spacing: 10) {
                         PhotosPicker(selection: $photo, matching: .images) {
-                            option("Choose from Photos", "photo.on.rectangle.angled")
+                            CoverOption(title: "Choose from Photos", symbol: "photo.on.rectangle.angled")
                         }.buttonStyle(PressableStyle())
-                        Button { importing = true } label: { option("Choose from Files", "folder") }
+                        Button { importing = true } label: { CoverOption(title: "Choose from Files", symbol: "folder") }
                             .buttonStyle(PressableStyle())
                         HStack(spacing: 8) {
                             Image(systemName: "link").foregroundStyle(.secondary)
@@ -1399,7 +1399,7 @@ struct CoverPicker: View {
                         .padding(.horizontal, 14).frame(height: 52).eclipseCard(cornerRadius: 14)
                         if model.state.customCovers?[series.id] != nil {
                             Button { model.setCustomCover(nil, for: series.id); dismiss() } label: {
-                                option("Back to the automatic cover", "arrow.uturn.backward")
+                                CoverOption(title: "Back to the automatic cover", symbol: "arrow.uturn.backward")
                             }.buttonStyle(PressableStyle())
                         }
                     }
@@ -1446,15 +1446,6 @@ struct CoverPicker: View {
             }
         }.preferredColorScheme(.dark)
     }
-    private func option(_ title: String, _ symbol: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol).font(.body.weight(.semibold)).foregroundStyle(Eclipse.highlight).frame(width: 24)
-            Text(title).font(.body.weight(.semibold))
-            Spacer()
-            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 14).frame(height: 52).eclipseCard(cornerRadius: 14)
-    }
     private func useLink() {
         guard let url = WebLink.parse(link) else { return }
         apply {
@@ -1470,6 +1461,20 @@ struct CoverPicker: View {
             do { try await work(); dismiss() }
             catch { self.error = error.localizedDescription }
         }
+    }
+}
+
+private struct CoverOption: View {
+    let title: String
+    let symbol: String
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol).font(.body.weight(.semibold)).foregroundStyle(Eclipse.highlight).frame(width: 24)
+            Text(title).font(.body.weight(.semibold))
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14).frame(height: 52).eclipseCard(cornerRadius: 14)
     }
 }
 
