@@ -45,7 +45,10 @@ final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var canGoForward = false
     @Published var currentURL: URL?
     @Published var title = ""
+    /// Bumps whenever the page changes (loads, or a script-driven site swaps its content).
+    @Published var pageVersion = 0
     var homeHost: String?
+    private var urlObservation: NSKeyValueObservation?
     /// Browse tab: free navigation across public HTTPS sites (search results, links between sites).
     private let openWeb: Bool
     init(openWeb: Bool = false) {
@@ -57,6 +60,17 @@ final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate {
         super.init()
         webView.navigationDelegate = self; webView.allowsBackForwardNavigationGestures = true
         webView.isOpaque = false; webView.backgroundColor = .black
+        // Single-page sites change address without a full load; follow those too.
+        urlObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.currentURL != self.webView.url {
+                    self.currentURL = self.webView.url
+                    self.canGoBack = self.webView.canGoBack; self.canGoForward = self.webView.canGoForward
+                    self.pageVersion += 1
+                }
+            }
+        }
     }
     func reload() { error = nil; webView.reload() }
     /// The page exactly as it is showing (after scripts ran and any site check passed).
@@ -75,6 +89,7 @@ final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loading = false; canGoBack = webView.canGoBack; canGoForward = webView.canGoForward
         currentURL = webView.url; title = webView.title ?? ""
+        pageVersion += 1
     }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         currentURL = webView.url; canGoBack = webView.canGoBack; canGoForward = webView.canGoForward

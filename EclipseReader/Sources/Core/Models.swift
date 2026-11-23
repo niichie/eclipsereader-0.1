@@ -211,12 +211,13 @@ public enum ReadingOrder {
 }
 
 public enum SourceError: Error, LocalizedError, Equatable, Sendable {
-    case unavailable(Int), restricted, missingChapter, unsupportedStructure, timeout, invalidImage, insecureURL
+    case unavailable(Int), restricted, missingChapter, unsupportedStructure, timeout, invalidImage, insecureURL, listing
     public var errorDescription: String? {
         switch self {
         case .unavailable(let status): "The site isn’t responding right now (error \(status)). Try again later."
         case .restricted: "This site only opens in a browser. Open it in the browser once (it may ask you to confirm you’re human), then try again."
         case .missingChapter: "This chapter is no longer available on the website."
+        case .listing: "This page lists lots of different series. Open the one you want, then add it."
         case .unsupportedStructure: "eclipsereader couldn’t find this chapter’s pages. Open it in the browser, or try again."
         case .timeout: "The request timed out. Check your connection and try again."
         case .invalidImage: "This page didn’t load as an image. Try again, or open it in the browser."

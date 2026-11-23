@@ -86,9 +86,9 @@ struct ReaderView: View {
                         }
                     }
                 }
-                // Artwork uses the whole height (like a printed page held up to the screen);
-                // the sides stay clear of notches and the Duo's status column.
-                .ignoresSafeArea(.container, edges: .vertical)
+                // Artwork uses the whole screen, like Mihon: pages are centred in the full display
+                // (including under the Duo's status column) instead of being pushed to one side.
+                .ignoresSafeArea()
 
                 // Controls float over the page so it never resizes when they appear.
                 VStack(spacing: 0) {
@@ -145,6 +145,18 @@ struct ReaderView: View {
                     }.preferredColorScheme(.dark)
                 }
                 .sheet(isPresented: $website) { WebsiteView(url: chapter.url) }
+                .onReceive(NotificationCenter.default.publisher(for: ZoomPageView.useAsCover)) { note in
+                    guard let index = note.userInfo?["index"] as? Int, pages.indices.contains(index) else { return }
+                    let current = pages[index]
+                    let seriesID = library.seriesID(for: chapter)
+                    let source = chapter
+                    Task {
+                        do {
+                            try await library.chooseCoverPage(current, seriesID: seriesID, chapter: source)
+                            flash("Cover updated")
+                        } catch { flash("Couldn’t use this page") }
+                    }
+                }
                 .sheet(isPresented: $pickingCover) {
                     if let series = library.series(id: library.seriesID(for: chapter)) {
                         CoverPicker(series: series).environmentObject(library)

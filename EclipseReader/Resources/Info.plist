@@ -50,4 +50,5 @@
         </dict>
     </array>
     <key>ITSAppUsesNonExemptEncryption</key><false/>
+    <key>NSPhotoLibraryAddUsageDescription</key><string>Save manga pages you long-press to your photo library.</string>
 </dict></plist>

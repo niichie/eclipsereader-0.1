@@ -253,25 +253,43 @@ final class LibraryModel: ObservableObject {
     enum LinkResult { case open(Chapter), series(MangaSeries, open: Chapter?) }
     /// Adds a whole series from a pasted link. A series page adds every chapter; a chapter
     /// page adds the series its chapter picker lists (when it has one) and opens that chapter.
+    enum LinkPreview { case existing(LinkResult), fresh(URL, LinkInspection) }
+    /// Reads a link without adding it, so the browser can show what would be added.
     /// `html` is the page as the in-app browser shows it right now: it has already passed any
     /// browser check and run its scripts, so it is read first (covers and chapter lists included).
-    func addLink(_ text: String, html: String? = nil) async throws -> LinkResult {
+    func preview(_ text: String, html: String? = nil) async throws -> LinkPreview {
         guard let url = WebLink.parse(text) else { throw AddLinkError.invalid }
         if let known = ReadBerserkParser.normalize(url.absoluteString, relativeTo: ReadBerserkParser.home) {
-            if let chapter = state.chapters.first(where: { $0.url == known }) { return .open(chapter) }
-            if url.path.count > 1 { return .open(Chapter(url: known, title: "Berserk", number: "")) }
+            if let chapter = state.chapters.first(where: { $0.url == known }) { return .existing(.open(chapter)) }
+            if url.path.count > 1 { return .existing(.open(Chapter(url: known, title: "Berserk", number: ""))) }
+            return .existing(.series(berserk, open: nil))
         }
-        if let existing = allSeries.first(where: { $0.url == url }) { return .series(existing, open: nil) }
+        if let existing = allSeries.first(where: { $0.url == url }) { return .existing(.series(existing, open: nil)) }
         if let existing = allSeries.first(where: { $0.chapters.contains { $0.url == url } }) {
-            return .series(existing, open: existing.chapters.first { $0.url == url })
+            return .existing(.series(existing, open: existing.chapters.first { $0.url == url }))
         }
         var live: LinkInspection?
-        if let html, !Webtoons.handles(url), let seen = try? LinkedSource.analyze(html: html, url: url),
-           seen.chapters.count >= 2 || !seen.pages.isEmpty {
-            live = seen
+        if let html, !Webtoons.handles(url), !MangaDex.handles(url) {
+            do {
+                let seen = try LinkedSource.analyze(html: html, url: url)
+                if seen.chapters.count >= 2 || !seen.pages.isEmpty { live = seen }
+            } catch SourceError.listing { throw SourceError.listing } catch {}
         }
         let found: LinkInspection
         if let live { found = live } else { found = try await inspectAny(url) }
+        // The same series already added from another page of it (a chapter, say).
+        let keys = Set(found.chapters.map { LinkedSource.key($0.url) })
+        if keys.count >= 2, let existing = allSeries.first(where: { series in
+            let overlap = series.chapters.filter { keys.contains(LinkedSource.key($0.url)) }.count
+            return overlap * 2 >= min(keys.count, series.chapters.count) && overlap > 0
+        }) {
+            return .existing(.series(existing, open: nil))
+        }
+        return .fresh(url, found)
+    }
+    /// Adds a previewed series to the library.
+    func commit(_ url: URL, _ found: LinkInspection) -> LinkResult {
+        if let existing = allSeries.first(where: { $0.url == url }) { return .series(existing, open: nil) }
         // No cover art on the page: leave it empty so the library looks for the site's art later,
         // then falls back to a cropped first page.
         let series = MangaSeries(id: "web-" + url.absoluteString, url: url, title: found.title, cover: found.cover,
@@ -283,6 +301,12 @@ final class LibraryModel: ObservableObject {
         let here = LinkedSource.key(url)
         let opened = found.pages.isEmpty ? nil : series.chapters.first { LinkedSource.key($0.url) == here }
         return .series(series, open: opened)
+    }
+    func addLink(_ text: String, html: String? = nil) async throws -> LinkResult {
+        switch try await preview(text, html: html) {
+        case .existing(let result): return result
+        case .fresh(let url, let found): return commit(url, found)
+        }
     }
     /// Re-reads a web series' chapter list and adds new chapters, keeping progress.
     func update(_ series: MangaSeries) async throws {

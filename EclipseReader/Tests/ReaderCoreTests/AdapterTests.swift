@@ -66,4 +66,25 @@ final class AdapterTests: XCTestCase {
         XCTAssertEqual(chapters.map(\.number), ["1", "2"])
         XCTAssertTrue(WeebCentral.handles(URL(string: "https://weebcentral.com/series/01J76XY7E9FNDZ1DBBM6PBJPFK/Solo")!))
     }
+
+    func testHomeAndLatestPagesAreListings() {
+        let home = URL(string: "https://scans.example.com/comics")!
+        XCTAssertThrowsError(try LinkedSource.analyze(html: "<a href='/comics/a/chapter-1'>Chapter 1</a><a href='/comics/a/chapter-2'>Chapter 2</a>", url: home)) {
+            XCTAssertEqual($0 as? SourceError, .listing)
+        }
+        // A "latest" page whose chapter links share one folder but belong to many series.
+        let latest = URL(string: "https://reader.example.com/updates/today")!
+        let html = [5, 12, 5, 40, 12, 7, 5, 3].enumerated().map { i, n in
+            "<a href='/chapter/\(1000 + i)'>Chapter \(n)</a>"
+        }.joined()
+        XCTAssertEqual(LinkedSource.summarize(html: html, url: latest), .listing)
+    }
+
+    func testSeriesPageIsNotAListing() throws {
+        let series = URL(string: "https://scans.example.com/comics/solo-hunter-1a2b")!
+        let related = (1...12).map { "<a href='/comics/other-\($0)'>Other \($0)</a>" }.joined()
+        let chapters = (1...30).map { "<a href='/comics/solo-hunter-1a2b/chapter/\($0)'>Chapter \($0)</a>" }.joined()
+        let found = try LinkedSource.analyze(html: "<h1>Solo Hunter</h1>" + chapters + related, url: series)
+        XCTAssertEqual(found.chapters.count, 30)
+    }
 }

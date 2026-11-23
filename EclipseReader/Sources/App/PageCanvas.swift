@@ -84,10 +84,12 @@ private enum PageDecoder {
             }
             return best
         }
-        let left = edge(count: sw, line: column, reversed: false)
-        let right = edge(count: sw, line: column, reversed: true)
-        let top = edge(count: sh, line: row, reversed: false)
-        let bottom = edge(count: sh, line: row, reversed: true)
+        // Keep a little paper around the art so text never sits flush against the screen edge.
+        let padX = max(1, Int(Double(sw) * 0.018)), padY = max(1, Int(Double(sh) * 0.012))
+        let left = max(0, edge(count: sw, line: column, reversed: false) - padX)
+        let right = max(0, edge(count: sw, line: column, reversed: true) - padX)
+        let top = max(0, edge(count: sh, line: row, reversed: false) - padY)
+        let bottom = max(0, edge(count: sh, line: row, reversed: true) - padY)
         guard left + right + top + bottom > 0 else { return nil }
         let fx = Double(w) / Double(sw), fy = Double(h) / Double(sh)
         let rect = CGRect(x: Double(left) * fx, y: Double(top) * fy,
@@ -116,6 +118,9 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     var tapped: ((CGFloat) -> Void)?
     /// Part of a continuous vertical strip: pinned to the top, sub-pixel overflow ignored.
     var seamless = false
+    private(set) var pageIndex = 0
+    /// Posted with the page index when "Set as cover" is chosen from a page's long-press menu.
+    static let useAsCover = Notification.Name("EclipseUsePageAsCover")
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
@@ -139,12 +144,14 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(toggleControls(_:)))
         singleTap.require(toFail: doubleTap); scroll.addGestureRecognizer(singleTap)
         scroll.accessibilityLabel = "Manga page. Pinch or double tap to zoom."
+        scroll.addInteraction(UIContextMenuInteraction(delegate: self))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unsupported") }
     deinit { work?.cancel() }
     func configure(page: MangaPage, index: Int, chapter: Chapter, pipeline: ImagePipeline,
                    preferences: ReaderPreferences, loaded: @escaping (Int, Double) -> Void) {
         preference = preferences
+        pageIndex = index
         imageView.accessibilityIdentifier = "art-\(index)"
         imageView.accessibilityLabel = page.label; imageView.isAccessibilityElement = false
         start = { [weak self] in
@@ -301,4 +308,34 @@ final class PageCanvasController: UIViewController {
     }
     // UIKit may reuse this canvas immediately during a reverse turn. Its decoded
     // image lives with the controller and can be reclaimed under memory pressure.
+}
+
+/// Long-press a page: share it, save it to Photos, or make it the series cover.
+extension ZoomPageView: UIContextMenuInteractionDelegate {
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        guard let image = imageView.image else { return nil }
+        let index = pageIndex
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            let share = UIAction(title: "Share page", image: UIImage(systemName: "square.and.arrow.up")) { _ in
+                self?.present(UIActivityViewController(activityItems: [image], applicationActivities: nil))
+            }
+            let save = UIAction(title: "Save to Photos", image: UIImage(systemName: "square.and.arrow.down")) { _ in
+                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+            }
+            let cover = UIAction(title: "Set as cover", image: UIImage(systemName: "photo")) { _ in
+                NotificationCenter.default.post(name: ZoomPageView.useAsCover, object: nil, userInfo: ["index": index])
+            }
+            return UIMenu(children: [share, save, cover])
+        }
+    }
+    private func present(_ controller: UIViewController) {
+        var top = window?.rootViewController
+        while let next = top?.presentedViewController { top = next }
+        if let popover = controller.popoverPresentationController {
+            popover.sourceView = self
+            popover.sourceRect = CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+        }
+        top?.present(controller, animated: true)
+    }
 }

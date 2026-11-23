@@ -288,6 +288,9 @@ struct MangaBrowserView: View {
     @State private var toast: String?
     @State private var reader: Chapter?
     @State private var lastAdded: MangaSeries?
+    @State private var summary: LinkedSource.PageSummary = .unknown
+    @State private var pending: PendingAdd?
+    @State private var viewing: MangaSeries?
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -327,8 +330,9 @@ struct MangaBrowserView: View {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(Eclipse.highlight)
                         Text(toast).font(.subheadline.weight(.semibold)).lineLimit(2)
                         Spacer(minLength: 4)
-                        if lastAdded != nil {
-                            Button("Read") { if let s = lastAdded { reader = model.resume(s) } }.buttonStyle(.borderedProminent).tint(Eclipse.accent)
+                        if let added = lastAdded {
+                            Button("View") { viewing = added }.buttonStyle(.bordered)
+                            Button("Read") { reader = model.resume(added) }.buttonStyle(.borderedProminent).tint(Eclipse.accent)
                         }
                     }
                     .padding(14).eclipseCard(cornerRadius: 16).padding(12)
@@ -337,7 +341,7 @@ struct MangaBrowserView: View {
             }
             if let error = browser.error { Text(error).font(.footnote).foregroundStyle(.orange).padding(8) }
 
-            BrowserToolbar(browser: browser, adding: adding, add: addCurrent, read: readCurrent)
+            BrowserToolbar(browser: browser, adding: adding, summary: summary, add: addCurrent, read: readCurrent)
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
@@ -345,6 +349,28 @@ struct MangaBrowserView: View {
             if !editing, let host = url?.host { address = host.replacingOccurrences(of: "www.", with: "") }
         }
         .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+        .sheet(item: $pending) { item in
+            AddPreviewSheet(item: item) { readNow in
+                pending = nil
+                let result = model.commit(item.url, item.found)
+                if case .series(let series, let open) = result {
+                    lastAdded = series
+                    if readNow { reader = open ?? model.resume(series) }
+                    else { show("Added \(series.title) · \(series.chapters.count) chapter\(series.chapters.count == 1 ? "" : "s")") }
+                }
+            }
+            .environmentObject(model)
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(item: $viewing) { series in SeriesSheet(series: series).environmentObject(model) }
+        // Read what the page is (series, chapter, or a list of many series) so the Add button can say.
+        .task(id: browser.pageVersion) {
+            summary = .unknown
+            try? await Task.sleep(for: .milliseconds(700))
+            guard let url = browser.currentURL, WebLink.publicHTTPS(url), let html = await browser.pageHTML() else { return }
+            let result = await Task.detached(priority: .utility) { LinkedSource.summarize(html: html, url: url) }.value
+            if !Task.isCancelled { summary = result }
+        }
     }
     private func rootURL(_ url: URL) -> URL {
         var parts = URLComponents(); parts.scheme = "https"; parts.host = url.host; parts.path = "/"
@@ -359,20 +385,29 @@ struct MangaBrowserView: View {
     }
     private func addCurrent() {
         guard let url = browser.currentURL ?? browser.webView.url else { return }
+        if summary == .listing {
+            show("This page lists many series. Open the one you want, then tap Add.")
+            return
+        }
         adding = true
         Task {
             defer { adding = false }
             do {
-                switch try await model.addLink(url.absoluteString, html: await browser.pageHTML()) {
-                case .open(let chapter):
+                switch try await model.preview(url.absoluteString, html: await browser.pageHTML()) {
+                case .existing(.open(let chapter)):
                     lastAdded = nil; reader = chapter
-                case .series(let series, _):
+                case .existing(.series(let series, _)):
                     lastAdded = series
-                    show("Added \(series.title) · \(series.chapters.count) chapter\(series.chapters.count == 1 ? "" : "s")")
+                    show("\(series.title) is already in your library")
+                case .fresh(let target, let found):
+                    pending = PendingAdd(url: target, found: found)
                 }
+            } catch SourceError.listing {
+                lastAdded = nil
+                show("This page lists many series. Open the one you want, then tap Add.")
             } catch {
                 lastAdded = nil
-                show("Couldn’t add this page. Open a series page or a chapter, then try again.")
+                show("Couldn’t find a series here. Open a series page or a chapter, then try again.")
             }
         }
     }
@@ -398,6 +433,7 @@ struct MangaBrowserView: View {
 private struct BrowserToolbar: View {
     @ObservedObject var browser: WebsiteBrowser
     let adding: Bool
+    let summary: LinkedSource.PageSummary
     let add: () -> Void
     let read: () -> Void
     var body: some View {
@@ -407,8 +443,8 @@ private struct BrowserToolbar: View {
             Spacer(minLength: 6)
             Button(action: add) {
                 ViewThatFits(in: .horizontal) {
-                    addLabel("Add to library")
-                    addLabel("Add")
+                    addLabel(longTitle)
+                    addLabel(shortTitle)
                     addLabel(nil)
                 }
             }
@@ -431,15 +467,27 @@ private struct BrowserToolbar: View {
             Image(systemName: symbol).font(.system(size: 19, weight: .medium)).frame(width: 44, height: 44)
         }.accessibilityLabel(label)
     }
+    private var listing: Bool { summary == .listing }
+    private var longTitle: String {
+        switch summary {
+        case .series(_, let count) where count > 0: "Add · \(count) ch"
+        case .chapter: "Add series"
+        case .listing: "Open a series to add"
+        default: "Add to library"
+        }
+    }
+    private var shortTitle: String { listing ? "Pick one" : "Add" }
     private func addLabel(_ text: String?) -> some View {
         HStack(spacing: 6) {
-            if adding { ProgressView().controlSize(.small).tint(.black) } else { Image(systemName: "plus").font(.subheadline.weight(.heavy)) }
+            if adding { ProgressView().controlSize(.small).tint(.black) }
+            else { Image(systemName: listing ? "hand.point.up.left" : "plus").font(.subheadline.weight(.heavy)) }
             if let text { Text(text).font(.subheadline.weight(.bold)).lineLimit(1).fixedSize() }
         }
         .padding(.horizontal, text == nil ? 13 : 18).frame(height: 40)
-        .background(Eclipse.highlight, in: Capsule())
-        .foregroundStyle(.black)
-        .shadow(color: Eclipse.highlight.opacity(0.35), radius: 10, y: 2)
+        .background(listing ? AnyShapeStyle(Color.white.opacity(0.14)) : AnyShapeStyle(Eclipse.highlight), in: Capsule())
+        .foregroundStyle(listing ? Color.white.opacity(0.75) : Color.black)
+        .shadow(color: listing ? .clear : Eclipse.highlight.opacity(0.35), radius: 10, y: 2)
+        .animation(.snappy, value: summary)
     }
 }
 
@@ -459,6 +507,71 @@ private struct SeriesSheet: View {
                 }
         }
         .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct PendingAdd: Identifiable {
+    let url: URL
+    let found: LinkInspection
+    var id: String { url.absoluteString }
+}
+
+/// What will be added: cover, title, chapter count and reading style, before it joins the library.
+private struct AddPreviewSheet: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let item: PendingAdd
+    let confirm: (_ readNow: Bool) -> Void
+    var body: some View {
+        let found = item.found
+        let style = found.style ?? .automatic
+        VStack(spacing: 18) {
+            Capsule().fill(Color.white.opacity(0.25)).frame(width: 40, height: 5).padding(.top, 8)
+            HStack(alignment: .top, spacing: 16) {
+                CoverView(url: found.cover ?? found.pages.first?.url, referer: found.chapters.first)
+                    .aspectRatio(0.7, contentMode: .fit).frame(width: 110)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(color: .black.opacity(0.5), radius: 12, y: 6)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(found.title).font(.title3.weight(.heavy)).lineLimit(4)
+                    Label(item.url.host?.replacingOccurrences(of: "www.", with: "") ?? "Website", systemImage: "globe")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Label("\(found.chapters.count) chapter\(found.chapters.count == 1 ? "" : "s")", systemImage: "list.number")
+                        if style != .automatic { Label(style.title, systemImage: style.symbol) }
+                    }
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    if let first = found.chapters.first, let last = found.chapters.last, found.chapters.count > 1 {
+                        Text("\(ChapterText.split(first.title).name) – \(ChapterText.split(last.title).name)")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            if found.chapters.isEmpty && !found.pages.isEmpty {
+                Label("This is a single chapter. Its series list wasn’t on the page, so it’s added on its own.", systemImage: "info.circle")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            VStack(spacing: 10) {
+                Button { confirm(false) } label: {
+                    Label("Add to library", systemImage: "plus").font(.headline)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .background(Eclipse.highlight, in: RoundedRectangle(cornerRadius: 14)).foregroundStyle(.black)
+                }.buttonStyle(PressableStyle()).accessibilityIdentifier("confirmAdd")
+                Button { confirm(true) } label: {
+                    Label("Add and read now", systemImage: "book").font(.headline)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .background(Eclipse.surfaceHigh, in: RoundedRectangle(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Eclipse.hairline))
+                }.buttonStyle(PressableStyle())
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
+        .background(Eclipse.surface.ignoresSafeArea())
         .preferredColorScheme(.dark)
     }
 }

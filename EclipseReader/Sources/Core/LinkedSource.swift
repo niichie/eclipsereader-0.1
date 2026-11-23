@@ -100,6 +100,7 @@ public struct LinkedSource: Sendable {
         let pages = (try? detect(in: html, base: url)) ?? []
         var chapters = Webtoons.handles(url) ? Webtoons.episodes(in: html, base: url) : chapterLinks(in: html, base: url)
         if chapters.count < 2 && extraChapters.count >= chapters.count { chapters = extraChapters }
+        if pages.isEmpty && looksLikeListing(html: html, url: url, chapters: chapters) { throw SourceError.listing }
         if pages.isEmpty && chapters.count < 1 { throw SourceError.unsupportedStructure }
         let title = seriesTitle(in: html) ?? url.host ?? "Manga"
         let here = key(url)
@@ -111,6 +112,58 @@ public struct LinkedSource: Sendable {
         }
         return LinkInspection(title: title, cover: cover(in: html, base: url), pages: pages, chapters: chapters,
                               style: styleHint(in: html, url: url))
+    }
+
+    static let listingWords: Set<String> = [
+        "", "comics", "comic", "manga", "mangas", "manhwa", "manhua", "series", "titles", "title", "browse", "latest",
+        "popular", "search", "genre", "genres", "updates", "home", "directory", "list", "library", "trending", "new",
+        "webtoons", "originals", "canvas", "top", "ranking", "rankings", "discover", "explore", "catalog", "all", "az-list",
+    ]
+    static let seriesPath = #"(?i)/(?:manga|series|comics?|title|webtoons?|manhwa|manhua|read|book)/[^/?#"']+/?$"#
+    /// A home, "latest", genre or search page: it links to many different series rather than being one.
+    public static func looksLikeListing(html: String, url: URL, chapters: [Chapter]) -> Bool {
+        if Webtoons.handles(url) || MangaDex.handles(url) || WeebCentral.handles(url) { return false }
+        let parts = url.pathComponents.filter { $0 != "/" }.map { $0.lowercased() }
+        let ownSeries = url.path.range(of: seriesPath, options: .regularExpression) != nil
+        // The address itself says "list": /, /comics, /latest, /genre/action, /search?q=…
+        if parts.isEmpty || (parts.count == 1 && listingWords.contains(parts[0]))
+            || (parts.count == 2 && ["genre", "genres", "tag", "tags", "category", "search", "type", "status"].contains(parts[0])) {
+            return true
+        }
+        // Chapter numbers of one series hardly repeat; a "latest updates" list repeats them a lot.
+        let numbers = chapters.compactMap { $0.number.isEmpty ? nil : $0.number }
+        if numbers.count >= 6 && Double(Set(numbers).count) < Double(numbers.count) * 0.7 { return true }
+        // Many links to different series pages, and this page isn't one of them.
+        if !ownSeries {
+            var series = Set<String>()
+            for m in matches(#"(?is)<a\b[^>]*href=["']([^"'#]+)["']"#, html) {
+                guard let link = resolve(m[0], base: url), link.host == url.host, link.path != url.path,
+                      link.path.range(of: seriesPath, options: .regularExpression) != nil,
+                      link.path.range(of: #"(?i)chapter|episode|/ch[-_]?\d"#, options: .regularExpression) == nil else { continue }
+                series.insert(link.path.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            }
+            if series.count >= 10 && chapters.count < series.count * 2 { return true }
+        }
+        return false
+    }
+
+    /// What the browser is showing, for its Add button.
+    public enum PageSummary: Sendable, Equatable {
+        case series(title: String, chapters: Int)
+        case chapter(title: String, chapters: Int)
+        case listing
+        case unknown
+    }
+    public static func summarize(html: String, url: URL) -> PageSummary {
+        do {
+            let found = try analyze(html: html, url: url)
+            if !found.pages.isEmpty { return .chapter(title: found.title, chapters: found.chapters.count) }
+            return .series(title: found.title, chapters: found.chapters.count)
+        } catch SourceError.listing {
+            return .listing
+        } catch {
+            return .unknown
+        }
     }
 
     /// Finds just the cover of a series page (used to fill in missing covers later).
