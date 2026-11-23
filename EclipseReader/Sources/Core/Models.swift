@@ -157,6 +157,8 @@ public struct LibraryState: Codable, Sendable {
     public var covers: [String: URL]?
     /// Series whose site cover art has been looked for (so it happens once).
     public var coverChecked: [String]?
+    /// History shows only reading after this moment (set by "Clear history").
+    public var historyCleared: Date?
     /// Covers the user picked (a page or a photo); these win over automatic ones.
     public var customCovers: [String: URL]?
     /// Chapters that appeared since the last check and have not been opened yet.

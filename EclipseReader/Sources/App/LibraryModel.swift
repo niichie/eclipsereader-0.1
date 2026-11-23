@@ -450,6 +450,7 @@ final class LibraryModel: ObservableObject {
     func clearHistory() {
         state.progress = state.progress.filter { $0.value.completed }
         state.lastChapterID = nil
+        state.historyCleared = Date()
         save()
     }
     func removeHistory(_ chapter: Chapter) {

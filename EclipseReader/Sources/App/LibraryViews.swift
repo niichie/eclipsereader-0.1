@@ -8,11 +8,12 @@ struct RootView: View {
     @EnvironmentObject private var model: LibraryModel
     var body: some View {
         TabView {
+            // Mihon's order: your shelf, what's new, what you read, where to find more, settings.
             LibraryView().tabItem { Label("Library", systemImage: "books.vertical.fill") }
-            BrowseView().tabItem { Label("Browse", systemImage: "safari") }
             UpdatesView().tabItem { Label("Updates", systemImage: "sparkles") }
                 .badge(model.totalNew)
             HistoryView().tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
+            BrowseView().tabItem { Label("Browse", systemImage: "safari") }
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }
         }
     }

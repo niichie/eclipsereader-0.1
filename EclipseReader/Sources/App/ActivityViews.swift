@@ -86,17 +86,62 @@ struct HistoryView: View {
     @State private var confirmClear = false
     var body: some View {
         let index = model.chapterIndex
+        // Like Mihon: the latest chapter of each series, grouped by day.
+        var seen = Set<String>()
         let items = Array(model.state.progress
             .compactMap { entry in index[entry.key].map { HistoryItem(series: $0.0, chapter: $0.1, progress: entry.value) } }
+            .filter { $0.progress.updated > (model.state.historyCleared ?? .distantPast) }
             .sorted { $0.progress.updated > $1.progress.updated }
+            .filter { seen.insert($0.series.id).inserted }
             .prefix(150))
+        let days = Dictionary(grouping: items) { Calendar.current.startOfDay(for: $0.progress.updated) }
+        let order = days.keys.sorted(by: >)
         NavigationStack {
             List {
                 if model.state.incognito == true {
                     Label("Incognito is on: nothing new is added to history.", systemImage: "eyeglasses")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
-                ForEach(items) { item in
+                ForEach(order, id: \.self) { day in
+                    Section {
+                        ForEach(days[day] ?? []) { item in
+                            historyRow(item)
+                        }
+                    } header: {
+                        Text(Self.dayTitle(day)).font(.subheadline.weight(.bold)).foregroundStyle(.white).textCase(nil)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .overlay {
+                if items.isEmpty {
+                    ContentUnavailableView("No history yet", systemImage: "clock",
+                                           description: Text("Chapters you read show up here."))
+                }
+            }
+            .scrollContentBackground(.hidden).background(EclipseBackground())
+            .navigationTitle("History")
+            .toolbar {
+                if !items.isEmpty {
+                    Button("Clear") { confirmClear = true }
+                }
+            }
+            .confirmationDialog("Clear reading history?", isPresented: $confirmClear, titleVisibility: .visible) {
+                Button("Clear history", role: .destructive) { model.clearHistory() }
+            } message: { Text("Where you stopped in each chapter is forgotten. Finished chapters stay marked as read.") }
+            .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+        }
+    }
+    static func dayTitle(_ day: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return "Today" }
+        if calendar.isDateInYesterday(day) { return "Yesterday" }
+        if let week = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: Date())), day >= week {
+            return day.formatted(.dateTime.weekday(.wide))
+        }
+        return day.formatted(.dateTime.month(.wide).day().year())
+    }
+    private func historyRow(_ item: HistoryItem) -> some View {
                     Button { reader = item.chapter } label: {
                         HStack(spacing: 12) {
                             CoverView(url: model.cover(for: item.series), referer: item.series.chapters.first)
@@ -117,27 +162,5 @@ struct HistoryView: View {
                     .swipeActions {
                         Button(role: .destructive) { model.removeHistory(item.chapter) } label: { Label("Remove", systemImage: "trash") }
                     }
-                }
-            }
-            .overlay {
-                if items.isEmpty {
-                    ContentUnavailableView("No history yet", systemImage: "clock",
-                                           description: Text("Chapters you read show up here."))
-                }
-            }
-            .scrollContentBackground(.hidden).background(EclipseBackground())
-            .navigationTitle("History")
-            .toolbar {
-                if !items.isEmpty {
-                    Button("Clear") { confirmClear = true }
-                }
-            }
-            .confirmationDialog("Clear all reading history?", isPresented: $confirmClear, titleVisibility: .visible) {
-                Button("Clear history", role: .destructive) {
-                    model.state.progress = [:]; model.state.lastChapterID = nil; model.save()
-                }
-            } message: { Text("This also resets where you stopped in every chapter.") }
-            .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
-        }
     }
 }
