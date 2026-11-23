@@ -1361,6 +1361,12 @@ struct ReaderPreferencesForm: View {
                     Text("A two-page spread shows as two pages, in reading order").font(.caption).foregroundStyle(.secondary)
                 }
             }
+            Toggle(isOn: Binding(get: { preferences.guided ?? false }, set: { preferences.guided = $0 })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Guided view")
+                    Text("Tapping the page edge moves panel by panel, then turns the page").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Toggle("Trim white scan margins", isOn: Binding(get: { preferences.trimMargins ?? true }, set: { preferences.trimMargins = $0 }))
             Toggle(isOn: Binding(get: { preferences.enhance ?? false }, set: { preferences.enhance = $0 })) {
                 VStack(alignment: .leading, spacing: 2) {

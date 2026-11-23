@@ -114,6 +114,26 @@ private enum PageDecoder {
     }
 }
 
+/// Hands a decoded page to the panel finder at a small, fast size.
+private struct PanelSource: @unchecked Sendable {
+    let image: CGImage
+    static func detect(_ source: PanelSource, rightToLeft: Bool) -> [PanelRect] {
+        let image = source.image
+        let scale = min(1, 420.0 / Double(max(image.width, image.height)))
+        let w = max(1, Int(Double(image.width) * scale)), h = max(1, Int(Double(image.height) * scale))
+        var gray = [UInt8](repeating: 255, count: w * h)
+        let drawn: Bool = gray.withUnsafeMutableBytes { buffer in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                      space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+            ctx.interpolationQuality = .medium
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else { return [] }
+        return PanelDetector.panels(gray: gray, width: w, height: h, rightToLeft: rightToLeft)
+    }
+}
+
 @MainActor
 final class ZoomPageView: UIView, UIScrollViewDelegate {
     let scroll = UIScrollView()
@@ -133,6 +153,10 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     /// Part of a continuous vertical strip: pinned to the top, sub-pixel overflow ignored.
     var seamless = false
     private(set) var pageIndex = 0
+    /// Guided view: the page's panels in reading order, and which one is showing (-1 = the whole page).
+    private var panels: [PanelRect] = []
+    private var panelIndex = -1
+    private var panelWork: Task<Void, Never>?
     /// Posted with the page index when "Set as cover" is chosen from a page's long-press menu.
     static let useAsCover = Notification.Name("EclipseUsePageAsCover")
     override init(frame: CGRect) {
@@ -186,6 +210,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                     guard let self else { return }
                     spinner.stopAnimating(); imageView.image = decoded.image
                     resetFit(); loaded(index, decoded.ratio)
+                    findPanels(rightToLeft: preferences.direction == .rightToLeft)
                 } catch is CancellationError { }
                 catch let e as URLError where e.code == .cancelled { }
                 catch {
@@ -198,7 +223,54 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         }
         start?()
     }
-    func cancel() { work?.cancel(); work = nil; start = nil; imageView.image = nil }
+    func cancel() { work?.cancel(); work = nil; panelWork?.cancel(); start = nil; imageView.image = nil }
+
+    // MARK: Guided view
+    private func findPanels(rightToLeft: Bool) {
+        panels = []; panelIndex = -1; panelWork?.cancel()
+        guard preference.guided == true, preference.mode == .paged, let cg = imageView.image?.cgImage else { return }
+        let box = PanelSource(image: cg)
+        panelWork = Task { [weak self] in
+            let found = await Task.detached(priority: .utility) { PanelSource.detect(box, rightToLeft: rightToLeft) }.value
+            guard !Task.isCancelled, let self else { return }
+            self.panels = found
+        }
+    }
+    /// Moves to the next or previous panel. Returns false when the page should turn instead.
+    func stepPanel(forward: Bool) -> Bool {
+        guard preference.guided == true, panels.count >= 2, imageView.image != nil else { return false }
+        if forward {
+            guard panelIndex < panels.count - 1 else { panelIndex = -1; return false }
+            panelIndex += 1
+        } else {
+            guard panelIndex >= 0 else { return false }
+            panelIndex -= 1
+        }
+        showPanel()
+        return true
+    }
+    private func showPanel() {
+        let animated = !UIAccessibility.isReduceMotionEnabled
+        guard panels.indices.contains(panelIndex), let image = imageView.image else {
+            UIView.animate(withDuration: animated ? 0.35 : 0) { self.scroll.setZoomScale(self.baseScale, animated: false); self.centerImage() }
+            return
+        }
+        let panel = panels[panelIndex]
+        let size = image.size
+        // A little paper around the panel, then fit it to the screen's shape.
+        var rect = CGRect(x: panel.x * size.width, y: panel.y * size.height, width: panel.width * size.width, height: panel.height * size.height)
+            .insetBy(dx: -size.width * 0.015, dy: -size.height * 0.015)
+            .intersection(CGRect(origin: .zero, size: size))
+        let aspect = bounds.width / max(1, bounds.height)
+        if rect.width / rect.height > aspect {
+            let h = rect.width / aspect; rect = rect.insetBy(dx: 0, dy: -(h - rect.height) / 2)
+        } else {
+            let w = rect.height * aspect; rect = rect.insetBy(dx: -(w - rect.width) / 2, dy: 0)
+        }
+        UIView.animate(withDuration: animated ? 0.38 : 0, delay: 0, options: [.curveEaseInOut]) {
+            self.scroll.zoom(to: rect, animated: false)
+        }
+    }
     func suspend() { work?.cancel(); work = nil; imageView.image = nil }
     func resume() { if imageView.image == nil && work == nil { start?() } }
     func updatePreferences(_ preferences: ReaderPreferences) {
@@ -217,6 +289,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     }
     private func resetFit() {
         guard let image = imageView.image, bounds.width > 0, bounds.height > 0 else { return }
+        panelIndex = -1
         scroll.minimumZoomScale = 0.001; scroll.maximumZoomScale = 8
         scroll.zoomScale = 1
         imageView.frame = CGRect(origin: .zero, size: image.size); scroll.contentSize = image.size
@@ -321,6 +394,8 @@ final class PageCanvasController: UIViewController {
         }
     }
     func releaseImages() { canvases.forEach { $0.suspend() } }
+    /// Guided view works on single pages; spreads turn as usual.
+    func stepPanel(forward: Bool) -> Bool { canvases.count == 1 ? canvases[0].stepPanel(forward: forward) : false }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated); canvases.forEach { $0.resume() }
     }

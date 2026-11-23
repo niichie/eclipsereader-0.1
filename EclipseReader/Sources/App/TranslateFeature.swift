@@ -122,7 +122,27 @@ final class TranslateModel: ObservableObject {
     private(set) var sourceCode: String?
     private var snapshot: UIImage?
     private(set) var scannedSize: CGSize = .zero
-    private var cache: [String: String] = [:]   // "source|target|text" -> translation
+    /// "source|target|text" -> translation, kept between launches.
+    private var cache: TranslationMemory { .shared }
+    /// The series being read, for "always translate this series".
+    var seriesID: String?
+    @Published var always = false
+
+    // MARK: Always translate (raw series)
+    private static let alwaysKey = "translateSeries"
+    static func isAlways(_ seriesID: String) -> Bool {
+        (UserDefaults.standard.stringArray(forKey: alwaysKey) ?? []).contains(seriesID)
+    }
+    func setAlways(_ on: Bool) {
+        guard let seriesID else { return }
+        var list = UserDefaults.standard.stringArray(forKey: Self.alwaysKey) ?? []
+        list.removeAll { $0 == seriesID }
+        if on { list.append(seriesID) }
+        UserDefaults.standard.set(list, forKey: Self.alwaysKey)
+        always = on
+    }
+    /// The detected language isn't the one you read in: this chapter is a raw.
+    var looksRaw: Bool { sourceCode != nil && sourceCode != targetCode }
 
     var supported: Bool { if #available(iOS 18.0, *) { return true } else { return false } }
 
@@ -163,7 +183,7 @@ final class TranslateModel: ObservableObject {
         recognizer.processString(pendingText)
         sourceCode = recognizer.dominantLanguage.map { $0 == .simplifiedChinese ? "zh-Hans" : $0 == .traditionalChinese ? "zh-Hant" : $0.rawValue }
         for i in blocks.indices where blocks[i].translated == nil {
-            if let hit = cache[key(blocks[i].original)] { blocks[i].translated = hit }
+            if let hit = cache.lookup(key(blocks[i].original)) { blocks[i].translated = hit }
         }
         if sourceCode == targetCode {
             for i in blocks.indices where blocks[i].translated == nil { blocks[i].translated = blocks[i].original }
@@ -179,12 +199,48 @@ final class TranslateModel: ObservableObject {
         for (id, text) in pairs {
             guard let i = blocks.firstIndex(where: { $0.id == id }) else { continue }
             blocks[i].translated = text
-            cache[key(blocks[i].original)] = text
+            cache.store(text, for: key(blocks[i].original))
         }
+        cache.persist()
         if status == "Translating…" { status = nil }
     }
     func fail(_ message: String) {
         status = "Translation unavailable: \(message). Check Settings › Apps › Translate › Downloaded Languages."
+    }
+}
+
+/// Translated bubbles, remembered between launches so re-reading a raw chapter is instant (up to 4,000 bubbles).
+@MainActor
+final class TranslationMemory {
+    static let shared = TranslationMemory()
+    private var entries: [String: String] = [:]
+    private var order: [String] = []
+    private var dirty = false
+    private let file = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("translations.json")
+    private init() {
+        if let data = try? Data(contentsOf: file),
+           let saved = try? JSONDecoder().decode([[String]].self, from: data) {
+            for pair in saved where pair.count == 2 { entries[pair[0]] = pair[1]; order.append(pair[0]) }
+        }
+    }
+    func lookup(_ key: String) -> String? { entries[key] }
+    func store(_ value: String, for key: String) {
+        if entries[key] == nil { order.append(key) }
+        entries[key] = value
+        dirty = true
+        if order.count > 4000 {
+            for old in order.prefix(order.count - 4000) { entries[old] = nil }
+            order.removeFirst(order.count - 4000)
+        }
+    }
+    func persist() {
+        guard dirty else { return }
+        dirty = false
+        let pairs = order.compactMap { key in entries[key].map { [key, $0] } }
+        let target = file
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(pairs) { try? data.write(to: target, options: .atomic) }
+        }
     }
 }
 
@@ -278,11 +334,25 @@ struct TranslationOverlay: View {
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
+    /// English needs width that a vertical Japanese bubble doesn't have: tall, narrow bubbles get a wider card,
+    /// centered on the bubble. Text is set in a rounded face, like hand-lettering, and shrinks to fit.
+    static func fitted(_ rect: CGRect, text: String) -> CGSize {
+        var width = max(rect.width, 90), height = max(rect.height, 36)
+        if rect.height > rect.width * 1.6 {
+            width = max(width, min(rect.height * 0.8, 200))
+            height = max(rect.height * 0.75, 44)
+        }
+        // Long translations in small bubbles get a little more room.
+        let needed = CGFloat(text.count) * 52
+        if width * height < needed { let grow = (needed / max(1, width * height)).squareRoot(); width = min(width * grow, 260); height = min(height * grow, 220) }
+        return CGSize(width: width, height: height)
+    }
     private func card(_ block: TextBlock) -> some View {
         let text = block.showOriginal ? block.original : (block.translated ?? block.original)
-        let width = max(block.rect.width, 90), height = max(block.rect.height, 36)
+        let fit = Self.fitted(block.rect, text: text)
+        let width = fit.width, height = fit.height
         return Text(text)
-            .font(.system(size: 15, weight: .semibold)).minimumScaleFactor(0.35)
+            .font(.system(size: 15, weight: .bold, design: .rounded)).minimumScaleFactor(0.35)
             .multilineTextAlignment(.center).foregroundStyle(.black)
             .padding(4)
             .frame(width: width, height: height)
@@ -358,6 +428,11 @@ struct TranslationBar: View {
             Text(model.status ?? "\(model.blocks.count) bubble\(model.blocks.count == 1 ? "" : "s")")
                 .font(.caption).lineLimit(2).foregroundStyle(.secondary)
             Spacer(minLength: 4)
+            if model.seriesID != nil && (model.looksRaw || model.always) {
+                Button { model.setAlways(!model.always) } label: { Image(systemName: model.always ? "pin.fill" : "pin") }
+                    .tint(model.always ? .yellow : .white)
+                    .accessibilityLabel(model.always ? "Stop translating this series automatically" : "Always translate this series")
+            }
             Button { model.hideAll.toggle() } label: { Image(systemName: model.hideAll ? "eye" : "eye.slash") }
                 .accessibilityLabel(model.hideAll ? "Show translations" : "Show original page")
             Button { model.selecting.toggle() } label: { Image(systemName: "viewfinder") }

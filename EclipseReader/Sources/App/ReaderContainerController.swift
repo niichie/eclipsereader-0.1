@@ -21,12 +21,17 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
     private var pendingUpdate: ((Int) -> Void)?
     private var lastViewport = CGSize.zero
     override func loadView() { view = UIView(); view.backgroundColor = .black }
+    /// Guided view: the next or previous panel on the page showing now. False means turn the page.
+    func stepPanel(forward: Bool) -> Bool {
+        guard !turning, let displayed = pager?.viewControllers?.first as? PageCanvasController else { return false }
+        return displayed.stepPanel(forward: forward)
+    }
     func configure(pages: [MangaPage], groups: [PageGroup], chapter: Chapter, pipeline: ImagePipeline,
                    preferences: ReaderPreferences, page: Int, changed: @escaping (Int) -> Void,
                    tap: @escaping (CGFloat) -> Void, dimensions: @escaping (Int, Double) -> Void) {
         loadViewIfNeeded()
         self.changed = changed; tapped = tap; self.dimensions = dimensions
-        let key = "\(chapter.id)|\(preferences.mode)|\(preferences.transition)|\(preferences.direction)|\(preferences.advanceOnLeftSwipe)|\(preferences.fit)|\(preferences.doubleTapZoom)|\(preferences.trimMargins ?? true)|\(preferences.quality?.rawValue ?? "auto")|\(preferences.verticalGap ?? false)|\(preferences.enhance ?? false)|\(groups.map(\.indices))"
+        let key = "\(chapter.id)|\(preferences.mode)|\(preferences.transition)|\(preferences.direction)|\(preferences.advanceOnLeftSwipe)|\(preferences.fit)|\(preferences.doubleTapZoom)|\(preferences.trimMargins ?? true)|\(preferences.quality?.rawValue ?? "auto")|\(preferences.verticalGap ?? false)|\(preferences.enhance ?? false)|\(preferences.guided ?? false)|\(groups.map(\.indices))"
         // Freeze the presented data source until UIKit completes the interactive turn.
         // A late image size or a resize can otherwise change group indices mid-gesture.
         if turning {

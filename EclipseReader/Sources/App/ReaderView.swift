@@ -243,6 +243,16 @@ struct ReaderView: View {
                 .sheet(item: $translator.editing) { block in TranslationEditor(model: translator, block: block) }
                 .translationRunner(translator)
                 .onChange(of: chapter.id) { _, _ in translator.clear(); autoScrolling = false }
+                // Raw series you pinned translate on their own, chapter after chapter.
+                .task(id: chapter.id) {
+                    let id = library.seriesID(for: chapter)
+                    translator.seriesID = id
+                    translator.always = TranslateModel.isAlways(id)
+                    if translator.always && !translator.active {
+                        translator.targetCode = library.preferences.translateTarget ?? "en"
+                        translator.active = true; scanNonce += 1
+                    }
+                }
                 .onChange(of: autoSpeed) { _, speed in
                     // New speed applies straight away while gliding.
                     if autoScrolling, let reader = handle.controller as? ReaderContainerController {
@@ -357,6 +367,11 @@ struct ReaderView: View {
                 if effective.mode == .paged {
                     Button { toggleTrim() } label: { quickLabel("crop", "Crop", on: effective.trimMargins ?? true) }
                         .accessibilityLabel("Trim page margins")
+                    Button {
+                        library.preferences.guided = !(library.preferences.guided ?? false)
+                        flash((library.preferences.guided ?? false) ? "Guided view: tap the edges to go panel by panel" : "Guided view off")
+                    } label: { quickLabel("square.grid.3x1.below.line.grid.1x2", "Panels", on: library.preferences.guided ?? false) }
+                        .accessibilityLabel("Guided view, panel by panel")
                 } else {
                     Menu {
                         Picker("Speed", selection: $autoSpeed) {
@@ -518,6 +533,9 @@ struct ReaderView: View {
     }
     private func move(_ delta: Int, groups: [PageGroup]) {
         guard !groups.isEmpty else { return }
+        // Guided view goes panel by panel, and turns the page after the last one.
+        if effective.mode == .paged && (effective.guided ?? false),
+           let reader = handle.controller as? ReaderContainerController, reader.stepPanel(forward: delta > 0) { return }
         if effective.mode == .vertical {
             if page + delta >= pages.count { end = true }
             else { page = max(0, page + delta) }
