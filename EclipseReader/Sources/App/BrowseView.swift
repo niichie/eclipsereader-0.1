@@ -673,3 +673,23 @@ private struct AddPreviewSheet: View {
         .preferredColorScheme(.dark)
     }
 }
+
+/// A series opened from Browse: its page in a sheet, with the reader on top.
+struct SeriesSheet: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let series: MangaSeries
+    @State private var reader: Chapter?
+    var body: some View {
+        NavigationStack {
+            SeriesView(seriesID: series.id, reader: $reader)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") { dismiss() }.fontWeight(.semibold)
+                    }
+                }
+        }
+        .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+        .preferredColorScheme(.dark)
+    }
+}
