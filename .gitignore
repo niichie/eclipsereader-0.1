@@ -1,0 +1,4 @@
+EclipseReader/build/
+EclipseReader/.build/
+EclipseReader/*.xcodeproj
+.DS_Store

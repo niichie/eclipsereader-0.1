@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-20",
+  "method": "Saved HTTP 200 HTML responses; portable HTMLParser audit",
+  "swift_adapter_executed": false,
+  "catalog_chapters": 405,
+  "first_story_chapter": "Berserk Chapter A0",
+  "last_story_chapter": "Berserk Chapter 386",
+  "chapter_384_pages": 25,
+  "image_host": "cdn.readberserk.com",
+  "page_loading": "first three eager, subsequent pages lazy",
+  "response_hashes": {
+    "index": "788aa2a6a433a81342e455cc1e38b62b94507492c36031d8d2e9f58be7b59998",
+    "chapter384": "9a08a54a26bebaac0f43c5ca85623ab3896ff37196626a6c3c86986361539ee0"
+  },
+  "ios_build": "not run",
+  "simulator_tests": "not run",
+  "physical_device_tests": "not run"
+}

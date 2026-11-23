@@ -1,0 +1,63 @@
+workflows:
+  eclipsereader-unsigned-ipa:
+    name: eclipsereader unsigned IPA
+    max_build_duration: 60
+    environment:
+      # The iPhone Duo only runs apps full-screen and resizable when they are built with the iOS 27 SDK.
+      # Older SDKs get the letterboxed compatibility window with the zoom and rotate buttons.
+      xcode: "27.2"
+    scripts:
+      - name: Unpack source into a clean folder
+        script: |
+          set -e
+          # Build only from eclipsereader-source.zip, so leftover loose files in the repo never matter.
+          rm -rf /tmp/eclipse && mkdir -p /tmp/eclipse/unzip /tmp/eclipse/src
+          ZIP=$(ls -t "$CM_BUILD_DIR"/*.zip 2>/dev/null | head -1 || true)
+          if [ -n "$ZIP" ]; then
+            echo "Using $ZIP"
+            unzip -q -o "$ZIP" -d /tmp/eclipse/unzip
+            PROJECT=$(find /tmp/eclipse/unzip -maxdepth 3 -name project.json | head -1)
+            cp -R "$(dirname "$PROJECT")"/. /tmp/eclipse/src/
+          else
+            echo "No zip found; using the repository files"
+            cp -R "$CM_BUILD_DIR"/. /tmp/eclipse/src/
+          fi
+          cd /tmp/eclipse/src
+          echo "--- project files ---"
+          find . -name "*.swift" | sort
+          test -f Sources/Core/Models.swift || { echo "Sources/Core/Models.swift is missing from the source"; exit 1; }
+      - name: Core tests (page order, spreads, link detection)
+        ignore_failure: true
+        script: |
+          cd /tmp/eclipse/src
+          swift test
+      - name: Generate Xcode project
+        script: |
+          set -e
+          cd /tmp/eclipse/src
+          brew install xcodegen || true
+          xcodegen generate --spec project.json
+      - name: Build unsigned app
+        script: |
+          set -e
+          cd /tmp/eclipse/src
+          xcodebuild build -project EclipseReader.xcodeproj -scheme EclipseReader \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DeviceData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''
+      - name: Package IPA
+        script: |
+          set -e
+          cd /tmp/eclipse/src
+          APP='build/DeviceData/Build/Products/Release-iphoneos/EclipseReader.app'
+          SDK=$(/usr/libexec/PlistBuddy -c 'Print DTSDKName' "$APP/Info.plist")
+          echo "Built with $SDK"
+          MAJOR=$(echo "$SDK" | sed 's/iphoneos//' | cut -d. -f1)
+          if [ "$MAJOR" -lt 27 ]; then echo "Built with $SDK: the iPhone Duo would show it in compatibility mode. Use Xcode 27 or later."; exit 1; fi
+          python3 scripts/package_ipa.py "$APP" build/EclipseReader-unsigned.ipa
+          mkdir -p "$CM_BUILD_DIR/output"
+          cp build/EclipseReader-unsigned.ipa "$CM_BUILD_DIR/output/"
+          shasum -a 256 "$CM_BUILD_DIR/output/EclipseReader-unsigned.ipa" > "$CM_BUILD_DIR/output/EclipseReader-unsigned.ipa.sha256"
+    artifacts:
+      - output/EclipseReader-unsigned.ipa
+      - output/EclipseReader-unsigned.ipa.sha256

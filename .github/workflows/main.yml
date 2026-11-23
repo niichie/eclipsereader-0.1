@@ -7,9 +7,10 @@ permissions:
 concurrency:
   group: ios-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   build:
-    # Same macOS image the earlier working builds used (Xcode 27.x, iOS 27 SDK).
+    # Xcode 27 / iOS 27 SDK: required so the iPhone Duo runs the app full-screen.
     runs-on: xcode-27
     timeout-minutes: 60
     steps:
@@ -21,45 +22,33 @@ jobs:
           XCODE=$(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode_28*.app 2>/dev/null | sort -V | tail -1 || true)
           if [ -z "$XCODE" ]; then echo "No Xcode 27 on this runner:"; ls -d /Applications/Xcode*; exit 1; fi
           echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
-          echo "Using $XCODE"
-
-      - name: Unpack source into a clean folder
-        run: |
-          set -euo pipefail
-          rm -rf /tmp/eclipse && mkdir -p /tmp/eclipse/unzip /tmp/eclipse/src
-          ZIP=$(ls *.zip 2>/dev/null | head -1 || true)
-          if [ -z "$ZIP" ]; then echo "Upload eclipsereader-source.zip to the top of the repo."; exit 1; fi
-          unzip -q -o "$ZIP" -d /tmp/eclipse/unzip
-          PROJECT=$(find /tmp/eclipse/unzip -maxdepth 3 -name project.json | head -1)
-          cp -R "$(dirname "$PROJECT")"/. /tmp/eclipse/src/
-          test -f /tmp/eclipse/src/Sources/Core/Models.swift
           xcodebuild -version
 
-      - name: Core tests (informational)
-        continue-on-error: true
-        working-directory: /tmp/eclipse/src
-        run: swift test
+      - name: Core tests
+        working-directory: EclipseReader
+        run: swift test 2>&1 | tail -40
 
       - name: Generate Xcode project
-        working-directory: /tmp/eclipse/src
+        working-directory: EclipseReader
         run: |
           set -euo pipefail
           if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
           xcodegen generate --spec project.json
 
       - name: Build unsigned app
-        working-directory: /tmp/eclipse/src
+        working-directory: EclipseReader
         run: |
           set -euo pipefail
           xcodebuild build -project EclipseReader.xcodeproj -scheme EclipseReader \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build/DeviceData \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1 \
-            || { echo "::error::Build failed. Errors:"; grep -E "error:" build.log | sort -u | head -60; exit 1; }
+            || { echo "::error::Build failed. Errors:"; grep -E "error:" build.log | sort -u | head -80; exit 1; }
+          grep -E "warning:" build.log | grep -v "appintents" | sort -u | head -40 || true
           echo "BUILD SUCCEEDED"
 
-      - name: Package IPA (must be iOS 27 SDK so the Duo runs it full-screen)
-        working-directory: /tmp/eclipse/src
+      - name: Package IPA
+        working-directory: EclipseReader
         run: |
           set -euo pipefail
           APP='build/DeviceData/Build/Products/Release-iphoneos/EclipseReader.app'
@@ -82,5 +71,85 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: /tmp/eclipse/src/build.log
+          path: EclipseReader/build.log
           if-no-files-found: ignore
+
+  screens:
+    # Photographs every screen on small/large iPhone, iPad, iPad mini and the Duo, portrait and landscape.
+    runs-on: xcode-27
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick Xcode 27 or newer
+        run: |
+          set -euo pipefail
+          XCODE=$(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode_28*.app 2>/dev/null | sort -V | tail -1 || true)
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+
+      - name: Generate Xcode project
+        working-directory: EclipseReader
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
+          xcodegen generate --spec project.json
+
+      - name: Choose simulators
+        working-directory: EclipseReader
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available -j > /tmp/devices.json
+          python3 scripts/pick_simulators.py /tmp/devices.json | tee /tmp/sims.txt
+          test -s /tmp/sims.txt
+
+      - name: Build for testing
+        working-directory: EclipseReader
+        run: |
+          set -euo pipefail
+          UDID=$(head -1 /tmp/sims.txt | cut -d'|' -f2)
+          xcodebuild build-for-testing -project EclipseReader.xcodeproj -scheme EclipseReader \
+            -destination "id=$UDID" -derivedDataPath build/TestData > test-build.log 2>&1 \
+            || { echo "::error::Test build failed"; grep -E "error:" test-build.log | sort -u | head -60; exit 1; }
+
+      - name: Screen tour on each device
+        working-directory: EclipseReader
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/shots
+          STATUS=0
+          while IFS='|' read -r KEY UDID NAME; do
+            echo "::group::$KEY ($NAME)"
+            xcrun simctl boot "$UDID" || true
+            xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --wifiBars 3 || true
+            xcodebuild test-without-building -project EclipseReader.xcodeproj -scheme EclipseReader \
+              -destination "id=$UDID" -derivedDataPath build/TestData \
+              -only-testing:EclipseReaderUITests/ScreenTourUITests \
+              -resultBundlePath "/tmp/results/$KEY.xcresult" > "/tmp/shots/$KEY-test.log" 2>&1 || { STATUS=1; tail -60 "/tmp/shots/$KEY-test.log"; }
+            mkdir -p "/tmp/shots/$KEY"
+            xcrun xcresulttool export attachments --path "/tmp/results/$KEY.xcresult" --output-path "/tmp/shots/$KEY" || true
+            # Name files after their attachment titles.
+            if [ -f "/tmp/shots/$KEY/manifest.json" ]; then
+              python3 - "/tmp/shots/$KEY" <<'PY'
+          import json, os, re, sys
+          root = sys.argv[1]
+          for test in json.load(open(os.path.join(root, "manifest.json"))):
+              for a in test.get("attachments", []):
+                  name = re.sub(r"[^A-Za-z0-9._ -]+", "", a.get("suggestedHumanReadableName", a["exportedFileName"]))
+                  src = os.path.join(root, a["exportedFileName"])
+                  if os.path.exists(src):
+                      os.replace(src, os.path.join(root, name))
+          PY
+            fi
+            xcrun simctl shutdown "$UDID" || true
+            echo "::endgroup::"
+          done < /tmp/sims.txt
+          ls -R /tmp/shots | head -200
+          exit $STATUS
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: /tmp/shots
+          if-no-files-found: warn

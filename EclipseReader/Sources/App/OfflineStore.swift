@@ -1,0 +1,117 @@
+import Foundation
+import CryptoKit
+
+/// Downloaded chapters and custom covers. Lives in Application Support, so iOS does not purge it
+/// the way it can purge caches. Pages are stored exactly as the website served them (no recompression).
+actor OfflineStore {
+    static let shared = OfflineStore()
+
+    struct Manifest: Codable, Sendable {
+        var chapterID: String
+        var title: String
+        var files: [String]
+        var bytes: Int64
+        var date: Date
+    }
+
+    private var manifests: [String: Manifest] = [:]   // keyed by chapter id
+    private var loaded = false
+    private var root: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("EclipseReader/Downloads", isDirectory: true)
+    }
+    private var coverRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("EclipseReader/Covers", isDirectory: true)
+    }
+
+    static func key(_ chapterID: String) -> String {
+        SHA256.hash(data: Data(chapterID.utf8)).map { String(format: "%02x", $0) }.joined().prefix(32).lowercased()
+    }
+
+    private func loadIfNeeded() {
+        guard !loaded else { return }
+        loaded = true
+        guard let dirs = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
+        for dir in dirs {
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent("chapter.json")),
+                  let manifest = try? JSONDecoder().decode(Manifest.self, from: data) else {
+                // An interrupted download leaves no manifest: clean it up.
+                try? FileManager.default.removeItem(at: dir)
+                continue
+            }
+            manifests[manifest.chapterID] = manifest
+        }
+    }
+
+    func downloadedIDs() -> Set<String> { loadIfNeeded(); return Set(manifests.keys) }
+    func totalBytes() -> Int64 { loadIfNeeded(); return manifests.values.reduce(0) { $0 + $1.bytes } }
+
+    /// Pages of a downloaded chapter, served from disk. nil when the chapter is not downloaded.
+    func pages(for chapter: Chapter) -> [MangaPage]? {
+        loadIfNeeded()
+        guard let manifest = manifests[chapter.id], !manifest.files.isEmpty else { return nil }
+        let key = Self.key(chapter.id)
+        return manifest.files.indices.map { MangaPage(url: URL(string: "eclipselib://offline/\(key)/\($0)")!, label: "Page \($0 + 1)") }
+    }
+
+    func begin(_ chapterID: String) throws {
+        let dir = root.appendingPathComponent(Self.key(chapterID), isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var rootURL = root
+        try? rootURL.setResourceValues(values)
+    }
+    func write(_ chapterID: String, index: Int, data: Data) throws -> String {
+        let name = String(format: "%04d.page", index)
+        try data.write(to: root.appendingPathComponent(Self.key(chapterID)).appendingPathComponent(name), options: .atomic)
+        return name
+    }
+    func finish(_ chapterID: String, title: String, files: [String]) throws {
+        loadIfNeeded()
+        let dir = root.appendingPathComponent(Self.key(chapterID), isDirectory: true)
+        let bytes = files.reduce(Int64(0)) { sum, name in
+            sum + Int64((try? dir.appendingPathComponent(name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        let manifest = Manifest(chapterID: chapterID, title: title, files: files, bytes: bytes, date: Date())
+        try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("chapter.json"), options: .atomic)
+        manifests[chapterID] = manifest
+    }
+    func remove(_ chapterID: String) {
+        loadIfNeeded()
+        manifests[chapterID] = nil
+        try? FileManager.default.removeItem(at: root.appendingPathComponent(Self.key(chapterID)))
+    }
+    func removeAll() {
+        manifests = [:]
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    /// Saves a cover picked from Photos and returns the address the image pipeline reads it from.
+    func saveCover(_ data: Data, seriesID: String) throws -> URL {
+        try FileManager.default.createDirectory(at: coverRoot, withIntermediateDirectories: true)
+        let name = Self.key(seriesID) + "-" + String(Int(Date().timeIntervalSince1970)) + ".img"
+        try data.write(to: coverRoot.appendingPathComponent(name), options: .atomic)
+        return URL(string: "eclipselib://cover/\(name)")!
+    }
+
+    /// Reads eclipselib://offline/<key>/<index> and eclipselib://cover/<file>.
+    func data(_ url: URL) throws -> Data {
+        let parts = url.pathComponents.filter { $0 != "/" }
+        switch url.host {
+        case "offline":
+            guard parts.count == 2, parts[0].count == 32, parts[0].allSatisfy(\.isHexDigit), let index = Int(parts[1]) else {
+                throw SourceError.invalidImage
+            }
+            let file = root.appendingPathComponent(parts[0]).appendingPathComponent(String(format: "%04d.page", index))
+            return try Data(contentsOf: file, options: .mappedIfSafe)
+        case "cover":
+            guard parts.count == 1, !parts[0].contains(".."), parts[0].hasSuffix(".img") else { throw SourceError.invalidImage }
+            return try Data(contentsOf: coverRoot.appendingPathComponent(parts[0]))
+        default:
+            throw SourceError.invalidImage
+        }
+    }
+}

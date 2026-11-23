@@ -1,0 +1,299 @@
+import UIKit
+import ImageIO
+
+private struct DecodedImage: @unchecked Sendable {
+    let image: UIImage
+    let ratio: Double
+}
+/// Picks how many pixels to decode per page for this device: its screen's real pixel size,
+/// headroom for zooming, its memory, and Low Power Mode.
+@MainActor
+enum DisplayQuality {
+    static func longSide(_ quality: ImageQuality) -> Double {
+        let screen = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.nativeBounds.size
+            ?? CGSize(width: 1290, height: 2796)
+        let long = Double(max(screen.width, screen.height))
+        let roomy = ProcessInfo.processInfo.physicalMemory >= 7_500_000_000
+        switch quality {
+        case .dataSaver:
+            return min(max(long, 1600), 2560)
+        case .maximum:
+            return roomy ? 8192 : 6144
+        case .automatic:
+            var factor = roomy ? 2.0 : 1.5          // room to zoom in before detail runs out
+            if ProcessInfo.processInfo.isLowPowerModeEnabled { factor = 1.2 }
+            return min(max(long * factor, 2048), roomy ? 6144 : 4096)
+        }
+    }
+}
+
+private enum PageDecoder {
+    /// Normal pages decode to the device's quality limit on the long side. Webtoon strips (tall and
+    /// narrow) keep their full width so text stays sharp, up to 16384 px tall.
+    static func maxPixels(width: Double, height: Double, limit: Double = 4096) -> Double {
+        let long = max(width, height)
+        if height > width * 2.5 && width <= 1600 { return min(long, 16384) }
+        return min(long, limit)
+    }
+    static func decode(_ data: Data, trim: Bool = true, limit: Double = 4096) throws -> DecodedImage {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Double,
+              let height = properties[kCGImagePropertyPixelHeight] as? Double,
+              width > 0, height > 0, width * height <= 40_000_000,
+              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0,
+                [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                 kCGImageSourceCreateThumbnailWithTransform: true,
+                 kCGImageSourceShouldCacheImmediately: true,
+                 kCGImageSourceThumbnailMaxPixelSize: maxPixels(width: width, height: height, limit: limit)] as CFDictionary)
+        else { throw SourceError.invalidImage }
+        let final = trim ? (cropMargins(cg) ?? cg) : cg
+        return DecodedImage(image: UIImage(cgImage: final), ratio: Double(final.width) / Double(final.height))
+    }
+    /// Removes plain white or black scan margins (the bars beside single pages).
+    /// Conservative: an edge row/column is trimmed only when ~98% of it is blank,
+    /// and never more than 15% per side, so artwork is not cut.
+    static func cropMargins(_ image: CGImage) -> CGImage? {
+        let w = image.width, h = image.height
+        guard w > 32, h > 32 else { return nil }
+        let scale = min(1, 400.0 / Double(max(w, h)))
+        let sw = max(1, Int(Double(w) * scale)), sh = max(1, Int(Double(h) * scale))
+        var pixels = [UInt8](repeating: 0, count: sw * sh)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: sw, height: sh, bitsPerComponent: 8, bytesPerRow: sw,
+                                      space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+            ctx.interpolationQuality = .low
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: sw, height: sh))
+            return true
+        }
+        guard drawn else { return nil }
+        // Row 0 of the buffer is the top of the image.
+        func blank(_ values: [UInt8], white: Bool) -> Bool {
+            let hits = values.reduce(0) { $0 + ((white ? $1 >= 225 : $1 <= 30) ? 1 : 0) }
+            return Double(hits) >= Double(values.count) * 0.98
+        }
+        func column(_ x: Int) -> [UInt8] { (0..<sh).map { pixels[$0 * sw + x] } }
+        func row(_ y: Int) -> [UInt8] { Array(pixels[(y * sw)..<(y * sw + sw)]) }
+        func edge(count: Int, line: (Int) -> [UInt8], reversed: Bool) -> Int {
+            let limit = Int(Double(count) * 0.15)
+            var best = 0
+            for white in [true, false] {
+                var n = 0
+                while n < limit, blank(line(reversed ? count - 1 - n : n), white: white) { n += 1 }
+                best = max(best, n)
+            }
+            return best
+        }
+        let left = edge(count: sw, line: column, reversed: false)
+        let right = edge(count: sw, line: column, reversed: true)
+        let top = edge(count: sh, line: row, reversed: false)
+        let bottom = edge(count: sh, line: row, reversed: true)
+        guard left + right + top + bottom > 0 else { return nil }
+        let fx = Double(w) / Double(sw), fy = Double(h) / Double(sh)
+        let rect = CGRect(x: Double(left) * fx, y: Double(top) * fy,
+                          width: Double(sw - left - right) * fx, height: Double(sh - top - bottom) * fy).integral
+            .intersection(CGRect(x: 0, y: 0, width: w, height: h))
+        guard rect.width > Double(w) * 0.6, rect.height > Double(h) * 0.6 else { return nil }
+        return image.cropping(to: rect)
+    }
+}
+
+@MainActor
+final class ZoomPageView: UIView, UIScrollViewDelegate {
+    let scroll = UIScrollView()
+    private let imageView = UIImageView()
+    private let spinner = UIActivityIndicatorView(style: .large)
+    private let retry = UIButton(type: .system)
+    private let message = UILabel()
+    private var work: Task<Void, Never>?
+    private var lastSize = CGSize.zero
+    private var baseScale: CGFloat = 1
+    private var preference = ReaderPreferences()
+    private var start: (() -> Void)?
+    enum Alignment { case center, leftEdge, rightEdge }
+    var alignment: Alignment = .center
+    var tapped: (() -> Void)?
+    /// Part of a continuous vertical strip: pinned to the top, sub-pixel overflow ignored.
+    var seamless = false
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        scroll.delegate = self; scroll.backgroundColor = .black
+        scroll.showsVerticalScrollIndicator = false; scroll.showsHorizontalScrollIndicator = false
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.bouncesZoom = true; scroll.alwaysBounceHorizontal = false; scroll.alwaysBounceVertical = false; scroll.isDirectionalLockEnabled = true
+        imageView.contentMode = .scaleAspectFit
+        // Smooth downscaling (mipmapped) keeps screentones and crosshatching free of shimmering moiré.
+        imageView.layer.minificationFilter = .trilinear
+        imageView.layer.magnificationFilter = .linear
+        addSubview(scroll); scroll.addSubview(imageView)
+        addSubview(spinner); addSubview(message); addSubview(retry)
+        message.textColor = .lightGray; message.font = .preferredFont(forTextStyle: .subheadline)
+        message.numberOfLines = 0; message.textAlignment = .center
+        retry.setTitle("Retry page", for: .normal); retry.tintColor = .white
+        retry.addTarget(self, action: #selector(retryPage), for: .touchUpInside)
+        retry.isHidden = true
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(zoom(_:)))
+        doubleTap.numberOfTapsRequired = 2; scroll.addGestureRecognizer(doubleTap)
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
+        singleTap.require(toFail: doubleTap); scroll.addGestureRecognizer(singleTap)
+        scroll.accessibilityLabel = "Manga page. Pinch or double tap to zoom."
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unsupported") }
+    deinit { work?.cancel() }
+    func configure(page: MangaPage, index: Int, chapter: Chapter, pipeline: ImagePipeline,
+                   preferences: ReaderPreferences, loaded: @escaping (Int, Double) -> Void) {
+        preference = preferences
+        imageView.accessibilityIdentifier = "art-\(index)"
+        imageView.accessibilityLabel = page.label; imageView.isAccessibilityElement = false
+        start = { [weak self] in
+            guard let self else { return }
+            work?.cancel(); imageView.image = nil; imageView.isAccessibilityElement = false; message.text = nil; retry.isHidden = true; spinner.startAnimating()
+            let trim = preferences.trimMargins ?? true
+            let limit = DisplayQuality.longSide(preferences.quality ?? .automatic)
+            work = Task { [weak self] in
+                do {
+                    let data = try await pipeline.data(for: page, chapter: chapter)
+                    try Task.checkCancellation()
+                    let decoded = try await Task.detached(priority: .userInitiated) { [trim, limit] in try PageDecoder.decode(data, trim: trim, limit: limit) }.value
+                    try Task.checkCancellation()
+                    guard let self else { return }
+                    spinner.stopAnimating(); imageView.image = decoded.image
+                    resetFit(); loaded(index, decoded.ratio)
+                } catch is CancellationError { }
+                catch let e as URLError where e.code == .cancelled { }
+                catch {
+                    guard let self, !Task.isCancelled else { return }
+                    if error as? SourceError == .invalidImage { await pipeline.cache.remove(page.url) }
+                    spinner.stopAnimating(); message.text = error.localizedDescription
+                    retry.isHidden = false
+                }
+            }
+        }
+        start?()
+    }
+    func cancel() { work?.cancel(); work = nil; start = nil; imageView.image = nil }
+    func suspend() { work?.cancel(); work = nil; imageView.image = nil }
+    func resume() { if imageView.image == nil && work == nil { start?() } }
+    func updatePreferences(_ preferences: ReaderPreferences) {
+        let changedFit = preference.fit != preferences.fit
+        let changedTrim = (preference.trimMargins ?? true) != (preferences.trimMargins ?? true)
+        preference = preferences
+        if changedTrim { start?() } else if changedFit { resetFit() }
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        scroll.frame = bounds
+        spinner.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        message.frame = CGRect(x: 16, y: bounds.midY - 70, width: max(0, bounds.width - 32), height: 110)
+        retry.frame = CGRect(x: 16, y: bounds.midY + 45, width: max(0, bounds.width - 32), height: 50)
+        if lastSize != bounds.size { lastSize = bounds.size; resetFit() }
+    }
+    private func resetFit() {
+        guard let image = imageView.image, bounds.width > 0, bounds.height > 0 else { return }
+        scroll.minimumZoomScale = 0.001; scroll.maximumZoomScale = 8
+        scroll.zoomScale = 1
+        imageView.frame = CGRect(origin: .zero, size: image.size); scroll.contentSize = image.size
+        let width = bounds.width / image.size.width
+        let height = bounds.height / image.size.height
+        baseScale = preference.fit == .width ? width : min(width, height)
+        scroll.minimumZoomScale = baseScale
+        scroll.maximumZoomScale = max(baseScale * 6, 2)
+        scroll.setZoomScale(baseScale, animated: false)
+        centerImage()
+        imageView.isAccessibilityElement = true
+        scroll.contentOffset = .zero
+    }
+    private func centerImage() {
+        // Center by positioning the image view itself. contentInset/contentOffset
+        // centering was clamped by UIScrollView and left pages stranded at an edge.
+        scroll.contentInset = .zero
+        let size = imageView.frame.size
+        let spareX = max(0, bounds.width - size.width)
+        let x: CGFloat
+        switch alignment {
+        case .center: x = spareX * 0.5
+        case .leftEdge: x = 0
+        case .rightEdge: x = spareX
+        }
+        imageView.frame.origin = CGPoint(x: x, y: seamless ? 0 : max(0, bounds.height - size.height) * 0.5)
+        let slack: CGFloat = seamless ? 2 : 0.5
+        scroll.panGestureRecognizer.isEnabled = size.width > bounds.width + slack || size.height > bounds.height + slack
+    }
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
+    @objc private func retryPage() { start?() }
+    @objc private func toggleControls() { tapped?() }
+    @objc private func zoom(_ recognizer: UITapGestureRecognizer) {
+        guard imageView.image != nil else { return }
+        if scroll.zoomScale > baseScale * 1.05 { scroll.setZoomScale(baseScale, animated: !UIAccessibility.isReduceMotionEnabled) }
+        else {
+            let scale = min(scroll.maximumZoomScale, baseScale * preference.doubleTapZoom)
+            let point = recognizer.location(in: imageView)
+            let size = CGSize(width: bounds.width / scale, height: bounds.height / scale)
+            scroll.zoom(to: CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2, width: size.width, height: size.height),
+                        animated: !UIAccessibility.isReduceMotionEnabled)
+        }
+    }
+}
+
+@MainActor
+final class PageCanvasController: UIViewController {
+    let groupIndex: Int
+    let group: PageGroup
+    private var canvases: [ZoomPageView] = []
+    private let pages: [MangaPage]
+    private let chapter: Chapter
+    private let pipeline: ImagePipeline
+    private let preferences: ReaderPreferences
+    private let tapped: () -> Void
+    private let dimensions: (Int, Double) -> Void
+    init(groupIndex: Int, group: PageGroup, pages: [MangaPage], chapter: Chapter,
+         pipeline: ImagePipeline, preferences: ReaderPreferences, tap: @escaping () -> Void,
+         dimensions: @escaping (Int, Double) -> Void) {
+        self.groupIndex = groupIndex; self.group = group; self.pages = pages; self.chapter = chapter
+        self.pipeline = pipeline; self.preferences = preferences; tapped = tap; self.dimensions = dimensions
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unsupported") }
+    private var ratios: [Double] = []
+    override func loadView() {
+        view = UIView(); view.backgroundColor = .black
+        let order = group.displayOrder(preferences.direction)
+        for (slot, index) in order.enumerated() {
+            let canvas = ZoomPageView(frame: .zero); canvas.alignment = .center
+            canvas.tapped = tapped; view.addSubview(canvas); canvases.append(canvas)
+            let page = pages[index]
+            if let w = page.width, let h = page.height, w > 0, h > 0 { ratios.append(w / h) } else { ratios.append(0.707) }
+            canvas.configure(page: page, index: index, chapter: chapter, pipeline: pipeline, preferences: preferences) { [weak self] i, ratio in
+                guard let self else { return }
+                if abs(self.ratios[slot] - ratio) > 0.001 { self.ratios[slot] = ratio; self.view.setNeedsLayout() }
+                self.dimensions(i, ratio)
+            }
+        }
+    }
+    // Facing pages are laid out as one book-like unit: both pages share a height,
+    // sit flush at the spine, and the pair is centered in the viewport. This keeps
+    // pages from being stranded at the screen edges with a black gap in between.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let bounds = view.bounds
+        guard bounds.width > 0, bounds.height > 0, !canvases.isEmpty else { return }
+        if canvases.count == 1 { canvases[0].frame = bounds; return }
+        let total = ratios.reduce(0, +)
+        let height = min(bounds.height, bounds.width / max(0.01, total))
+        var x = (bounds.width - height * total) / 2
+        let y = (bounds.height - height) / 2
+        for (canvas, ratio) in zip(canvases, ratios) {
+            let width = height * ratio
+            canvas.frame = CGRect(x: x, y: y, width: width, height: height).integral
+            x += width
+        }
+    }
+    func releaseImages() { canvases.forEach { $0.suspend() } }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated); canvases.forEach { $0.resume() }
+    }
+    // UIKit may reuse this canvas immediately during a reverse turn. Its decoded
+    // image lives with the controller and can be reclaimed under memory pressure.
+}

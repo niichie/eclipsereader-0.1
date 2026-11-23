@@ -1,0 +1,1020 @@
+import SwiftUI
+import WebKit
+import UniformTypeIdentifiers
+import ImageIO
+import PhotosUI
+
+struct RootView: View {
+    @EnvironmentObject private var model: LibraryModel
+    var body: some View {
+        TabView {
+            LibraryView().tabItem { Label("Library", systemImage: "books.vertical.fill") }
+            BrowseView().tabItem { Label("Browse", systemImage: "safari") }
+            UpdatesView().tabItem { Label("Updates", systemImage: "sparkles") }
+                .badge(model.totalNew)
+            HistoryView().tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
+            SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }
+        }
+    }
+}
+
+enum LibraryFilter: String, CaseIterable, Identifiable {
+    case all, new, reading, downloaded, manga, manhwa, comic, files
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: "All"
+        case .new: "New chapters"
+        case .reading: "Reading"
+        case .downloaded: "Downloaded"
+        case .manga: "Manga"
+        case .manhwa: "Manhwa"
+        case .comic: "Comics"
+        case .files: "On device"
+        }
+    }
+}
+enum LibrarySort: String, CaseIterable, Identifiable {
+    case recent, title, added
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .recent: "Recently read"
+        case .title: "Title"
+        case .added: "Recently added"
+        }
+    }
+}
+
+struct LibraryView: View {
+    @EnvironmentObject private var model: LibraryModel
+    @State private var reader: Chapter?
+    @State private var website = false
+    @State private var addLink = false
+    @State private var openSeries: MangaSeries?
+    @State private var query = ""
+    @State private var filter: LibraryFilter = .all
+    @AppStorage("librarySort") private var sortRaw = LibrarySort.recent.rawValue
+
+    private var sort: LibrarySort { LibrarySort(rawValue: sortRaw) ?? .recent }
+    private var visible: [MangaSeries] {
+        let list = model.librarySeries.filter { series in
+            let matches = query.isEmpty || series.title.localizedCaseInsensitiveContains(query)
+            let kind: Bool = {
+                switch filter {
+                case .all: true
+                case .new: model.newCount(series) > 0
+                case .downloaded: model.downloadedCount(series) > 0 || series.kind == .local
+                case .reading: model.lastRead(series) != nil && model.readCount(series) < series.chapters.count
+                case .manga: model.style(for: series.id) == .manga
+                case .manhwa: model.style(for: series.id) == .manhwa
+                case .comic: model.style(for: series.id) == .comic
+                case .files: series.kind == .local
+                }
+            }()
+            return matches && kind
+        }
+        switch sort {
+        case .title: return list.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .added: return list.sorted { $0.added > $1.added }
+        case .recent:
+            return list.sorted { a, b in
+                let x = model.lastRead(a) ?? .distantPast, y = model.lastRead(b) ?? .distantPast
+                return x == y ? a.added > b.added : x > y
+            }
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    LibraryHeader(query: $query, addLink: $addLink, website: $website)
+                    if query.isEmpty { LibraryGreeting() }
+                    if query.isEmpty, let chapter = model.lastChapter {
+                        ContinueHero(chapter: chapter, resume: { reader = chapter },
+                                     open: { openSeries = model.series(id: model.seriesID(for: chapter)) })
+                    }
+                    if query.isEmpty && model.totalNew > 0 {
+                        Button { withAnimation(.snappy) { filter = .new } } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "sparkles").font(.title3).foregroundStyle(Eclipse.highlight)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(model.totalNew) new chapter\(model.totalNew == 1 ? "" : "s")").font(.headline)
+                                    Text("Tap to see which series updated").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                            }.padding(16)
+                            .background(LinearGradient(colors: [Eclipse.accent.opacity(0.55), Eclipse.surface], startPoint: .leading, endPoint: .trailing),
+                                        in: RoundedRectangle(cornerRadius: 18))
+                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Eclipse.accent.opacity(0.35)))
+                        }.buttonStyle(.plain)
+                    }
+                    if query.isEmpty { RecentStrip(reader: $reader) }
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text("Library").font(.title2.weight(.bold))
+                            Spacer()
+                            Menu {
+                                Picker("Sort", selection: $sortRaw) {
+                                    ForEach(LibrarySort.allCases) { Text($0.title).tag($0.rawValue) }
+                                }
+                            } label: { Label(sort.title, systemImage: "arrow.up.arrow.down").font(.subheadline) }
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(LibraryFilter.allCases) { item in
+                                    Button { withAnimation(.snappy) { filter = item } } label: {
+                                        Text(item.title).font(.subheadline.weight(.semibold))
+                                            .padding(.horizontal, 14).padding(.vertical, 8)
+                                            .foregroundStyle(filter == item ? Color.white : Color.primary)
+                                            .background(filter == item ? AnyShapeStyle(Eclipse.accent) : AnyShapeStyle(Eclipse.surfaceHigh), in: Capsule())
+                                            .overlay(Capsule().strokeBorder(Eclipse.hairline))
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        LibraryGrid(series: visible, reader: $reader, openSeries: $openSeries)
+                        if visible.isEmpty {
+                            ContentUnavailableView {
+                                Label(query.isEmpty ? "Nothing here yet" : "No matches", systemImage: "books.vertical")
+                            } description: {
+                                Text(query.isEmpty ? "Add a manga or manhwa from a link, or import files." : "Try a different title.")
+                            } actions: {
+                                Button("Add manga") { addLink = true }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
+                            }
+                        }
+                    }
+                    if let error = model.error, model.state.chapters.isEmpty { SourceNotice(message: error) { Task { await model.refresh() } } }
+                    if let error = model.persistenceError { Text(error).foregroundStyle(.orange).font(.subheadline) }
+                }
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .frame(maxWidth: 1180)                 // comfortable reading width on iPad and unfolded Duo
+                .frame(maxWidth: .infinity)
+            }
+            .background(EclipseBackground())
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("Library")
+            .toolbar(.hidden, for: .navigationBar)    // the header below adapts to every screen shape
+            .sheet(isPresented: $addLink) {
+                AddMangaView { result in
+                    addLink = false
+                    switch result {
+                    case .open(let chapter): reader = chapter
+                    case .series(let series, let chapter): if let chapter { reader = chapter } else { openSeries = series }
+                    }
+                }.environmentObject(model)
+            }
+            .navigationDestination(item: $openSeries) { series in SeriesView(seriesID: series.id, reader: $reader) }
+            .refreshable { await model.checkForUpdates(force: true); await model.ensureCovers() }
+            .task {
+                if model.state.chapters.isEmpty && !ProcessInfo.processInfo.arguments.contains("--ui-testing") { await model.refresh() }
+                await model.ensureCovers()
+                await model.checkForUpdates()
+            }
+            .onChange(of: model.librarySeries.count) { _, _ in Task { await model.ensureCovers() } }
+            .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+            .sheet(isPresented: $website) { WebsiteView(url: ReadBerserkParser.home) }
+        }
+    }
+}
+
+/// Logo, actions and search. Lives in the page (not the system bar) so it lays out the same
+/// on iPhone, iPad, folded and unfolded iPhone Duo, portrait and landscape.
+struct LibraryHeader: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Binding var query: String
+    @Binding var addLink: Bool
+    @Binding var website: Bool
+    @FocusState private var searching: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                EclipseWordmark(size: 26)
+                Spacer(minLength: 8)
+                Menu {
+                    Button { Task { await model.checkForUpdates(force: true) } } label: {
+                        Label(model.checking ? "Checking for new chapters…" : "Check for new chapters", systemImage: "arrow.clockwise")
+                    }.disabled(model.checking)
+                    Button { website = true } label: { Label("Open readberserk.com", systemImage: "globe") }
+                } label: {
+                    Image(systemName: "ellipsis").font(.headline).frame(width: 40, height: 40).eclipseCard(cornerRadius: 20)
+                }.accessibilityLabel("More")
+                Button { addLink = true } label: {
+                    Image(systemName: "plus").font(.headline.weight(.bold)).foregroundStyle(.black)
+                        .frame(width: 40, height: 40).background(Eclipse.highlight, in: Circle())
+                }.accessibilityLabel("Add manga").accessibilityIdentifier("addManga")
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search your library", text: $query)
+                    .focused($searching).submitLabel(.search)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                if !query.isEmpty {
+                    Button { query = ""; searching = false } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 11).eclipseCard(cornerRadius: 14)
+        }
+    }
+}
+
+/// Greeting and a one-line summary at the top of the library.
+struct LibraryGreeting: View {
+    @EnvironmentObject private var model: LibraryModel
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<12: "Good morning"
+        case 12..<17: "Good afternoon"
+        case 17..<22: "Good evening"
+        default: "Reading late"
+        }
+    }
+    var body: some View {
+        let series = model.librarySeries
+        let read = series.reduce(0) { $0 + model.readCount($1) }
+        VStack(alignment: .leading, spacing: 4) {
+            Text(greeting).font(.system(.largeTitle, design: .serif).weight(.bold))
+            Text("\(series.count) series · \(read) chapters read\(model.downloaded.isEmpty ? "" : " · \(model.downloaded.count) offline")")
+                .font(.subheadline).foregroundStyle(.secondary)
+        }.padding(.top, 4)
+    }
+}
+
+/// Large "continue reading" card with the cover blurred behind it.
+struct ContinueHero: View {
+    @EnvironmentObject private var model: LibraryModel
+    let chapter: Chapter
+    let resume: () -> Void
+    let open: () -> Void
+    var body: some View {
+        let series = model.series(id: model.seriesID(for: chapter))
+        let cover = series.flatMap { model.cover(for: $0) }
+        let progress = model.state.progress[chapter.id]
+        ZStack(alignment: .bottomLeading) {
+            CoverView(url: cover, referer: chapter)
+                .frame(maxWidth: .infinity).frame(height: 236)
+                .blur(radius: 28).opacity(0.6)
+            LinearGradient(colors: [Eclipse.accent.opacity(0.18), .black.opacity(0.92)], startPoint: .top, endPoint: .bottom)
+            HStack(alignment: .bottom, spacing: 16) {
+                CoverView(url: cover, referer: chapter)
+                    .frame(width: 118, height: 168)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(color: .black.opacity(0.6), radius: 14, y: 6)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("CONTINUE READING").font(.caption2.weight(.bold)).tracking(1.6).foregroundStyle(.secondary)
+                    Text(series?.title ?? "Berserk").font(.title2.weight(.heavy)).lineLimit(2)
+                    Text(chapter.title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    if let progress {
+                        ProgressView(value: progress.fraction).tint(Eclipse.accent)
+                        Text("Page \(progress.page + 1) of \(progress.pageCount)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button(action: resume) {
+                        Label("Resume", systemImage: "play.fill").font(.subheadline.weight(.bold)).frame(maxWidth: .infinity)
+                    }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
+                        .accessibilityIdentifier("continueReading")
+                }
+            }.padding(18)
+        }
+        .frame(height: 236)
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Eclipse.hairline))
+        .shadow(color: Eclipse.accent.opacity(0.25), radius: 24, y: 10)
+        .contentShape(RoundedRectangle(cornerRadius: 24))
+        .onTapGesture(perform: open)
+    }
+}
+
+/// Recently read series, newest first, each resuming where you stopped.
+struct RecentStrip: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Binding var reader: Chapter?
+    var body: some View {
+        let recent = model.librarySeries.compactMap { s in model.lastRead(s).map { (s, $0) } }
+            .sorted { $0.1 > $1.1 }.map(\.0).prefix(12)
+        if recent.count >= 2 {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Jump back in").font(.title3.weight(.bold))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(Array(recent)) { series in
+                            Button { reader = model.resume(series) } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    CoverView(url: model.cover(for: series), referer: series.chapters.first)
+                                        .frame(width: 96, height: 137).clipShape(RoundedRectangle(cornerRadius: 9))
+                                    Text(series.title).font(.caption.weight(.semibold)).lineLimit(1)
+                                    if let chapter = model.resume(series) {
+                                        Text(chapter.title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }.frame(width: 96)
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The library as a cover grid. Berserk comes first, built in.
+struct LibraryGrid: View {
+    @EnvironmentObject private var model: LibraryModel
+    let series: [MangaSeries]
+    @Binding var reader: Chapter?
+    @Binding var openSeries: MangaSeries?
+    private let columns = [GridItem(.adaptive(minimum: 108, maximum: 170), spacing: 16)]
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+            ForEach(series) { item in
+                Button { openSeries = item } label: { SeriesCard(series: item) }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(item.id == LibraryModel.berserkID ? "chapterBrowser" : "series-\(item.title)")
+                    .contextMenu {
+                        if let chapter = model.resume(item) {
+                            Button { reader = chapter } label: { Label("Continue \(chapter.title)", systemImage: "book") }
+                        }
+                        Picker("Reads as", selection: Binding(get: { model.styleOverride(item.id) },
+                                                              set: { model.setStyle($0, for: item.id) })) {
+                            ForEach(ReadingStyle.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol).tag($0) }
+                        }
+                        if item.id != LibraryModel.berserkID {
+                            Button(role: .destructive) { model.remove(item) } label: { Label("Remove from library", systemImage: "trash") }
+                        }
+                    }
+            }
+        }
+    }
+}
+
+struct ChapterBrowser: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Binding var reader: Chapter?
+    @State private var query = ""
+    @State private var descending = false
+    @State private var filter = "All"
+    var chapters: [Chapter] {
+        let chapters = model.state.chapters.filter {
+            (query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)) &&
+            (filter == "All" || (filter == "Read" ? model.state.progress[$0.id]?.completed == true : model.state.progress[$0.id]?.completed != true))
+        }
+        return descending ? Array(chapters.reversed()) : chapters
+    }
+    var body: some View {
+        List {
+            if let updated = model.state.catalogUpdated {
+                Text("Updated \(updated.formatted(date: .abbreviated, time: .shortened))").font(.footnote).foregroundStyle(.secondary)
+            }
+            if let error = model.error { SourceNotice(message: error) { Task { await model.refresh() } } }
+            ForEach(chapters) { chapter in
+                Button { reader = chapter } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: model.state.progress[chapter.id]?.completed == true ? "checkmark.circle.fill" : "book.closed")
+                            .foregroundStyle(.secondary).frame(width: 28)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(chapter.title).foregroundStyle(.primary)
+                            if let p = model.state.progress[chapter.id] {
+                                Text(p.completed ? "Read" : "Page \(p.page + 1) of \(p.pageCount)").font(.subheadline).foregroundStyle(.secondary)
+                                ProgressView(value: p.fraction)
+                            } else if let date = chapter.published { Text(date).font(.subheadline).foregroundStyle(.secondary) }
+                        }
+                    }.padding(.vertical, 6)
+                }.buttonStyle(.plain)
+            }
+        }.overlay {
+            if chapters.isEmpty {
+                ContentUnavailableView(model.loading ? "Loading chapters…" : "No chapters", systemImage: "books.vertical",
+                    description: Text(query.isEmpty ? "Refresh the catalog or open Website Mode from the library." : "Try another chapter number."))
+                    .allowsHitTesting(false)
+            }
+        }.searchable(text: $query, prompt: "Chapter number or title")
+            .navigationTitle("Chapters")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Show", selection: $filter) { ForEach(["All", "Unread", "Read"], id: \.self) { Text($0) } }
+                        Toggle("Newest first", isOn: $descending)
+                        Button("Refresh catalog") { Task { await model.refresh() } }
+                    } label: { Label("Filter chapters", systemImage: "line.3.horizontal.decrease.circle") }
+                }
+            }.refreshable { await model.refresh() }
+    }
+}
+
+struct SourceNotice: View {
+    let message: String
+    let retry: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Couldn’t load the source", systemImage: "wifi.exclamationmark").font(.headline)
+            Text(message).font(.subheadline).foregroundStyle(.secondary)
+            Button("Retry", action: retry).buttonStyle(.bordered)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            .background(Color(white: 0.09), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+struct SettingsView: View {
+    @EnvironmentObject private var model: LibraryModel
+    @State private var cacheText = ""
+    @State private var downloadBytes: Int64 = 0
+    @State private var confirmDelete = false
+    @State private var backupURL: URL?
+    @State private var restoring = false
+    @State private var backupMessage: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                ReaderPreferencesForm(preferences: Binding(get: { model.preferences }, set: { model.preferences = $0 }))
+                Section {
+                    LabeledContent("Downloaded chapters", value: "\(model.downloaded.count)")
+                    LabeledContent("Space used", value: ByteCountFormatter.string(fromByteCount: downloadBytes, countStyle: .file))
+                    if !model.downloads.isEmpty {
+                        LabeledContent("In progress", value: "\(model.downloads.count)")
+                    }
+                    Toggle("Download ahead while reading", isOn: Binding(
+                        get: { model.state.downloadAhead == true },
+                        set: { model.state.downloadAhead = $0; model.save() }))
+                    Toggle("Download new chapters automatically", isOn: Binding(
+                        get: { model.state.autoDownloadNew == true },
+                        set: { model.state.autoDownloadNew = $0; model.save() }))
+                    Button("Delete all downloads", role: .destructive) { confirmDelete = true }
+                        .disabled(model.downloaded.isEmpty && model.downloads.isEmpty)
+                } header: { Text("Downloads") } footer: {
+                    Text("Downloaded chapters open without a connection and stay until you delete them. Automatic downloads only cover series you’ve started. Imported files are never affected.")
+                }
+                .confirmationDialog("Delete all downloaded chapters?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                    Button("Delete downloads", role: .destructive) { model.removeAllDownloads(); downloadBytes = 0 }
+                } message: { Text("Reading progress is kept. You can download chapters again any time.") }
+                Section {
+                    if let backupURL {
+                        ShareLink(item: backupURL) { Label("Save or share the backup file", systemImage: "square.and.arrow.up") }
+                    } else {
+                        Button {
+                            do { backupURL = try model.backupFile() } catch { backupMessage = error.localizedDescription }
+                        } label: { Label("Create backup", systemImage: "externaldrive.badge.plus") }
+                    }
+                    Button { restoring = true } label: { Label("Restore from a backup…", systemImage: "arrow.down.doc") }
+                    if let backupMessage { Text(backupMessage).font(.subheadline).foregroundStyle(.secondary) }
+                } header: { Text("Backup & move to another device") } footer: {
+                    Text("Saves your reading positions, series, settings and styles to one file. Save it to iCloud Drive, then restore it on your other device; newer positions win and nothing is deleted. Live iCloud sync needs an Apple iCloud permission that sideloaded builds can’t use.")
+                }
+                .fileImporter(isPresented: $restoring, allowedContentTypes: [.json]) { result in
+                    switch result {
+                    case .success(let url):
+                        do { backupMessage = try model.restore(from: url) } catch { backupMessage = "That file couldn’t be restored: \(error.localizedDescription)" }
+                    case .failure(let error): backupMessage = error.localizedDescription
+                    }
+                }
+                Section {
+                    Toggle(isOn: Binding(get: { model.state.incognito == true },
+                                         set: { model.state.incognito = $0; model.save() })) {
+                        Label("Incognito mode", systemImage: "eyeglasses")
+                    }
+                    Button("Clear website data") {
+                        Task {
+                            let store = WKWebsiteDataStore.default()
+                            await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+                            cacheText = "Website cookies and storage cleared."
+                        }
+                    }
+                } header: { Text("Privacy") } footer: {
+                    Text("Incognito reads without saving progress or history. eclipsereader has no accounts, analytics or tracking. Pages are fetched directly from the sites you add; recognized text and translations stay on this device. This clears sign-ins and cookies from the in-app browser.")
+                }
+                Section("Temporary storage") {
+                    Text("Pages stream on demand. Up to two upcoming pages are preloaded. Encoded images use a temporary 120 MB cache and expire after 24 hours; iOS may clear them sooner.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Button("Clear temporary images") {
+                        Task {
+                            do { try await model.pipeline.cache.removeAll(); cacheText = "Temporary images cleared." }
+                            catch { cacheText = error.localizedDescription }
+                        }
+                    }
+                    if !cacheText.isEmpty { Text(cacheText).font(.subheadline).foregroundStyle(.secondary) }
+                }
+                Section("About") {
+                    Text("eclipsereader").font(.headline)
+                    Text("A personal online reader. No manga images are bundled. Chapter metadata and reading progress stay on this device. No analytics or background downloads.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Link("Visit source website", destination: ReadBerserkParser.home)
+                }
+            }.navigationTitle("Settings")
+                .scrollContentBackground(.hidden).background(EclipseBackground())
+                .task { downloadBytes = await OfflineStore.shared.totalBytes() }
+                .onChange(of: model.downloaded.count) { _, _ in Task { downloadBytes = await OfflineStore.shared.totalBytes() } }
+        }
+    }
+}
+
+struct ReaderPreferencesForm: View {
+    @Binding var preferences: ReaderPreferences
+    var body: some View {
+        Section {
+            Picker("Direction", selection: $preferences.direction) {
+                ForEach(ReadingDirection.allCases, id: \.self) { Text($0.title) }
+            }
+            Picker("Layout", selection: $preferences.mode) {
+                ForEach(ReadingMode.allCases, id: \.self) { Text($0.title) }
+            }
+            Picker("Page turn", selection: $preferences.transition) {
+                ForEach(PageTransition.allCases, id: \.self) { Text($0.title) }
+            }
+            Toggle("Swipe left to go forward", isOn: $preferences.advanceOnLeftSwipe)
+        } header: { Text("Manga defaults") } footer: {
+            Text("Manga reads right to left: drag the page to the right to turn it, like a printed volume. Turn on “Swipe left to go forward” for Western-style swiping. Manhwa and comics adjust automatically per series.")
+        }
+        Section("Pages") {
+            Picker("Image quality", selection: Binding(get: { preferences.quality ?? .automatic }, set: { preferences.quality = $0 })) {
+                ForEach(ImageQuality.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            Picker("Page size", selection: $preferences.fit) {
+                ForEach(PageFit.allCases, id: \.self) { Text($0.title) }
+            }
+            Toggle("Two-page spreads when there’s room", isOn: $preferences.landscapeSpreads)
+            Toggle("Keep wide artwork on one page", isOn: $preferences.detectWidePages)
+            Toggle("Trim white scan margins", isOn: Binding(get: { preferences.trimMargins ?? true }, set: { preferences.trimMargins = $0 }))
+            Slider(value: $preferences.doubleTapZoom, in: 1.5...4, step: 0.5) { Text("Double-tap zoom") }
+            Text("Double-tap zoom: \(preferences.doubleTapZoom.formatted())×").font(.subheadline).foregroundStyle(.secondary)
+        }
+        Section {
+            Toggle("Detect webtoons automatically", isOn: Binding(get: { preferences.autoWebtoon ?? true }, set: { preferences.autoWebtoon = $0 }))
+            Toggle("Gap between pages", isOn: Binding(get: { preferences.verticalGap ?? false }, set: { preferences.verticalGap = $0 }))
+        } header: { Text("Manhwa & webtoons") } footer: {
+            Text("Series tagged as manhwa, or with tall strip pages, switch to vertical scrolling. Strips join seamlessly unless you add a gap. You can set any series by hand on its page.")
+        }
+        Section("Translation") {
+            Picker("Translate into", selection: Binding(get: { preferences.translateTarget ?? "en" }, set: { preferences.translateTarget = $0 })) {
+                ForEach([("en", "English"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("it", "Italian"), ("pt", "Portuguese"),
+                         ("ru", "Russian"), ("ja", "Japanese"), ("ko", "Korean"), ("zh-Hans", "Chinese (Simplified)")], id: \.0) { item in
+                    Text(item.1).tag(item.0)
+                }
+            }
+        }
+    }
+}
+
+struct SeriesCard: View {
+    @EnvironmentObject private var model: LibraryModel
+    let series: MangaSeries
+    var body: some View {
+        let read = model.readCount(series)
+        let total = series.chapters.count
+        let style = model.style(for: series.id)
+        VStack(alignment: .leading, spacing: 7) {
+            CoverView(url: model.cover(for: series), referer: series.chapters.first, onFail: { model.coverFailed(series) })
+                .aspectRatio(0.7, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(alignment: .topLeading) {
+                    if model.newCount(series) > 0 {
+                        Text("\(model.newCount(series)) NEW").font(.caption2.weight(.heavy))
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Eclipse.highlight, in: Capsule()).foregroundStyle(.black).padding(6)
+                    } else if total > read && total > 0 {
+                        Text("\(total - read)").font(.caption2.weight(.heavy)).monospacedDigit()
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Color.white, in: Capsule()).foregroundStyle(.black).padding(6)
+                            .accessibilityLabel("\(total - read) unread")
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: series.kind == .local ? "internaldrive.fill" : style.symbol)
+                        .font(.caption2.weight(.bold)).padding(6)
+                        .background(.ultraThinMaterial, in: Circle()).padding(6)
+                        .accessibilityLabel(series.kind == .local ? "On this device" : style.title)
+                }
+                .overlay(alignment: .bottom) {
+                    if model.lastRead(series) != nil && read < total {
+                        GeometryReader { g in
+                            Capsule().fill(Eclipse.accent)
+                                .frame(width: max(6, g.size.width * Double(read) / Double(max(total, 1))), height: 3)
+                        }.frame(height: 3).padding(.horizontal, 8).padding(.bottom, 8)
+                    }
+                }
+                .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
+            Text(series.title).font(.footnote.weight(.semibold)).lineLimit(2)
+            Text(total == 0 ? "Loading chapters…" : read > 0 ? "\(read) of \(total) read" : "\(total) chapter\(total == 1 ? "" : "s")")
+                .font(.caption2).foregroundStyle(.secondary)
+        }.accessibilityElement(children: .combine)
+    }
+}
+
+/// Small cover thumbnails, decoded at display size and loaded through the same rules as pages.
+struct CoverView: View {
+    @EnvironmentObject private var model: LibraryModel
+    let url: URL?
+    let referer: Chapter?
+    /// Called when the cover can't be loaded, so the library can pick another one.
+    var onFail: (() -> Void)? = nil
+    @State private var image: UIImage?
+    @MainActor private static let cache = NSCache<NSURL, UIImage>()
+    @State private var failed = false
+    var body: some View {
+        // The base shape takes the size it is offered; the artwork is an overlay so it can never
+        // stretch the card, whatever the image's shape (webtoon strips are very tall).
+        Rectangle()
+            .fill(LinearGradient(colors: [Eclipse.surfaceHigh, Eclipse.surface], startPoint: .top, endPoint: .bottom))
+            .overlay(alignment: .top) {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .transition(.opacity)
+                } else if failed || url == nil {
+                    EclipseMark(size: 30).opacity(0.55)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ShimmerView()
+                }
+            }
+            .clipped()
+            .animation(.easeOut(duration: 0.25), value: image != nil)
+            .task(id: url) {
+            guard let url else { return }
+            failed = false
+            if let hit = Self.cache.object(forKey: url as NSURL) { image = hit; return }
+            let chapter = referer ?? Chapter(url: url, title: "", number: "")
+            guard let data = try? await model.pipeline.data(for: MangaPage(url: url, label: "Cover"), chapter: chapter) else {
+                if !Task.isCancelled { failed = true; onFail?() }
+                return
+            }
+            let thumb = await Task.detached(priority: .utility) { () -> CoverThumb? in
+                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 720] as CFDictionary) else { return nil }
+                // A webtoon strip used as a cover: keep its top, in cover proportions.
+                if cg.height > cg.width * 2, let top = cg.cropping(to: CGRect(x: 0, y: 0, width: cg.width, height: Int(Double(cg.width) / 0.7))) {
+                    return CoverThumb(image: UIImage(cgImage: top))
+                }
+                return CoverThumb(image: UIImage(cgImage: cg))
+            }.value
+            if let thumb { Self.cache.setObject(thumb.image, forKey: url as NSURL); image = thumb.image }
+        }
+    }
+}
+
+private struct CoverThumb: @unchecked Sendable { let image: UIImage }
+
+/// A series' details and full chapter list. Works for Berserk and anything added.
+struct SeriesView: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let seriesID: String
+    @Binding var reader: Chapter?
+    @State private var query = ""
+    @State private var newestFirst = false
+    @State private var updating = false
+    @State private var message: String?
+    @State private var renaming = false
+    @State private var newTitle = ""
+    @State private var website = false
+    @State private var pickingCover = false
+    var body: some View {
+        if let series = model.series(id: seriesID) {
+            let builtIn = series.id == LibraryModel.berserkID
+            let list = series.chapters.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+            let cover = model.cover(for: series)
+            List {
+                Section {
+                    ZStack(alignment: .bottomLeading) {
+                        CoverView(url: cover, referer: series.chapters.first)
+                            .frame(maxWidth: .infinity).frame(height: 250).blur(radius: 30).opacity(0.55)
+                        LinearGradient(colors: [Eclipse.accent.opacity(0.15), .black], startPoint: .top, endPoint: .bottom)
+                        HStack(alignment: .bottom, spacing: 16) {
+                            CoverView(url: cover, referer: series.chapters.first)
+                                .frame(width: 124, height: 177).clipShape(RoundedRectangle(cornerRadius: 12))
+                                .shadow(color: .black.opacity(0.6), radius: 14, y: 6)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(series.title).font(.title2.weight(.heavy)).lineLimit(3)
+                                Text(builtIn ? "readberserk.com · built in" : series.kind == .web ? (series.url.host ?? "Website") : "On this device")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                Text("\(series.chapters.count) chapters · \(model.readCount(series)) read")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                if model.downloadedCount(series) > 0 {
+                                    Label("\(model.downloadedCount(series)) downloaded", systemImage: "arrow.down.circle.fill")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }.padding(16)
+                    }
+                    .frame(height: 250)
+                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                    if let chapter = model.resume(series) {
+                        Button { reader = chapter } label: {
+                            HStack {
+                                Image(systemName: "play.fill")
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(model.state.progress[chapter.id] == nil ? "Start reading" : "Continue").font(.headline)
+                                    Text(chapter.title).font(.caption).lineLimit(1).opacity(0.7)
+                                }
+                                Spacer()
+                            }.foregroundStyle(.black).padding(.vertical, 4)
+                        }.listRowBackground(Color.white)
+                    }
+                    Picker(selection: Binding(get: { model.styleOverride(series.id) }, set: { model.setStyle($0, for: series.id) })) {
+                        ForEach(ReadingStyle.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol).tag($0) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Reads as")
+                            Text("\(model.style(for: series.id).title) · \(model.style(for: series.id).detail)").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
+                    if builtIn, let error = model.error { SourceNotice(message: error) { Task { await model.refresh() } } }
+                }
+                Section {
+                    if series.chapters.isEmpty {
+                        HStack { ProgressView(); Text(model.loading ? "Loading chapters…" : "No chapters yet. Pull to refresh.").foregroundStyle(.secondary) }
+                    }
+                    ForEach(newestFirst ? Array(list.reversed()) : list) { chapter in
+                        HStack(spacing: 12) {
+                            Button { reader = chapter } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            if model.isNew(chapter) {
+                                                Text("NEW").font(.caption2.weight(.heavy)).padding(.horizontal, 5).padding(.vertical, 2)
+                                                    .background(Eclipse.highlight, in: Capsule()).foregroundStyle(.black)
+                                            }
+                                            Text(chapter.title).lineLimit(2)
+                                        }
+                                        if let p = model.state.progress[chapter.id], !p.completed {
+                                            ProgressView(value: p.fraction).tint(Eclipse.accent)
+                                            Text("Page \(p.page + 1) of \(p.pageCount)").font(.caption).foregroundStyle(.secondary)
+                                        } else if let date = chapter.published, builtIn {
+                                            Text(date).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer(minLength: 4)
+                                    if model.state.progress[chapter.id]?.completed == true {
+                                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary).accessibilityLabel("Read")
+                                    }
+                                }
+                                .foregroundStyle(model.state.progress[chapter.id]?.completed == true ? .secondary : .primary)
+                                .contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                            DownloadButton(chapter: chapter)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            if model.state.progress[chapter.id]?.completed == true {
+                                Button("Unread") { model.state.progress[chapter.id] = nil; model.save() }
+                            } else {
+                                Button("Read") { model.record(chapter, page: 0, count: 1, completed: true) }.tint(.gray)
+                            }
+                        }
+                        .swipeActions(edge: .leading) {
+                            if model.isDownloaded(chapter) {
+                                Button(role: .destructive) { model.removeDownload(chapter) } label: { Label("Remove download", systemImage: "trash") }
+                            } else if model.canDownload(chapter) {
+                                Button { model.download([chapter]) } label: { Label("Download", systemImage: "arrow.down.circle") }.tint(.blue)
+                            }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Chapters")
+                        Spacer()
+                        Button(newestFirst ? "Newest first" : "Oldest first") { newestFirst.toggle() }.font(.caption)
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden).background(EclipseBackground())
+            .searchable(text: $query, prompt: "Find a chapter")
+            .navigationTitle(series.title).navigationBarTitleDisplayMode(.inline)
+            .refreshable { await update(series) }
+            .task { if builtIn && series.chapters.isEmpty { await model.refresh() } }
+            .toolbar {
+                Menu {
+                    Button { Task { await update(series) } } label: { Label("Check for new chapters", systemImage: "arrow.clockwise") }
+                    if model.newCount(series) > 0 {
+                        Button { model.clearNew(series) } label: { Label("Mark new chapters as seen", systemImage: "sparkles") }
+                    }
+                    if series.kind == .web {
+                        Section("Offline") {
+                            Button {
+                                let start = model.resume(series).flatMap { series.chapters.firstIndex(of: $0) } ?? 0
+                                model.download(Array(series.chapters.dropFirst(start).prefix(5)))
+                            } label: { Label("Download next 5 chapters", systemImage: "arrow.down.circle") }
+                            Button {
+                                model.download(series.chapters.filter { model.state.progress[$0.id]?.completed != true })
+                            } label: { Label("Download all unread", systemImage: "arrow.down.circle.dotted") }
+                            if model.downloadedCount(series) > 0 {
+                                Button(role: .destructive) {
+                                    for chapter in series.chapters where model.isDownloaded(chapter) { model.removeDownload(chapter) }
+                                } label: { Label("Remove downloads", systemImage: "trash") }
+                            }
+                        }
+                    }
+                    Button { pickingCover = true } label: { Label("Change cover…", systemImage: "photo") }
+                    if series.kind == .web {
+                        Button { website = true } label: { Label("Open website", systemImage: "globe") }
+                    }
+                    if !builtIn {
+                        Button { newTitle = series.title; renaming = true } label: { Label("Rename", systemImage: "pencil") }
+                        Button(role: .destructive) { model.remove(series); dismiss() } label: { Label("Remove from library", systemImage: "trash") }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
+            .sheet(isPresented: $website) { WebsiteView(url: series.url) }
+            .sheet(isPresented: $pickingCover) { CoverPicker(series: series).environmentObject(model) }
+            .alert("Rename", isPresented: $renaming) {
+                TextField("Title", text: $newTitle)
+                Button("Save") { model.rename(series, to: newTitle) }
+                Button("Cancel", role: .cancel) {}
+            }
+        } else {
+            ContentUnavailableView("Removed", systemImage: "books.vertical")
+        }
+    }
+    private func update(_ series: MangaSeries) async {
+        guard !updating else { return }
+        updating = true; defer { updating = false }
+        let before = series.chapters.count
+        do {
+            try await model.update(series)
+            let after = model.series(id: series.id)?.chapters.count ?? before
+            message = after > before ? "\(after - before) new chapter\(after - before == 1 ? "" : "s")" : "No new chapters."
+        } catch { message = error.localizedDescription }
+    }
+}
+
+/// Download control for one chapter: download, live progress (tap to cancel), retry, or done.
+struct DownloadButton: View {
+    @EnvironmentObject private var model: LibraryModel
+    let chapter: Chapter
+    var body: some View {
+        Group {
+            if model.isDownloaded(chapter) {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(.secondary)
+                    .accessibilityLabel("Downloaded")
+            } else if let state = model.downloads[chapter.id] {
+                switch state {
+                case .queued:
+                    Button { model.cancelDownload(chapter) } label: { ProgressView().controlSize(.small) }
+                        .accessibilityLabel("Waiting to download. Double-tap to cancel")
+                case .running(let progress):
+                    Button { model.cancelDownload(chapter) } label: {
+                        ZStack {
+                            Circle().stroke(Color.white.opacity(0.25), lineWidth: 3)
+                            Circle().trim(from: 0, to: progress).stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                            Image(systemName: "stop.fill").font(.system(size: 8))
+                        }.frame(width: 22, height: 22)
+                    }.accessibilityLabel("Downloading, \(Int(progress * 100)) percent. Double-tap to cancel")
+                case .failed(let reason):
+                    Button { model.cancelDownload(chapter); model.download([chapter]) } label: {
+                        Image(systemName: "exclamationmark.arrow.circlepath").foregroundStyle(.orange)
+                    }.accessibilityLabel("Download failed: \(reason). Double-tap to retry")
+                }
+            } else if model.canDownload(chapter) {
+                Button { model.download([chapter]) } label: { Image(systemName: "arrow.down.circle") }
+                    .accessibilityLabel("Download for offline reading")
+            }
+        }
+        .buttonStyle(.borderless).font(.title3).frame(width: 30)
+    }
+}
+
+/// Pick a cover: any of the first pages, or a picture from Photos.
+struct CoverPicker: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let series: MangaSeries
+    @State private var choices: [MangaPage] = []
+    @State private var loading = true
+    @State private var photo: PhotosPickerItem?
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    PhotosPicker(selection: $photo, matching: .images) {
+                        Label("Choose from Photos", systemImage: "photo.on.rectangle.angled").font(.headline)
+                            .frame(maxWidth: .infinity).padding(16)
+                            .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 14))
+                    }
+                    if model.state.customCovers?[series.id] != nil {
+                        Button { model.setCustomCover(nil, for: series.id); dismiss() } label: {
+                            Label("Use the automatic cover", systemImage: "arrow.uturn.backward").frame(maxWidth: .infinity)
+                        }.buttonStyle(.bordered)
+                    }
+                    Text("Or choose a page").font(.headline)
+                    if loading { ProgressView().frame(maxWidth: .infinity) }
+                    if !loading && choices.isEmpty { Text("Pages couldn’t be loaded. Check your connection.").foregroundStyle(.secondary) }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 12)], spacing: 12) {
+                        ForEach(choices) { page in
+                            Button {
+                                Task {
+                                    do { try await model.chooseCoverPage(page, seriesID: series.id); dismiss() }
+                                    catch { self.error = error.localizedDescription }
+                                }
+                            } label: {
+                                CoverView(url: page.url, referer: series.chapters.first)
+                                    .aspectRatio(0.7, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 8))
+                            }.buttonStyle(.plain).accessibilityLabel(page.label)
+                        }
+                    }
+                    if let error { Text(error).foregroundStyle(.orange) }
+                }.padding(20)
+            }
+            .navigationTitle("Cover").navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Cancel") { dismiss() } }
+            .task { choices = await model.coverChoices(series); loading = false }
+            .onChange(of: photo) { _, item in
+                guard let item else { return }
+                Task {
+                    do {
+                        guard let data = try await item.loadTransferable(type: Data.self) else { return }
+                        try await model.setCoverPhoto(data, for: series.id)
+                        dismiss()
+                    } catch { self.error = error.localizedDescription }
+                }
+            }
+        }.preferredColorScheme(.dark)
+    }
+}
+
+/// Add manga from a link (whole series) or from Files.
+struct AddMangaView: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let done: (LibraryModel.LinkResult) -> Void
+    @State private var text = ""
+    @State private var working = false
+    @State private var error: String?
+    @State private var browse: URL?
+    @State private var importing = false
+    @State private var copy = true
+    private static let types: [UTType] = [.folder, .zip, .pdf, .image] + [UTType(filenameExtension: "cbz")].compactMap { $0 }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("https://…", text: $text)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.go).onSubmit { submit(text) }
+                        .accessibilityIdentifier("linkField")
+                    Button { if let s = UIPasteboard.general.string { text = s } } label: { Label("Paste", systemImage: "doc.on.clipboard") }
+                    Button { submit(text) } label: {
+                        HStack { Label("Add series", systemImage: "plus.circle.fill"); Spacer(); if working { ProgressView() } }
+                    }.disabled(working || text.trimmingCharacters(in: .whitespaces).isEmpty)
+                } header: { Text("From a website") } footer: {
+                    Text("Paste the series page (the one listing all chapters) to add the whole manga or manhwa. A chapter link also works. Pages are fetched directly by this device.")
+                }
+                if let error {
+                    Section {
+                        Text(error).foregroundStyle(.orange)
+                        if let url = WebLink.parse(text) {
+                            Button { browse = url } label: { Label("Open in browser instead", systemImage: "globe") }
+                        }
+                    } footer: { Text("In the browser, open the series or a chapter and tap “Read here”.") }
+                }
+                Section {
+                    Button { importing = true } label: { Label("Import from Files…", systemImage: "folder.badge.plus") }
+                        .disabled(working)
+                    Toggle("Copy into eclipsereader", isOn: $copy)
+                } header: { Text("From Files, iCloud or a drive") } footer: {
+                    Text(copy ? "CBZ, ZIP, PDF, images or folders. Copies are readable offline; your originals are never changed."
+                              : "Reads straight from the original location (good for large collections on an external SSD). The drive must be connected while reading.")
+                }
+            }
+            .scrollContentBackground(.hidden).background(EclipseBackground())
+            .navigationTitle("Add manga").navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Cancel") { dismiss() } }
+            .fileImporter(isPresented: $importing, allowedContentTypes: Self.types, allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls): importFiles(urls)
+                case .failure(let e): error = e.localizedDescription
+                }
+            }
+            .sheet(item: $browse) { url in
+                WebsiteView(url: url, onRead: { current in browse = nil; text = current.absoluteString; submit(current.absoluteString) })
+            }
+        }.preferredColorScheme(.dark)
+    }
+    private func submit(_ value: String) {
+        guard !working else { return }
+        working = true; error = nil
+        Task {
+            defer { working = false }
+            do { done(try await model.addLink(value)) }
+            catch let e as SourceError where e == .unsupportedStructure {
+                error = "Couldn’t find chapters or pages on that page. The site may build its pages with scripts. Try the series page, or open it in the browser."
+            }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    private func importFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        working = true; error = nil
+        Task {
+            defer { working = false }
+            do {
+                let series = try await model.importFiles(urls, copy: copy)
+                done(.series(series, open: nil))
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+extension URL: @retroactive Identifiable { public var id: String { absoluteString } }
