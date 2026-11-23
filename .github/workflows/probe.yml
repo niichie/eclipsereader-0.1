@@ -1,0 +1,27 @@
+name: Probe sources
+# Checks every manga and book source against the live sites, using the app's own code.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick Xcode 27 or newer
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode_28*.app 2>/dev/null | sort -V | tail -1 || true)
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+      - name: Probe
+        working-directory: EclipseReader
+        env:
+          LIVE_PROBE: "1"
+        run: |
+          swift test --filter LiveProbeTests 2>&1 | tee probe.log | grep -E "PROBE\||error:|Executed" || true
+          grep "PROBE|" probe.log > probe-report.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-report
+          path: EclipseReader/probe-report.txt
