@@ -2,6 +2,8 @@ name: Build eclipsereader IPA
 on:
   workflow_dispatch:
   push:
+    branches: ["**"]
+    tags: ["v*"]
 permissions:
   contents: read
 concurrency:
@@ -12,6 +14,8 @@ jobs:
   build:
     # Xcode 27 / iOS 27 SDK: required so the iPhone Duo runs the app full-screen.
     runs-on: xcode-27
+    permissions:
+      contents: write   # only used to attach the IPA when a version tag (v1.0.0, …) is pushed
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -65,6 +69,14 @@ jobs:
           name: EclipseReader-unsigned-IPA
           path: EclipseReader-unsigned.ipa
           if-no-files-found: error
+
+      - name: Publish GitHub release (version tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: EclipseReader-unsigned.ipa
+          generate_release_notes: true
+          name: eclipsereader ${{ github.ref_name }}
 
       - name: Upload build log on failure
         if: failure()
