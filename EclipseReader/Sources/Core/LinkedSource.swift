@@ -468,7 +468,10 @@ public struct LinkedSource: Sendable {
         let marked = candidates.filter(\.marked)
         if marked.count >= 2 { return marked.enumerated().map { page($1, $0) } }
 
-        // Heuristic fallback: large, non-decorative images grouped by folder.
+        // Heuristic fallbacks only on pages that are plainly a chapter: a home page or series page
+        // keeps its covers in one upload folder too, and those must never be read as pages.
+        guard isChapterAddress(base) else { throw SourceError.unsupportedStructure }
+        // Large, non-decorative images grouped by folder.
         let usable = candidates.filter { c in
             let path = c.url.absoluteString.lowercased()
             if ["svg", "gif", "ico"].contains(c.url.pathExtension.lowercased()) { return false }
@@ -489,9 +492,6 @@ public struct LinkedSource: Sendable {
             return run.enumerated().map { page($1, $0) }
         }
         // CDNs that give every image its own folder (Webtoons, many manhwa hosts): group by host.
-        // Only on pages that are plainly a chapter, so a catalogue of covers is never read as pages.
-        let chapterLike = base.absoluteString.range(of: #"(?i)(chapter|episode|viewer|/ch[-_.]?\d|/read/)"#, options: .regularExpression) != nil
-        guard chapterLike else { throw SourceError.unsupportedStructure }
         var hosts: [String: [Candidate]] = [:]
         var hostOrder: [String] = []
         for c in usable {
@@ -507,6 +507,12 @@ public struct LinkedSource: Sendable {
         let listed = scriptImages(in: html)
         if listed.count >= 3 { return listed.enumerated().map { MangaPage(url: $1, label: "Page \($0 + 1)") } }
         throw SourceError.unsupportedStructure
+    }
+
+    /// Addresses that name a chapter: …/chapter-12, …/episode/3, …/viewer, …/ch-7, …/read/…, or a trailing number.
+    public static func isChapterAddress(_ url: URL) -> Bool {
+        url.absoluteString.range(of: #"(?i)(chapter|episode|viewer|/ch[-_.]?\d|/read/|/c\d+|/\d+(?:[.-]\d+)?/?(?:[?#]|$))"#,
+                                 options: .regularExpression) != nil
     }
 
     /// Page lists that popular manga site themes put in a script:

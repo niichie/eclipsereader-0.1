@@ -103,4 +103,14 @@ final class AdapterTests: XCTestCase {
         XCTAssertEqual(MangaDex.style(language: "zh", tags: nil), .manhua)
         XCTAssertEqual(MangaDex.style(language: "ja", tags: nil), .manga)
     }
+
+    func testCoversOnASeriesPageAreNotPages() {
+        let series = URL(string: "https://scans.example.com/manga/solo-hunter/")!
+        let html = (1...6).map { #"<a href="/manga/other-\#($0)/"><img src="https://scans.example.com/wp-content/uploads/2025/11/c\#($0).jpg"></a>"# }.joined()
+            + #"<a href="/manga/solo-hunter/chapter-1/">Chapter 1</a><a href="/manga/solo-hunter/chapter-2/">Chapter 2</a>"#
+        XCTAssertThrowsError(try LinkedSource.detect(in: html, base: series))
+        XCTAssertEqual(LinkedSource.summarize(html: html, url: series), .series(title: "scans.example.com", chapters: 2))
+        XCTAssertTrue(LinkedSource.isChapterAddress(URL(string: "https://x.example.com/manga/solo/12/")!))
+        XCTAssertFalse(LinkedSource.isChapterAddress(URL(string: "https://x.example.com/manga/solo-hunter/")!))
+    }
 }
