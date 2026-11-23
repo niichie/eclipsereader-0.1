@@ -214,6 +214,21 @@ struct LibraryView: View {
                             }
                             .buttonStyle(PressableStyle())
                             .accessibilityIdentifier("searchEverywhere")
+                            if model.hasBooks || filter == .books {
+                                Button { bookSearch = QuoteSearch(query: query) } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "text.book.closed").foregroundStyle(Eclipse.highlight)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Find the book “\(query)”").font(.subheadline.weight(.semibold))
+                                            Text("Project Gutenberg, Open Library and free libraries").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+                                    }
+                                    .padding(14).eclipseCard(cornerRadius: 14)
+                                }
+                                .buttonStyle(PressableStyle())
+                            }
                         }
                         if query.isEmpty && filter == .all && categoryID == nil && model.librarySeries.count < 12 {
                             DiscoverStrip(openSeries: $openSeries, width: contentWidth)
