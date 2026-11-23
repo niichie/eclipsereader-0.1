@@ -676,13 +676,14 @@ struct BookReaderView: View {
         guard let part = series.chapters[safe: ref.section] else { return }
         let inSection = new - typeset.sectionStarts[ref.section]
         let count = typeset.pagesIn(section: ref.section)
-        // Leaving a part forwards marks it read.
-        if old >= 0, typeset.pages.indices.contains(old), typeset.pages[old].section < ref.section,
+        // Turning the page out of a part marks it read (jumps from the contents list or the slider don't).
+        if old >= 0, new > old, new - old <= 2, typeset.pages.indices.contains(old), typeset.pages[old].section < ref.section,
            let previous = series.chapters[safe: typeset.pages[old].section] {
             library.record(previous, page: max(0, typeset.pagesIn(section: typeset.pages[old].section) - 1),
                            count: typeset.pagesIn(section: typeset.pages[old].section), completed: true)
         }
-        library.record(part, page: inSection, count: max(1, count), completed: new == typeset.pages.count - 1)
+        // Reaching a part's last page finishes it.
+        library.record(part, page: inSection, count: max(1, count), completed: inSection >= count - 1)
     }
     private func logTime() {
         let now = Date()

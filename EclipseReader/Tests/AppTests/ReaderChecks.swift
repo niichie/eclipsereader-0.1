@@ -78,10 +78,11 @@ final class ReaderChecks: XCTestCase {
                     if let data = await BookStore.shared.image(stored, path: path) { images[path] = data }
                 }
             }
+            let pictures = images
             for size in [CGSize(width: 330, height: 700), CGSize(width: 250, height: 560), CGSize(width: 470, height: 820)] {
                 let start = Date()
                 let style = BookStyle(font: .newYork, size: 19, spacing: 1.4, margin: 1, justify: true, theme: .night)
-                let book = await Task.detached { BookTypesetter.typeset(document, images: images, style: style, pageSize: size) }.value
+                let book = await Task.detached { BookTypesetter.typeset(document, images: pictures, style: style, pageSize: size) }.value
                 let seconds = Date().timeIntervalSince(start)
                 print("CHECK|book|\(name)|\(Int(size.width))x\(Int(size.height))|\(book.pages.count) pages|\(String(format: "%.1fs", seconds))")
                 XCTAssertGreaterThan(book.pages.count, 40, "\(name) at \(size): too few pages")
