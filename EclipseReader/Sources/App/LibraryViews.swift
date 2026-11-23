@@ -62,6 +62,7 @@ struct LibraryView: View {
     @AppStorage("librarySort") private var sortRaw = LibrarySort.recent.rawValue
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
+    @State private var searchingEverywhere = false
     @Namespace private var zoom
     @FocusState private var searchFocused: Bool
 
@@ -118,14 +119,30 @@ struct LibraryView: View {
                                         open: { openSeries = model.series(id: model.seriesID(for: chapter)) })
                         }
                         LibraryGrid(series: visible, reader: $reader, openSeries: $openSeries, zoom: zoom, width: contentWidth)
+                        if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                            Button { searchingEverywhere = true } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "globe").foregroundStyle(Eclipse.highlight)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Search every site for “\(query)”").font(.subheadline.weight(.semibold))
+                                        Text("MangaDex, WeebCentral, WEBTOON and your sites").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+                                }
+                                .padding(14).eclipseCard(cornerRadius: 14)
+                            }
+                            .buttonStyle(PressableStyle())
+                            .accessibilityIdentifier("searchEverywhere")
+                        }
                         if query.isEmpty && filter == .all && model.librarySeries.count < 12 {
                             DiscoverStrip(openSeries: $openSeries, width: contentWidth)
                         }
-                        if visible.isEmpty {
+                        if visible.isEmpty && query.isEmpty {
                             ContentUnavailableView {
                                 Label(query.isEmpty ? "Nothing here yet" : "No matches", systemImage: "books.vertical")
                             } description: {
-                                Text(query.isEmpty ? "Add a series from Browse, paste a link, or import files." : "Try a different title.")
+                                Text(query.isEmpty ? "Add a series from Browse, paste a link, or import files." : "Nothing in your library by that name. Search every site below.")
                             } actions: {
                                 Button("Add manga") { addLink = true }.buttonStyle(.borderedProminent).tint(Eclipse.accent)
                             }
@@ -153,6 +170,7 @@ struct LibraryView: View {
                 }.environmentObject(model)
             }
             .sheet(isPresented: $options) { LibraryOptionsSheet().environmentObject(model).presentationDetents([.medium, .large]) }
+            .sheet(isPresented: $searchingEverywhere) { GlobalSearchSheet(query: query).environmentObject(model) }
             .navigationDestination(item: $openSeries) { series in
                 SeriesView(seriesID: series.id, reader: $reader).zoomDestination(series.id, in: zoom)
             }
@@ -639,6 +657,7 @@ struct LibrarySettingsPage: View {
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
+    @State private var alertMessage: String?
     var body: some View {
         Form {
             Section("Layout") {
@@ -662,6 +681,17 @@ struct LibrarySettingsPage: View {
                 if let last = model.state.lastUpdateCheck {
                     LabeledContent("Last checked", value: last.formatted(.relative(presentation: .named)))
                 }
+                Toggle(isOn: Binding(
+                    get: { model.state.notifyNew == true },
+                    set: { on in
+                        Task {
+                            let ok = await model.setNotifications(on)
+                            alertMessage = ok ? nil : "Notifications are off for eclipsereader. Turn them on in iOS Settings › Notifications › eclipsereader."
+                        }
+                    })) {
+                    Label("Notify me about new chapters", systemImage: "bell.badge")
+                }
+                if let alertMessage { Text(alertMessage).font(.footnote).foregroundStyle(.orange) }
                 Toggle("Download new chapters automatically", isOn: Binding(
                     get: { model.state.autoDownloadNew == true },
                     set: { model.state.autoDownloadNew = $0; model.save() }))
@@ -669,7 +699,7 @@ struct LibrarySettingsPage: View {
                     Button("Mark all new chapters as seen") { for s in model.librarySeries { model.clearNew(s) } }
                 }
             } header: { Text("New chapters") } footer: {
-                Text("eclipsereader looks for new chapters when you open it, at most every six hours, and when you pull down on the library. Automatic downloads only cover series you’ve started.")
+                Text("eclipsereader checks when you open it (at most every six hours) and when you pull down on the library. With notifications on, iOS also wakes it every few hours to check, shows a notification per updated series, and puts the count on the app icon.")
             }
         }.settingsPage("Library")
     }
@@ -1147,6 +1177,7 @@ struct SeriesView: View {
     @State private var newTitle = ""
     @State private var website = false
     @State private var pickingCover = false
+    @State private var migrating = false
     @FocusState private var searchFocused: Bool
     var body: some View {
         if let series = model.series(id: seriesID) {
@@ -1301,6 +1332,9 @@ struct SeriesView: View {
                                 Button { website = true } label: { Label("Open website", systemImage: "safari") }
                                 ShareLink(item: series.url) { Label("Share link", systemImage: "square.and.arrow.up") }
                             }
+                            if series.kind == .web && !builtIn {
+                                Button { migrating = true } label: { Label("Migrate to another site…", systemImage: "arrow.triangle.swap") }
+                            }
                             if !builtIn {
                                 Button { newTitle = series.title; renaming = true } label: { Label("Rename", systemImage: "pencil") }
                                 Button(role: .destructive) { model.remove(series); dismiss() } label: { Label("Remove from library", systemImage: "trash") }
@@ -1314,6 +1348,7 @@ struct SeriesView: View {
             }
             .sheet(isPresented: $website) { WebsiteView(url: series.url) }
             .sheet(isPresented: $pickingCover) { CoverPicker(series: series).environmentObject(model) }
+            .sheet(isPresented: $migrating) { MigrateSheet(series: series).environmentObject(model) }
             .alert("Rename", isPresented: $renaming) {
                 TextField("Title", text: $newTitle)
                 Button("Save") { model.rename(series, to: newTitle) }
@@ -1335,7 +1370,9 @@ struct SeriesView: View {
             try await model.update(series)
             let after = model.series(id: series.id)?.chapters.count ?? before
             message = after > before ? "\(after - before) new chapter\(after - before == 1 ? "" : "s")" : "No new chapters."
-        } catch { message = error.localizedDescription }
+        } catch {
+            message = error.localizedDescription + (series.kind == .web ? " If the site moved or closed, use ⋯ › Migrate." : "")
+        }
     }
 }
 

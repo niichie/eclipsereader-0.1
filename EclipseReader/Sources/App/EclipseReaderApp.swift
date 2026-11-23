@@ -33,9 +33,14 @@ struct EclipseReaderApp: App {
                 }
                 .onChange(of: phase) { _, phase in
                     if phase != .active { model.save() }
+                    if phase == .background && model.state.notifyNew == true { ChapterAlerts.schedule() }
                     if phase == .active { Task { await model.checkForUpdates() } }
                     if phase == .background { Task { try? await model.pipeline.cache.prune() } }
                 }
+        }
+        // iOS wakes the app every few hours (when alerts are on) to look for new chapters.
+        .backgroundTask(.appRefresh(ChapterAlerts.refreshID)) {
+            await LibraryModel.backgroundRefresh()
         }
     }
 }

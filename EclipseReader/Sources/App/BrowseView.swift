@@ -49,7 +49,7 @@ struct BrowseView: View {
     @State private var newSiteName = ""
     @State private var newSiteURL = ""
     @State private var popular: [DiscoverItem] = []
-    @State private var results: [DiscoverItem]?
+    @StateObject private var search = GlobalSearchModel()
     @State private var searchingText: String?
     @State private var opened: MangaSeries?
     @State private var addingID: String?
@@ -60,7 +60,7 @@ struct BrowseView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search MangaDex, or enter a website", text: $address)
+                        TextField("Search every site, or enter an address", text: $address)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.webSearch)
                             .submitLabel(.go)
                             .onSubmit { open(address) }
@@ -68,27 +68,24 @@ struct BrowseView: View {
                     .padding(14).eclipseCard(cornerRadius: 14)
 
                     if let searchingText {
-                        section("Results for “\(searchingText)”", detail: "From MangaDex · tap to add") {
-                            if let results {
-                                if results.isEmpty {
-                                    Text("Nothing on MangaDex by that name.").font(.subheadline).foregroundStyle(.secondary)
-                                } else {
-                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12, alignment: .top)], spacing: 16) {
-                                        ForEach(results) { item in discoverCard(item) }
-                                    }
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(alignment: .firstTextBaseline) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Results for “\(searchingText)”").font(.title3.weight(.bold)).lineLimit(2)
+                                    Text("Every connected and saved site · tap to add").font(.footnote).foregroundStyle(.secondary)
                                 }
-                            } else {
-                                ProgressView().frame(maxWidth: .infinity).padding()
+                                Spacer()
+                                Button("Clear") { withAnimation { self.searchingText = nil; search.cancel(); address = "" } }
+                                    .font(.subheadline.weight(.semibold))
                             }
+                            GlobalSearchResults(search: search, busyID: addingID) { item in add(item) }
                             Button { webSearch(searchingText) } label: {
                                 Label("Search the web for “\(searchingText)”", systemImage: "safari")
                                     .frame(maxWidth: .infinity, alignment: .leading).padding(14).eclipseCard(cornerRadius: 14)
                             }.buttonStyle(PressableStyle())
-                            Button("Clear search") { withAnimation { self.searchingText = nil; results = nil; address = "" } }
-                                .font(.footnote).foregroundStyle(.secondary)
                         }
                     } else {
-                        Text("Search MangaDex above, or open a site below and tap **Add to library** on a series. It joins your library with every chapter, ready to read or download.")
+                        Text("Search every site at once above, or open a site below and tap **Add** on a series. It joins your library with every chapter, ready to read or download.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
 
@@ -149,12 +146,10 @@ struct BrowseView: View {
         if trimmed.contains("."), !trimmed.contains(" "), let url = WebLink.parse(trimmed) {
             browsing = BrowseTarget(url: url)
         } else {
-            // Words: search MangaDex natively, with a web search one tap away.
-            withAnimation { searchingText = trimmed; results = nil }
-            Task {
-                do { let found = try await Discover.mangaDex(query: trimmed); if searchingText == trimmed { results = found } }
-                catch { if searchingText == trimmed { results = []; discoverError = "MangaDex didn’t answer. Try the web search." } }
-            }
+            // Words: search every source at once, with a web search one tap away.
+            withAnimation { searchingText = trimmed }
+            discoverError = nil
+            search.run(trimmed, sources: GlobalSearchModel.sources(saved: model.state.sites ?? []))
         }
     }
     private func webSearch(_ text: String) {
@@ -189,6 +184,10 @@ struct BrowseView: View {
         .disabled(addingID != nil)
     }
     private func add(_ item: DiscoverItem) {
+        if let owned = model.series(id: item.id) ?? model.allSeries.first(where: { $0.url == item.url }) {
+            opened = owned
+            return
+        }
         addingID = item.id
         discoverError = nil
         Task {

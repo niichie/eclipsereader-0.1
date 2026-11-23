@@ -74,6 +74,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
         }
     }
     private func rebuild() {
+        stopAutoScroll(notify: true)
         rebuilding = true
         defer { rebuilding = false }
         if let pager {
@@ -202,7 +203,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !rebuilding, let collection, scrollView === collection,
-              scrollView.isDragging || scrollView.isDecelerating else { return }
+              scrollView.isDragging || scrollView.isDecelerating || autoLink != nil else { return }
         if collection.contentOffset.y + collection.bounds.height >= collection.contentSize.height - 1 {
             let last = max(0, pages.count - 1)
             if last != current { current = last; changed?(current) }
@@ -213,6 +214,50 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
             current = path.item; changed?(current)
         }
     }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        // A finger on the strip takes over from auto-scroll.
+        if autoLink != nil { stopAutoScroll(notify: true) }
+    }
+
+    // MARK: Auto-scroll (vertical strips)
+
+    private var autoLink: CADisplayLink?
+    private var autoSpeed: CGFloat = 0
+    private var lastTick: CFTimeInterval = 0
+    /// Called when auto-scroll stops on its own (end of chapter, or the reader touched the strip).
+    var autoScrollStopped: (() -> Void)?
+    var isAutoScrolling: Bool { autoLink != nil }
+    /// Scrolls the strip at `pointsPerSecond`; nil stops.
+    func setAutoScroll(_ pointsPerSecond: Double?) {
+        stopAutoScroll(notify: false)
+        guard let pointsPerSecond, pointsPerSecond > 0, collection != nil else { return }
+        autoSpeed = CGFloat(pointsPerSecond)
+        lastTick = 0
+        let link = CADisplayLink(target: self, selector: #selector(autoStep(_:)))
+        link.add(to: .main, forMode: .common)
+        autoLink = link
+    }
+    private func stopAutoScroll(notify: Bool) {
+        guard autoLink != nil else { return }
+        autoLink?.invalidate()
+        autoLink = nil
+        if notify { autoScrollStopped?() }
+    }
+    @objc private func autoStep(_ link: CADisplayLink) {
+        guard let collection, collection.window != nil else { stopAutoScroll(notify: true); return }
+        let now = link.timestamp
+        let dt = lastTick == 0 ? 1.0 / 60 : min(0.1, now - lastTick)
+        lastTick = now
+        let end = max(0, collection.contentSize.height - collection.bounds.height)
+        let next = min(end, collection.contentOffset.y + autoSpeed * CGFloat(dt))
+        collection.contentOffset = CGPoint(x: collection.contentOffset.x, y: next)
+        if next >= end - 0.5 { stopAutoScroll(notify: true) }
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        stopAutoScroll(notify: true)
+    }
+
     override func didReceiveMemoryWarning() {
         super.didReceiveMemoryWarning()
         // Decoded images are owned only by active/reusable views, never a chapter array.

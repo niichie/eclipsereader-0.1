@@ -13,6 +13,22 @@ struct UpdatesView: View {
         }
         NavigationStack {
             List {
+                if model.state.notifyNew == nil {
+                    Section {
+                        HStack(spacing: 14) {
+                            Image(systemName: "bell.badge.fill").font(.title2).foregroundStyle(Eclipse.highlight)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Get notified").font(.headline)
+                                Text("A notification when a series in your library gets a new chapter.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 4)
+                            Button("Turn on") { Task { _ = await model.setNotifications(true) } }
+                                .buttonStyle(.borderedProminent).tint(Eclipse.accent)
+                        }
+                        .swipeActions { Button("Not now") { model.state.notifyNew = false; model.save() } }
+                    }
+                }
                 Section {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {

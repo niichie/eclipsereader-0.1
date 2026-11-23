@@ -26,6 +26,8 @@ struct ReaderView: View {
     @State private var tallPages = 0
     @State private var pickingCover = false
     @State private var toast: String?
+    @State private var autoScrolling = false
+    @AppStorage("autoScrollSpeed") private var autoSpeed = 95.0
     /// Global (manga) settings adjusted for this series' style: manhwa scrolls vertically,
     /// comics read left to right. Tall strips switch to vertical even before a style is known.
     private var effective: ReaderPreferences {
@@ -206,7 +208,13 @@ struct ReaderView: View {
                 }
                 .sheet(item: $translator.editing) { block in TranslationEditor(model: translator, block: block) }
                 .translationRunner(translator)
-                .onChange(of: chapter.id) { _, _ in translator.clear() }
+                .onChange(of: chapter.id) { _, _ in translator.clear(); autoScrolling = false }
+                .onChange(of: autoSpeed) { _, speed in
+                    // New speed applies straight away while gliding.
+                    if autoScrolling, let reader = handle.controller as? ReaderContainerController {
+                        reader.setAutoScroll(speed)
+                    }
+                }
                 .confirmationDialog("End of chapter", isPresented: $end, titleVisibility: .visible) {
                     if let next = library.next(after: chapter) {
                         Button("Mark read & open \(next.title)") {
@@ -316,6 +324,16 @@ struct ReaderView: View {
                     Button { toggleTrim() } label: { quickLabel("crop", "Crop", on: effective.trimMargins ?? true) }
                         .accessibilityLabel("Trim page margins")
                 } else {
+                    Menu {
+                        Picker("Speed", selection: $autoSpeed) {
+                            ForEach(Self.speeds, id: \.1) { speed in Text(speed.0).tag(speed.1) }
+                        }
+                    } label: {
+                        quickLabel(autoScrolling ? "pause.circle.fill" : "play.circle", autoScrolling ? "Pause" : "Auto", on: autoScrolling)
+                    } primaryAction: {
+                        toggleAutoScroll()
+                    }
+                    .accessibilityLabel(autoScrolling ? "Pause auto-scroll" : "Auto-scroll. Touch and hold for speed")
                     Button { library.preferences.verticalGap = !(library.preferences.verticalGap ?? false) } label: {
                         quickLabel("rectangle.split.1x2", "Gap", on: library.preferences.verticalGap ?? false)
                     }.accessibilityLabel("Gap between pages")
@@ -354,6 +372,20 @@ struct ReaderView: View {
         Task {
             try? await Task.sleep(for: .seconds(2.5))
             withAnimation(.snappy) { if toast == text { toast = nil } }
+        }
+    }
+    static let speeds: [(String, Double)] = [("Slow", 35), ("Relaxed", 60), ("Normal", 95), ("Fast", 150), ("Very fast", 230)]
+    /// Hands-free reading for vertical strips: the strip glides at the chosen speed until you touch it.
+    private func toggleAutoScroll() {
+        guard let reader = handle.controller as? ReaderContainerController else { return }
+        if autoScrolling {
+            reader.setAutoScroll(nil)
+            autoScrolling = false
+        } else {
+            reader.autoScrollStopped = { autoScrolling = false }
+            reader.setAutoScroll(autoSpeed)
+            autoScrolling = reader.isAutoScrolling
+            if autoScrolling { controls = false }
         }
     }
     private func toggleTrim() {

@@ -1,0 +1,159 @@
+import Foundation
+
+/// A place global search can look: a built-in connection or any website.
+public struct SearchSource: Identifiable, Hashable, Sendable {
+    public enum Kind: Hashable, Sendable { case mangaDex, weebCentral, webtoons, site(URL) }
+    public let name: String
+    public let kind: Kind
+    public init(name: String, kind: Kind) { self.name = name; self.kind = kind }
+    public var id: String {
+        switch kind {
+        case .mangaDex: "mangadex"
+        case .weebCentral: "weebcentral"
+        case .webtoons: "webtoons"
+        case .site(let url): url.host ?? url.absoluteString
+        }
+    }
+    public var host: String {
+        switch kind {
+        case .mangaDex: "mangadex.org"
+        case .weebCentral: "weebcentral.com"
+        case .webtoons: "webtoons.com"
+        case .site(let url): url.host?.replacingOccurrences(of: "www.", with: "") ?? ""
+        }
+    }
+}
+
+/// Searches one source for a title. Websites are searched the way most manga sites expect
+/// (WordPress `?s=`, the engine behind Madara and MangaThemesia), then their result cards are read.
+public enum GlobalSearch {
+    public static func search(_ source: SearchSource, query: String, http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [DiscoverItem] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        switch source.kind {
+        case .mangaDex:
+            return try await Discover.mangaDex(query: q, limit: 20, http: http)
+        case .weebCentral:
+            var parts = URLComponents(string: "https://weebcentral.com/search/data")!
+            parts.queryItems = [URLQueryItem(name: "text", value: q), URLQueryItem(name: "sort", value: "Best Match"),
+                                URLQueryItem(name: "order", value: "Descending"), URLQueryItem(name: "official", value: "Any"),
+                                URLQueryItem(name: "display_mode", value: "Full Display")]
+            guard let url = parts.url else { return [] }
+            return weebCentralResults(in: try await text(url, http: http))
+        case .webtoons:
+            var parts = URLComponents(string: "https://www.webtoons.com/en/search")!
+            parts.queryItems = [URLQueryItem(name: "keyword", value: q)]
+            guard let url = parts.url else { return [] }
+            return webtoonsResults(in: try await text(url, http: http), base: url)
+        case .site(let root):
+            var lastError: Error?
+            for url in searchURLs(root: root, query: q) {
+                do {
+                    let found = results(in: try await text(url, http: http), base: url)
+                    if !found.isEmpty { return found }
+                } catch { lastError = error }
+            }
+            if let lastError { throw lastError }
+            return []
+        }
+    }
+
+    /// The search addresses to try for a website, most specific first.
+    public static func searchURLs(root: URL, query: String) -> [URL] {
+        var base = URLComponents()
+        base.scheme = "https"; base.host = root.host; base.path = "/"
+        var madara = base
+        madara.queryItems = [URLQueryItem(name: "s", value: query), URLQueryItem(name: "post_type", value: "wp-manga")]
+        var plain = base
+        plain.queryItems = [URLQueryItem(name: "s", value: query)]
+        return [madara.url, plain.url].compactMap { $0 }
+    }
+
+    private static func text(_ url: URL, http: any HTTPTransport) async throws -> String {
+        let data = try await http.fetch(url, referer: nil, image: false)
+        guard let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
+            throw SourceError.unsupportedStructure
+        }
+        return html
+    }
+
+    /// Result cards on a search or listing page: links to series pages, with the cover image and
+    /// title found inside or next to the link. Chapter links and navigation are ignored.
+    public static func results(in html: String, base: URL, limit: Int = 24) -> [DiscoverItem] {
+        let inert = html.replacingOccurrences(of: #"(?is)<!--.*?-->|<(script|style|template|noscript)\b[^>]*>.*?</\1\s*>"#,
+                                              with: "", options: .regularExpression)
+        let site = base.host.map(LinkedSource.root) ?? ""
+        var order: [String] = []
+        var found: [String: (url: URL, title: String?, cover: URL?)] = [:]
+        for m in LinkedSource.matches(#"(?is)<a\b([^>]*)>(.*?)</a>"#, inert) {
+            let fields = ReadBerserkParser.attributes("<a " + m[0] + ">")
+            guard let href = fields["href"], let url = LinkedSource.resolve(href, base: base),
+                  let host = url.host, LinkedSource.root(host) == site else { continue }
+            let path = url.path
+            guard path.range(of: LinkedSource.seriesPath, options: .regularExpression) != nil,
+                  path.range(of: #"(?i)chapter|episode|/ch[-_]?\d|/page/\d|/genres?/|/tag/|/author/"#, options: .regularExpression) == nil,
+                  !LinkedSource.listingWords.contains(url.lastPathComponent.lowercased()) else { continue }
+            var cover: URL?
+            var alt: String?
+            if let tag = ReadBerserkParser.tags("img", m[1]).first {
+                let img = ReadBerserkParser.attributes(tag)
+                let raw = ["data-src", "data-lazy-src", "data-original", "src"].lazy.compactMap { img[$0] }
+                    .first { !$0.hasPrefix("data:") && !$0.isEmpty }
+                    ?? (img["srcset"] ?? img["data-srcset"])?.split(separator: ",").first.map { String($0.split(separator: " ").first ?? "") }
+                cover = raw.flatMap { LinkedSource.resolve($0, base: base) }
+                alt = img["alt"].map(LinkedSource.plain)
+            }
+            let text = LinkedSource.plain(m[1])
+            let candidates = [fields["title"].map(LinkedSource.plain), alt, text.count <= 120 ? text : nil]
+            let title = candidates.compactMap { $0 }.first { $0.count >= 2 && $0.rangeOfCharacter(from: .letters) != nil }
+            let key = url.absoluteString.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if var entry = found[key] {
+                if entry.cover == nil { entry.cover = cover }
+                if entry.title == nil { entry.title = title }
+                found[key] = entry
+            } else {
+                order.append(key)
+                found[key] = (url, title, cover)
+            }
+        }
+        return order.compactMap { key -> DiscoverItem? in
+            guard let entry = found[key], let title = entry.title else { return nil }
+            return DiscoverItem(id: key, title: title, url: entry.url, cover: entry.cover, detail: nil)
+        }.prefix(limit).map { $0 }
+    }
+
+    static func weebCentralResults(in html: String) -> [DiscoverItem] {
+        var seen = Set<String>()
+        var items: [DiscoverItem] = []
+        for block in LinkedSource.matches(#"(?is)<article\b[^>]*>(.*?)</article>"#, html) {
+            guard let href = LinkedSource.firstMatch(#"href=["'](https://weebcentral\.com/series/[0-9A-Za-z]+[^"']*)["']"#, block[0]),
+                  let url = URL(string: href), let id = WeebCentral.seriesID(url), seen.insert(id).inserted else { continue }
+            let img = ReadBerserkParser.tags("img", block[0]).first.map(ReadBerserkParser.attributes)
+            let cover = (img?["src"] ?? img?["data-src"]).flatMap { LinkedSource.resolve($0, base: url) }
+            let title = img?["alt"].map { LinkedSource.plain($0).replacingOccurrences(of: " cover", with: "") }
+                ?? LinkedSource.firstMatch(#"(?is)<a[^>]*>([^<]{2,120})</a>"#, block[0]).map(LinkedSource.plain)
+            items.append(DiscoverItem(id: id, title: title ?? "Untitled", url: url, cover: cover, detail: nil))
+        }
+        if items.isEmpty {
+            // Layout without <article>: fall back to plain result links.
+            return results(in: html, base: URL(string: "https://weebcentral.com/")!).filter { WeebCentral.seriesID($0.url) != nil }
+        }
+        return items
+    }
+
+    static func webtoonsResults(in html: String, base: URL) -> [DiscoverItem] {
+        var seen = Set<String>()
+        var items: [DiscoverItem] = []
+        for m in LinkedSource.matches(#"(?is)<a\b([^>]*)>(.*?)</a>"#, html) {
+            guard let href = ReadBerserkParser.attributes("<a " + m[0] + ">")["href"],
+                  let url = LinkedSource.resolve(href, base: base), Webtoons.handles(url), url.path.hasSuffix("/list"),
+                  let number = Webtoons.titleNumber(url), seen.insert(number).inserted else { continue }
+            let img = ReadBerserkParser.tags("img", m[1]).first.map(ReadBerserkParser.attributes)
+            let cover = (img?["src"] ?? img?["data-src"]).flatMap { LinkedSource.resolve($0, base: base) }
+            let title = LinkedSource.firstMatch(#"(?is)class=["'][^"']*(?:subj|title)[^"']*["'][^>]*>(.*?)<"#, m[1]).map(LinkedSource.plain)
+                ?? img?["alt"].map(LinkedSource.plain)
+            items.append(DiscoverItem(id: "webtoons-" + number, title: title ?? "Untitled", url: url, cover: cover, detail: "Webtoon"))
+        }
+        return items
+    }
+}

@@ -50,6 +50,10 @@
         </dict>
     </array>
     <key>ITSAppUsesNonExemptEncryption</key><false/>
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array><string>com.personal.eclipse.reader.refresh</string></array>
+    <key>UIBackgroundModes</key>
+    <array><string>fetch</string></array>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

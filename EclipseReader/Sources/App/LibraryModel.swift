@@ -94,6 +94,7 @@ final class LibraryModel: ObservableObject {
         #endif
         Task { try? await pipeline.cache.prune() }
         Task { downloaded = await OfflineStore.shared.downloadedIDs() }
+        Self.current = self
     }
     var preferences: ReaderPreferences {
         get { state.preferences }
@@ -250,6 +251,8 @@ final class LibraryModel: ObservableObject {
             return try LinkedSource.analyze(html: html, url: url)
         }
     }
+    /// Reads a series page without adding it (migration previews).
+    func inspect(_ url: URL) async throws -> LinkInspection { try await inspectAny(url) }
     enum AddLinkError: LocalizedError {
         case invalid
         var errorDescription: String? { "Enter a full link (https://…) to a manga series page, a chapter, or an image." }
@@ -312,6 +315,86 @@ final class LibraryModel: ObservableObject {
         case .fresh(let url, let found): return commit(url, found)
         }
     }
+    // MARK: Migration (a site died or moved)
+
+    /// A chapter's number as a comparable key ("12", "12.5"), from its number or its title.
+    nonisolated static func numberKey(_ chapter: Chapter) -> String? {
+        if let n = Double(chapter.number) { return LinkedSource.format(n) }
+        return ChapterOrder.number(ChapterText.split(chapter.title).name).map(LinkedSource.format)
+    }
+    /// How many chapters with reading progress have a matching chapter number in `found`.
+    func migrationMatches(_ series: MangaSeries, to found: LinkInspection) -> (matched: Int, total: Int) {
+        let targets = Set(found.chapters.compactMap(Self.numberKey))
+        let tracked = series.chapters.filter { state.progress[$0.id] != nil }
+        return (tracked.filter { Self.numberKey($0).map(targets.contains) ?? false }.count, tracked.count)
+    }
+    /// Moves a series to another site: its chapters become the new site's, reading progress follows
+    /// each chapter by number, and the series keeps its place, cover choice and reading style.
+    @discardableResult
+    func migrate(_ old: MangaSeries, to target: URL, found: LinkInspection) -> Int {
+        guard old.kind == .web, old.id != Self.berserkID, var list = state.series,
+              let i = list.firstIndex(where: { $0.id == old.id }) else { return 0 }
+        var byNumber: [String: Chapter] = [:]
+        for chapter in found.chapters { if let key = Self.numberKey(chapter), byNumber[key] == nil { byNumber[key] = chapter } }
+        var moved = 0
+        for chapter in old.chapters {
+            guard let progress = state.progress[chapter.id] else { continue }
+            state.progress[chapter.id] = nil
+            guard let key = Self.numberKey(chapter), let match = byNumber[key] else { continue }
+            if let existing = state.progress[match.id], existing.updated > progress.updated { continue }
+            state.progress[match.id] = progress
+            if state.lastChapterID == chapter.id { state.lastChapterID = match.id }
+            moved += 1
+        }
+        // Downloads belong to the old site's chapter addresses; free that space.
+        for chapter in old.chapters where isDownloaded(chapter) { removeDownload(chapter) }
+        let oldIDs = Set(old.chapters.map(\.id))
+        state.newChapterIDs?.removeAll { oldIDs.contains($0) }
+        list[i].url = target
+        list[i].chapters = found.chapters
+        list[i].cover = found.cover
+        if list[i].summary == nil { list[i].summary = found.summary }
+        state.series = list
+        state.covers?[old.id] = nil
+        state.coverChecked?.removeAll { $0 == old.id }
+        coverAttempts.remove(old.id)
+        if let style = found.style, state.styleOverrides?[old.id] == nil {
+            var map = state.detectedStyles ?? [:]; map[old.id] = style; state.detectedStyles = map
+        }
+        sessionRefreshed.insert(old.id)
+        save()
+        return moved
+    }
+    /// The same site at a new address (asura.example → asura-new.example): every chapter address
+    /// moves to the new domain and keeps its progress.
+    @discardableResult
+    func moveSite(_ old: MangaSeries, to address: String) -> Bool {
+        guard old.kind == .web, old.id != Self.berserkID, let target = WebLink.parse(address), let newHost = target.host,
+              let oldHost = old.url.host, var list = state.series, let i = list.firstIndex(where: { $0.id == old.id }) else { return false }
+        let oldRoot = LinkedSource.root(oldHost)
+        func swap(_ url: URL) -> URL {
+            guard let host = url.host, LinkedSource.root(host) == oldRoot,
+                  var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+            parts.host = newHost
+            return parts.url ?? url
+        }
+        let chapters = old.chapters.map { Chapter(url: swap($0.url), title: $0.title, number: $0.number, published: $0.published) }
+        for (before, after) in zip(old.chapters, chapters) where before.id != after.id {
+            if let progress = state.progress[before.id] { state.progress[after.id] = progress; state.progress[before.id] = nil }
+            if state.lastChapterID == before.id { state.lastChapterID = after.id }
+            if let k = state.newChapterIDs?.firstIndex(of: before.id) { state.newChapterIDs?[k] = after.id }
+            if isDownloaded(before) { removeDownload(before) }
+        }
+        list[i].url = swap(old.url)
+        list[i].chapters = chapters
+        if let cover = list[i].cover { list[i].cover = swap(cover) }
+        state.series = list
+        state.covers?[old.id] = nil
+        coverAttempts.remove(old.id)
+        save()
+        return true
+    }
+
     /// Re-reads a web series' chapter list and adds new chapters, keeping progress.
     func update(_ series: MangaSeries) async throws {
         if series.id == Self.berserkID { await refresh(); if let message = self.error { throw BookError.invalid(message) }; return }
@@ -377,8 +460,12 @@ final class LibraryModel: ObservableObject {
         return series.chapters.filter { set.contains($0.id) }.count
     }
     var totalNew: Int { librarySeries.reduce(0) { $0 + newCount($1) } }
+    /// New chapters found during the current update check, per series (for notifications).
+    private var foundThisCheck: [String: (count: Int, latest: String?)] = [:]
     private func markNew(_ fresh: [Chapter], in seriesID: String) {
         guard !fresh.isEmpty else { return }
+        let previous = foundThisCheck[seriesID]?.count ?? 0
+        foundThisCheck[seriesID] = (previous + fresh.count, fresh.last?.title)
         state.newChapterIDs = Array(Set((state.newChapterIDs ?? []) + fresh.map(\.id)))
         // Optionally download new chapters of series you have started.
         if state.autoDownloadNew == true, let started = self.series(id: seriesID), lastRead(started) != nil {
@@ -400,13 +487,61 @@ final class LibraryModel: ObservableObject {
         #endif
         if !force, let last = state.lastUpdateCheck, Date().timeIntervalSince(last) < 6 * 3600 { return }
         checking = true; defer { checking = false }
+        foundThisCheck = [:]
         await refresh()
-        for series in allSeries where series.kind == .web {
+        // Series you're reading first, so a short background window covers what matters most.
+        let order = allSeries.filter { $0.kind == .web }
+            .sorted { (lastRead($0) ?? .distantPast) > (lastRead($1) ?? .distantPast) }
+        for series in order {
             try? await update(series)
             try? await Task.sleep(for: .milliseconds(400))
         }
         state.lastUpdateCheck = Date()
         save()
+        if state.notifyNew == true {
+            let updates = foundThisCheck.compactMap { id, found -> ChapterAlerts.Update? in
+                guard let series = self.series(id: id) else { return nil }
+                return ChapterAlerts.Update(seriesID: id, title: series.title, count: found.count, latest: found.latest)
+            }
+            await ChapterAlerts.post(updates)
+        }
+        foundThisCheck = [:]
+    }
+
+    // MARK: Background checks
+
+    /// The model the app is running with, for background refreshes.
+    static weak var current: LibraryModel?
+    /// Runs when iOS wakes the app to look for new chapters.
+    static func backgroundRefresh() async {
+        ChapterAlerts.schedule()
+        let model = current ?? LibraryModel()
+        guard model.state.notifyNew == true else { return }
+        await model.checkForUpdates(force: true)
+    }
+    /// Turns new-chapter alerts on (asking iOS for permission) or off.
+    func setNotifications(_ on: Bool) async -> Bool {
+        if on {
+            guard await ChapterAlerts.requestPermission() else {
+                state.notifyNew = false; save()
+                return false
+            }
+            state.notifyNew = true
+            ChapterAlerts.schedule()
+        } else {
+            state.notifyNew = false
+            ChapterAlerts.cancelSchedule()
+        }
+        lastBadge = -1
+        save()
+        return true
+    }
+    private var lastBadge = -1
+    private func updateBadge() {
+        let count = state.notifyNew == true ? totalNew : 0
+        guard count != lastBadge else { return }
+        lastBadge = count
+        Task { await ChapterAlerts.badge(count) }
     }
 
     // MARK: Offline downloads
@@ -634,6 +769,7 @@ final class LibraryModel: ObservableObject {
     func save() {
         do { try repository.save(state); persistenceError = nil }
         catch { persistenceError = "Progress could not be saved: \(error.localizedDescription)" }
+        updateBadge()
     }
     func previous(before chapter: Chapter) -> Chapter? {
         if let series = self.series(containing: chapter) {

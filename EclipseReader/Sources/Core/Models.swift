@@ -169,6 +169,8 @@ public struct LibraryState: Codable, Sendable {
     public var covers: [String: URL]?
     /// Series whose site cover art has been looked for (so it happens once).
     public var coverChecked: [String]?
+    /// Notify about new chapters (background checks, notifications, icon badge). nil means off.
+    public var notifyNew: Bool?
     /// History shows only reading after this moment (set by "Clear history").
     public var historyCleared: Date?
     /// Covers the user picked (a page or a photo); these win over automatic ones.
