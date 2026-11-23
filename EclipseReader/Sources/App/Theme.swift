@@ -8,6 +8,8 @@ enum Eclipse {
     static let surface = Color(white: 0.075)
     static let surfaceHigh = Color(white: 0.12)
     static let hairline = Color.white.opacity(0.08)
+    /// UI tests wait for the app to go idle; endless decorative animations would stall them.
+    static let uiTesting = ProcessInfo.processInfo.arguments.contains("--ui-testing")
     static let corona = AngularGradient(colors: [accent, highlight, accent.opacity(0.5), accent], center: .center)
 }
 
@@ -76,7 +78,7 @@ struct ShimmerView: View {
         }
         .clipped()
         .onAppear {
-            guard !reduceMotion else { return }
+            guard !reduceMotion, !Eclipse.uiTesting else { return }
             withAnimation(.linear(duration: 1.3).repeatForever(autoreverses: false)) { phase = 1 }
         }
         .accessibilityHidden(true)
@@ -115,7 +117,7 @@ private struct PulseModifier: ViewModifier {
             .scaleEffect(on ? 1.06 : 0.94)
             .opacity(on ? 1 : 0.7)
             .onAppear {
-                guard !reduceMotion else { return }
+                guard !reduceMotion, !Eclipse.uiTesting else { return }
                 withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { on = true }
             }
     }

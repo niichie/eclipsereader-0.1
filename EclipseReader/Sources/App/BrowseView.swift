@@ -48,21 +48,60 @@ struct BrowseView: View {
     @State private var addingSite = false
     @State private var newSiteName = ""
     @State private var newSiteURL = ""
+    @State private var popular: [DiscoverItem] = []
+    @State private var results: [DiscoverItem]?
+    @State private var searchingText: String?
+    @State private var opened: MangaSeries?
+    @State private var addingID: String?
+    @State private var discoverError: String?
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search, or enter a website", text: $address)
+                        TextField("Search MangaDex, or enter a website", text: $address)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.webSearch)
                             .submitLabel(.go)
                             .onSubmit { open(address) }
                     }
                     .padding(14).eclipseCard(cornerRadius: 14)
 
-                    Text("Open any manga, manhwa or webcomic site, then tap **Add to library** on a series or chapter. It joins your library with every chapter, ready to read or download.")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                    if let searchingText {
+                        section("Results for “\(searchingText)”", detail: "From MangaDex · tap to add") {
+                            if let results {
+                                if results.isEmpty {
+                                    Text("Nothing on MangaDex by that name.").font(.subheadline).foregroundStyle(.secondary)
+                                } else {
+                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12, alignment: .top)], spacing: 16) {
+                                        ForEach(results) { item in discoverCard(item) }
+                                    }
+                                }
+                            } else {
+                                ProgressView().frame(maxWidth: .infinity).padding()
+                            }
+                            Button { webSearch(searchingText) } label: {
+                                Label("Search the web for “\(searchingText)”", systemImage: "safari")
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(14).eclipseCard(cornerRadius: 14)
+                            }.buttonStyle(PressableStyle())
+                            Button("Clear search") { withAnimation { self.searchingText = nil; results = nil; address = "" } }
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("Search MangaDex above, or open a site below and tap **Add to library** on a series. It joins your library with every chapter, ready to read or download.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+
+                    if !popular.isEmpty {
+                        section("Popular on MangaDex", detail: nil) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                LazyHStack(alignment: .top, spacing: 12) {
+                                    ForEach(popular) { item in discoverCard(item).frame(width: 112) }
+                                }.padding(.vertical, 2)
+                            }
+                        }
+                    }
+                    if let discoverError { Text(discoverError).font(.footnote).foregroundStyle(.orange) }
 
                     section("Your sites", detail: (model.state.sites ?? []).isEmpty ? "Save any site from the browser’s menu" : nil) {
                         ForEach(model.state.sites ?? []) { site in
@@ -94,6 +133,8 @@ struct BrowseView: View {
             .background(EclipseBackground())
             .navigationTitle("Browse")
             .fullScreenCover(item: $browsing) { target in MangaBrowserView(start: target.url).environmentObject(model) }
+            .sheet(item: $opened) { series in SeriesSheet(series: series).environmentObject(model) }
+            .task { if popular.isEmpty { popular = (try? await Discover.mangaDex(limit: 20)) ?? [] } }
             .alert("Add a site", isPresented: $addingSite) {
                 TextField("Name", text: $newSiteName)
                 TextField("https://…", text: $newSiteURL).textInputAutocapitalization(.never).keyboardType(.URL)
@@ -108,9 +149,55 @@ struct BrowseView: View {
         if trimmed.contains("."), !trimmed.contains(" "), let url = WebLink.parse(trimmed) {
             browsing = BrowseTarget(url: url)
         } else {
-            var parts = URLComponents(string: "https://duckduckgo.com/")!
-            parts.queryItems = [URLQueryItem(name: "q", value: trimmed + " manga")]
-            if let url = parts.url { browsing = BrowseTarget(url: url) }
+            // Words: search MangaDex natively, with a web search one tap away.
+            withAnimation { searchingText = trimmed; results = nil }
+            Task {
+                do { let found = try await Discover.mangaDex(query: trimmed); if searchingText == trimmed { results = found } }
+                catch { if searchingText == trimmed { results = []; discoverError = "MangaDex didn’t answer. Try the web search." } }
+            }
+        }
+    }
+    private func webSearch(_ text: String) {
+        var parts = URLComponents(string: "https://duckduckgo.com/")!
+        parts.queryItems = [URLQueryItem(name: "q", value: text + " manga")]
+        if let url = parts.url { browsing = BrowseTarget(url: url) }
+    }
+    private func discoverCard(_ item: DiscoverItem) -> some View {
+        Button { add(item) } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                CoverView(url: item.cover, referer: nil)
+                    .aspectRatio(0.7, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay {
+                        if addingID == item.id {
+                            ZStack { Color.black.opacity(0.5); ProgressView().tint(.white) }
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if model.allSeries.contains(where: { $0.url == item.url }) {
+                            Image(systemName: "checkmark.circle.fill").font(.callout).foregroundStyle(Eclipse.highlight)
+                                .background(Circle().fill(.black)).padding(5)
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.4), radius: 6, y: 3)
+                Text(item.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                if let detail = item.detail { Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+            }
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(addingID != nil)
+    }
+    private func add(_ item: DiscoverItem) {
+        addingID = item.id
+        discoverError = nil
+        Task {
+            defer { addingID = nil }
+            do {
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString) { opened = series }
+            } catch {
+                discoverError = "Couldn’t add \(item.title): \(error.localizedDescription)"
+            }
         }
     }
     @ViewBuilder private func section<Content: View>(_ title: String, detail: String?, @ViewBuilder content: () -> Content) -> some View {
@@ -353,5 +440,25 @@ private struct BrowserToolbar: View {
         .background(Eclipse.highlight, in: Capsule())
         .foregroundStyle(.black)
         .shadow(color: Eclipse.highlight.opacity(0.35), radius: 10, y: 2)
+    }
+}
+
+/// A series opened from Browse: its page in a sheet, with the reader on top.
+private struct SeriesSheet: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let series: MangaSeries
+    @State private var reader: Chapter?
+    var body: some View {
+        NavigationStack {
+            SeriesView(seriesID: series.id, reader: $reader)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") { dismiss() }.fontWeight(.semibold)
+                    }
+                }
+        }
+        .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
+        .preferredColorScheme(.dark)
     }
 }

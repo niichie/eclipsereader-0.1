@@ -39,7 +39,7 @@ struct UpdatesView: View {
                                             CoverView(url: model.cover(for: series), referer: series.chapters.first)
                                                 .frame(width: 40, height: 57).clipShape(RoundedRectangle(cornerRadius: 6))
                                             VStack(alignment: .leading, spacing: 3) {
-                                                Text(chapter.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                                                Text(ChapterText.split(chapter.title).name).font(.subheadline.weight(.semibold)).lineLimit(2)
                                                 Text(series.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                             }
                                             Spacer(minLength: 0)
@@ -103,7 +103,7 @@ struct HistoryView: View {
                                 .frame(width: 44, height: 63).clipShape(RoundedRectangle(cornerRadius: 6))
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(item.series.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                Text(item.chapter.title).font(.caption).lineLimit(1)
+                                Text(ChapterText.split(item.chapter.title).name).font(.caption).lineLimit(1)
                                 Text(item.progress.completed ? "Finished · \(item.progress.updated.formatted(.relative(presentation: .named)))"
                                      : "Page \(item.progress.page + 1) of \(item.progress.pageCount) · \(item.progress.updated.formatted(.relative(presentation: .named)))")
                                     .font(.caption2).foregroundStyle(.secondary)

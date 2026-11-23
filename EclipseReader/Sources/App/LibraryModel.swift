@@ -55,6 +55,17 @@ final class LibraryModel: ObservableObject {
             restored.detectedStyles = restored.detectedStyles?.filter { $0.key != Self.berserkID && $0.value != .manhwa }
             restored.defaultsVersion = 3
         }
+        // v4: earlier builds used a chapter page as the cover when a site hid its cover art.
+        // Forget those so the series' real art is looked for again (pages stay as a fallback).
+        if (restored.defaultsVersion ?? 0) < 4 {
+            restored.series = restored.series?.map { item in
+                var item = item
+                if let cover = item.cover, Self.looksLikePage(cover) { item.cover = nil }
+                return item
+            }
+            restored.coverChecked = nil
+            restored.defaultsVersion = 4
+        }
         #if DEBUG
         if ReaderTestFixture.demo { restored = ReaderTestFixture.demoState() }
         #endif
@@ -152,6 +163,11 @@ final class LibraryModel: ObservableObject {
 
     private var coverAttempts = Set<String>()
     /// Fills in missing covers from the first page of each series' first chapter, one at a time.
+    nonisolated static func looksLikePage(_ url: URL) -> Bool {
+        let path = url.path.lowercased()
+        if path.range(of: #"(chapter|episode|/ch[-_]?\d|/read/)"#, options: .regularExpression) != nil { return true }
+        return url.lastPathComponent.range(of: #"^\d{1,4}[a-z]?\.(jpe?g|png|webp|avif)$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
     func ensureCovers() async {
         #if DEBUG
         if ReaderTestFixture.demo { return }

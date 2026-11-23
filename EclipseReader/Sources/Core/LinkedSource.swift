@@ -124,6 +124,12 @@ public struct LinkedSource: Sendable {
     }
 
     private func page(_ url: URL) async throws -> String {
+        var url = url
+        // Webtoons' phone site builds its viewer with scripts; the desktop site lists every image.
+        if url.host?.lowercased() == "m.webtoons.com", var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            parts.host = "www.webtoons.com"
+            url = parts.url ?? url
+        }
         let bytes = try await http.fetch(url, referer: nil, image: false)
         guard let html = String(data: bytes, encoding: .utf8) ?? String(data: bytes, encoding: .isoLatin1)
         else { throw SourceError.unsupportedStructure }

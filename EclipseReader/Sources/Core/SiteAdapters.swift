@@ -191,3 +191,51 @@ struct WeebCentral {
         return try LinkedSource.detect(in: html, base: url)
     }
 }
+
+// MARK: - Discover (native search and popular lists)
+
+public struct DiscoverItem: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    public let url: URL
+    public let cover: URL?
+    public let detail: String?
+}
+
+public enum Discover {
+    /// MangaDex titles with English chapters: popular ones, or matches for a search.
+    public static func mangaDex(query: String? = nil, limit: Int = 24, http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [DiscoverItem] {
+        var parts = URLComponents(string: "https://api.mangadex.org/manga")!
+        var items = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "includes[]", value: "cover_art"),
+            URLQueryItem(name: "availableTranslatedLanguage[]", value: "en"),
+            URLQueryItem(name: "hasAvailableChapters", value: "true"),
+            URLQueryItem(name: "contentRating[]", value: "safe"),
+            URLQueryItem(name: "contentRating[]", value: "suggestive"),
+        ]
+        if let query, !query.trimmingCharacters(in: .whitespaces).isEmpty {
+            items.append(URLQueryItem(name: "title", value: query))
+            items.append(URLQueryItem(name: "order[relevance]", value: "desc"))
+        } else {
+            items.append(URLQueryItem(name: "order[followedCount]", value: "desc"))
+        }
+        parts.queryItems = items
+        guard let url = parts.url else { return [] }
+        let data = try await http.fetch(url, referer: nil, image: false)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = object["data"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
+        return list.compactMap { entry in
+            guard let id = entry["id"] as? String, let a = entry["attributes"] as? [String: Any],
+                  let page = URL(string: "https://mangadex.org/title/\(id)") else { return nil }
+            let title = MangaDex.localized(a["title"]) ?? MangaDex.altTitle(a["altTitles"]) ?? "Untitled"
+            let relations = entry["relationships"] as? [[String: Any]] ?? []
+            let file = (relations.first { $0["type"] as? String == "cover_art" }?["attributes"] as? [String: Any])?["fileName"] as? String
+            let cover = file.flatMap { URL(string: "https://uploads.mangadex.org/covers/\(id)/\($0).256.jpg") }
+            let language = (a["originalLanguage"] as? String ?? "").lowercased()
+            let kind = language.hasPrefix("ko") ? "Manhwa" : language.hasPrefix("zh") ? "Manhua" : language == "ja" ? "Manga" : "Comic"
+            let year = (a["year"] as? Int).map { " · \($0)" } ?? ""
+            return DiscoverItem(id: id, title: title, url: page, cover: cover, detail: kind + year)
+        }
+    }
+}

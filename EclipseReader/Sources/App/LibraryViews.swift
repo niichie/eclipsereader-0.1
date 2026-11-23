@@ -260,30 +260,35 @@ struct ContinueHero: View {
         let progress = model.state.progress[chapter.id]
         ZStack(alignment: .bottomLeading) {
             CoverView(url: cover, referer: chapter)
-                .frame(maxWidth: .infinity).frame(height: 236)
+                .frame(maxWidth: .infinity).frame(height: 210)
                 .blur(radius: 28).opacity(0.6)
             LinearGradient(colors: [Eclipse.accent.opacity(0.18), .black.opacity(0.92)], startPoint: .top, endPoint: .bottom)
             HStack(alignment: .bottom, spacing: 16) {
                 CoverView(url: cover, referer: chapter)
-                    .frame(width: 118, height: 168)
+                    .frame(width: 104, height: 149)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.08)))
                     .shadow(color: .black.opacity(0.6), radius: 14, y: 6)
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("CONTINUE READING").font(.caption2.weight(.bold)).tracking(1.6).foregroundStyle(.secondary)
-                    Text(series?.title ?? "Berserk").font(.title2.weight(.heavy)).lineLimit(2)
-                    Text(chapter.title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("CONTINUE READING").font(.caption2.weight(.bold)).tracking(1.4).foregroundStyle(Eclipse.highlight.opacity(0.9))
+                    Text(series?.title ?? "Berserk").font(.title3.weight(.heavy)).lineLimit(2).minimumScaleFactor(0.85)
+                    Text(ChapterText.split(chapter.title).name).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     if let progress {
-                        ProgressView(value: progress.fraction).tint(Eclipse.accent)
-                        Text("Page \(progress.page + 1) of \(progress.pageCount)").font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            ProgressView(value: progress.fraction).tint(Eclipse.accent)
+                            Text("\(progress.page + 1)/\(progress.pageCount)").font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                        }
                     }
                     Button(action: resume) {
-                        Label("Resume", systemImage: "play.fill").font(.subheadline.weight(.bold)).frame(maxWidth: .infinity)
-                    }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
+                        Label("Resume", systemImage: "play.fill").font(.subheadline.weight(.bold))
+                            .frame(maxWidth: .infinity).frame(height: 40)
+                            .background(.white, in: Capsule()).foregroundStyle(.black)
+                    }.buttonStyle(PressableStyle())
                         .accessibilityIdentifier("continueReading")
                 }
-            }.padding(18)
+            }.padding(16)
         }
-        .frame(height: 236)
+        .frame(height: 210)
         .clipShape(RoundedRectangle(cornerRadius: 24))
         .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Eclipse.hairline))
         .shadow(color: Eclipse.accent.opacity(0.25), radius: 24, y: 10)
@@ -1447,7 +1452,9 @@ struct AddMangaView: View {
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .submitLabel(.go).onSubmit { submit(text) }
                         .accessibilityIdentifier("linkField")
-                    Button { if let s = UIPasteboard.general.string { text = s } } label: { Label("Paste", systemImage: "doc.on.clipboard") }
+                    PasteButton(payloadType: String.self) { strings in
+                        if let first = strings.first { text = first.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    }.labelStyle(.titleAndIcon).tint(Eclipse.accent)
                     Button { submit(text) } label: {
                         HStack { Label("Add series", systemImage: "plus.circle.fill"); Spacer(); if working { ProgressView() } }
                     }.disabled(working || text.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -1458,9 +1465,9 @@ struct AddMangaView: View {
                     Section {
                         Text(error).foregroundStyle(.orange)
                         if let url = WebLink.parse(text) {
-                            Button { browse = url } label: { Label("Open in browser instead", systemImage: "globe") }
+                            Button { browse = url } label: { Label("Open in browser instead", systemImage: "safari") }
                         }
-                    } footer: { Text("In the browser, open the series or a chapter and tap “Read here”.") }
+                    } footer: { Text("In the browser, open the series page and tap Add to library. Sites that check for bots work there.") }
                 }
                 Section {
                     Button { importing = true } label: { Label("Import from Files…", systemImage: "folder.badge.plus") }
@@ -1480,9 +1487,7 @@ struct AddMangaView: View {
                 case .failure(let e): error = e.localizedDescription
                 }
             }
-            .sheet(item: $browse) { url in
-                WebsiteView(url: url, onRead: { current in browse = nil; text = current.absoluteString; submit(current.absoluteString) })
-            }
+            .fullScreenCover(item: $browse) { url in MangaBrowserView(start: url).environmentObject(model) }
         }.preferredColorScheme(.dark)
     }
     private func submit(_ value: String) {
