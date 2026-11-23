@@ -130,9 +130,6 @@ final class LiveProbeTests: XCTestCase {
             let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             return (size > 10_000, "\(file.lastPathComponent) \(size)B")
         }
-        _ = await timed("Open Library search", { try await FreeBooks.openLibrary(query: "red rising", http: http) }) {
-            ($0.count > 0, "\($0.count): " + $0.prefix(3).map { "\($0.title) [\($0.detail ?? "")]" }.joined(separator: " | "))
-        }
         await raw("openlibrary search.json", "https://openlibrary.org/search.json?q=red+rising&fields=key,title,ebook_access&limit=3")
         _ = await timed("Book covers Red Rising", { await BookCovers.candidates(title: "Red Rising", author: "Pierce Brown", isbn: nil, http: http) }) {
             ($0.count > 0, $0.prefix(3).map(\.absoluteString).joined(separator: " "))

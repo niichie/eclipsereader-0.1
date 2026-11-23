@@ -293,6 +293,8 @@ struct MangaBrowserView: View {
     @State private var guiding = false
     @State private var pending: PendingAdd?
     @State private var viewing: MangaSeries?
+    /// A book file this page links to (EPUB first), offered as "Add book".
+    @State private var bookLink: BookDownloadLink?
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -343,8 +345,9 @@ struct MangaBrowserView: View {
             }
             if let error = browser.error { Text(error).font(.footnote).foregroundStyle(.orange).padding(8) }
 
-            BrowserToolbar(browser: browser, adding: adding, summary: summary, checking: checking,
-                           add: { addCurrent(force: false) }, guide: { guiding = true }, read: readCurrent)
+            BrowserToolbar(browser: browser, adding: adding, summary: summary, checking: checking, bookLink: bookLink,
+                           bookSite: onBookSite, add: { addCurrent(force: false) }, addBook: addBook,
+                           guide: { guiding = true }, read: readCurrent)
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
@@ -390,24 +393,39 @@ struct MangaBrowserView: View {
         // Read what the page is (series, chapter, or a list of many series) so the Add button can say.
         .sheet(isPresented: $guiding) {
             AddGuideSheet(summary: summary, host: browser.currentURL?.host?.replacingOccurrences(of: "www.", with: "") ?? "",
-                          tryAnyway: { addCurrent(force: true) })
+                          books: onBookSite, tryAnyway: { addCurrent(force: true) })
                 .presentationDetents([.medium, .large])
         }
         .task(id: browser.pageVersion) {
             checking = true
+            bookLink = nil
             defer { checking = false }
             // Read the page twice: once soon after it loads, again after scripts fill in chapter lists.
             for delay in [700, 1800] {
                 try? await Task.sleep(for: .milliseconds(delay))
                 guard !Task.isCancelled, let url = browser.currentURL, WebLink.publicHTTPS(url), let html = await browser.pageHTML() else { return }
-                let result = await Task.detached(priority: .utility) { LinkedSource.summarize(html: html, url: url) }.value
+                let (result, book) = await Task.detached(priority: .utility) {
+                    (LinkedSource.summarize(html: html, url: url), BookLinks.best(in: html, base: url))
+                }.value
                 if Task.isCancelled { return }
                 summary = result
+                bookLink = book
                 if case .series = result { return }
                 if case .chapter = result { return }
                 checking = false
             }
         }
+    }
+    /// Book libraries (Gutenberg, Standard Ebooks, Wikisource): the guide talks about books, not series.
+    private var onBookSite: Bool {
+        guard let host = browser.currentURL?.host?.lowercased() else { return false }
+        return BookLinks.libraryHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+    /// Downloads the page's book through the browser itself (so any site check it passed still counts);
+    /// the finished file goes straight into the library.
+    private func addBook() {
+        guard let link = bookLink else { return }
+        browser.webView.load(URLRequest(url: link.url))
     }
     private func rootURL(_ url: URL) -> URL {
         var parts = URLComponents(); parts.scheme = "https"; parts.host = url.host; parts.path = "/"
@@ -472,7 +490,10 @@ private struct BrowserToolbar: View {
     let adding: Bool
     let summary: LinkedSource.PageSummary
     let checking: Bool
+    var bookLink: BookDownloadLink? = nil
+    var bookSite = false
     let add: () -> Void
+    var addBook: () -> Void = {}
     let guide: () -> Void
     let read: () -> Void
     private var addable: Bool {
@@ -484,7 +505,20 @@ private struct BrowserToolbar: View {
             barButton("chevron.right", "Forward") { browser.webView.goForward() }.disabled(!browser.canGoForward)
             Spacer(minLength: 6)
             Group {
-                if addable {
+                if let bookLink, !addable {
+                    // A book's page: download its EPUB (or Kindle/FB2 file) into the library.
+                    Button(action: addBook) {
+                        ViewThatFits(in: .horizontal) {
+                            addLabel(browser.downloading ? "Downloading…" : "Add book · \(bookLink.format)", symbol: "text.book.closed")
+                            addLabel("Add book", symbol: "text.book.closed")
+                            addLabel(nil, symbol: "text.book.closed")
+                        }
+                    }
+                    .buttonStyle(PressableStyle())
+                    .disabled(browser.downloading)
+                    .accessibilityLabel("Add this book to the library")
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                } else if addable {
                     // Only on pages a series can be read from: series pages and chapters.
                     Button(action: add) {
                         ViewThatFits(in: .horizontal) {
@@ -510,7 +544,7 @@ private struct BrowserToolbar: View {
                     // Wrong kind of page: explain how to get a series in, instead of a button that fails.
                     Button(action: guide) {
                         ViewThatFits(in: .horizontal) {
-                            hintLabel(summary == .listing ? "Pick a series to add" : "Open a series to add")
+                            hintLabel(bookSite ? "Open a book to add" : summary == .listing ? "Pick a series to add" : "Open a series to add")
                             hintLabel("How to add")
                             hintLabel(nil)
                         }
@@ -522,7 +556,8 @@ private struct BrowserToolbar: View {
                 }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.75), value: addable)
-            .sensoryFeedback(.success, trigger: addable) { _, now in now }
+            .animation(.spring(response: 0.35, dampingFraction: 0.75), value: bookLink)
+            .sensoryFeedback(.success, trigger: addable || bookLink != nil) { _, now in now }
             Spacer(minLength: 6)
             barButton(browser.loading ? "xmark" : "arrow.clockwise", browser.loading ? "Stop" : "Reload") {
                 browser.loading ? browser.webView.stopLoading() : browser.reload()
@@ -546,10 +581,10 @@ private struct BrowserToolbar: View {
         default: "Add to library"
         }
     }
-    private func addLabel(_ text: String?) -> some View {
+    private func addLabel(_ text: String?, symbol: String = "plus") -> some View {
         HStack(spacing: 6) {
-            if adding { ProgressView().controlSize(.small).tint(.black) }
-            else { Image(systemName: "plus").font(.subheadline.weight(.heavy)) }
+            if adding || (symbol != "plus" && browser.downloading) { ProgressView().controlSize(.small).tint(.black) }
+            else { Image(systemName: symbol).font(.subheadline.weight(.heavy)) }
             if let text { Text(text).font(.subheadline.weight(.bold)).lineLimit(1).fixedSize() }
         }
         .padding(.horizontal, text == nil ? 13 : 18).frame(height: 40)
@@ -573,6 +608,7 @@ private struct BrowserToolbar: View {
 private struct AddGuideSheet: View {
     let summary: LinkedSource.PageSummary
     let host: String
+    var books = false
     let tryAnyway: () -> Void
     @Environment(\.dismiss) private var dismiss
     var body: some View {
@@ -583,26 +619,38 @@ private struct AddGuideSheet: View {
                     .font(.title2).foregroundStyle(Eclipse.highlight)
                     .frame(width: 48, height: 48).background(Eclipse.accent.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(summary == .listing ? "This page lists many series" : "No series on this page yet").font(.headline)
+                    Text(books ? "No book on this page yet" : summary == .listing ? "This page lists many series" : "No series on this page yet").font(.headline)
                     Text(host).font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            VStack(alignment: .leading, spacing: 14) {
-                step(1, "Open a series", "Tap a title to go to its own page: the one with the cover and the list of chapters.")
-                step(2, "Let it finish loading", "Some sites show their chapter list a moment after the page appears.")
-                step(3, "Tap Add", "The yellow Add button appears with the chapter count when eclipsereader can read the series.")
+            if books {
+                VStack(alignment: .leading, spacing: 14) {
+                    step(1, "Open a book", "Tap a title to go to the book's own page, the one with its download links.")
+                    step(2, "Tap Add book", "The yellow Add book button downloads its EPUB into Boring books without pictures.")
+                    step(3, "Or tap a download link", "EPUB, Kindle (AZW3/MOBI) and FB2 links on any site go straight into your library.")
+                }
+                Label("These libraries only have books that are out of copyright. Newer books aren't free here.", systemImage: "info.circle")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    step(1, "Open a series", "Tap a title to go to its own page: the one with the cover and the list of chapters.")
+                    step(2, "Let it finish loading", "Some sites show their chapter list a moment after the page appears.")
+                    step(3, "Tap Add", "The yellow Add button appears with the chapter count when eclipsereader can read the series.")
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("A chapter page works too: the whole series is added from its chapter menu.", systemImage: "book")
+                    Label("If a site asks whether you're human, answer it once here, then the page can be added.", systemImage: "checkmark.shield")
+                    Label("Home, latest, genre and search pages can't be added: they're lists of many series.", systemImage: "list.bullet")
+                }
+                .font(.footnote).foregroundStyle(.secondary)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                Label("A chapter page works too: the whole series is added from its chapter menu.", systemImage: "book")
-                Label("If a site asks whether you're human, answer it once here, then the page can be added.", systemImage: "checkmark.shield")
-                Label("Home, latest, genre and search pages can't be added: they're lists of many series.", systemImage: "list.bullet")
-            }
-            .font(.footnote).foregroundStyle(.secondary)
             HStack(spacing: 10) {
-                Button { dismiss(); tryAnyway() } label: {
-                    Text("Try adding anyway").font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity).frame(height: 46)
-                        .background(Eclipse.surfaceHigh, in: RoundedRectangle(cornerRadius: 14))
+                if !books {
+                    Button { dismiss(); tryAnyway() } label: {
+                        Text("Try adding anyway").font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity).frame(height: 46)
+                            .background(Eclipse.surfaceHigh, in: RoundedRectangle(cornerRadius: 14))
+                    }
                 }
                 Button { dismiss() } label: {
                     Text("Got it").font(.subheadline.weight(.bold)).foregroundStyle(.black)

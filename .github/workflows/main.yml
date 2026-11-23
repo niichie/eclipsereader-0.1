@@ -30,7 +30,9 @@ jobs:
 
       - name: Core tests
         working-directory: EclipseReader
-        run: swift test 2>&1 | tail -40
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tail -60
 
       - name: Generate Xcode project
         working-directory: EclipseReader

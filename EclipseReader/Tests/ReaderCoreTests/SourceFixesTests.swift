@@ -84,3 +84,40 @@ final class SourceFixesTests: XCTestCase {
         XCTAssertEqual(picks.first?.synopsis, "Guts, a former mercenary...")
     }
 }
+
+final class BookLinksTests: XCTestCase {
+    func testGutenbergBookPagePicksEPUB3() {
+        let html = """
+        <a href="/ebooks/84.html.images">Read online</a><a href="/ebooks/84.epub3.images">EPUB3 (E-readers incl. Send-to-Kindle)</a>
+        <a href="/ebooks/84.epub.noimages">EPUB (older E-readers)</a><a href="/ebooks/84.kf8.images">Kindle</a><a href="/ebooks/1342">Also read</a>
+        """
+        let link = BookLinks.best(in: html, base: URL(string: "https://www.gutenberg.org/ebooks/84")!)
+        XCTAssertEqual(link?.url.absoluteString, "https://www.gutenberg.org/ebooks/84.epub3.images")
+        XCTAssertEqual(link?.format, "EPUB")
+    }
+    func testStandardEbooksAddsSourceDownload() {
+        let html = """
+        <a href="/ebooks/bram-stoker/dracula/downloads/bram-stoker_dracula.epub" property="schema:contentUrl">Compatible epub</a>
+        <a href="/ebooks/bram-stoker/dracula/downloads/bram-stoker_dracula_advanced.epub">Advanced epub</a>
+        <a href="/ebooks/bram-stoker/dracula/downloads/bram-stoker_dracula.kepub.epub">Kobo</a>
+        <a href="/ebooks/bram-stoker/dracula/downloads/bram-stoker_dracula.azw3">Kindle</a>
+        """
+        let link = BookLinks.best(in: html, base: URL(string: "https://standardebooks.org/ebooks/bram-stoker/dracula")!)
+        XCTAssertEqual(link?.url.absoluteString, "https://standardebooks.org/ebooks/bram-stoker/dracula/downloads/bram-stoker_dracula.epub?source=download")
+    }
+    func testWikisourceGrabADownload() {
+        let html = """
+        <a rel="nofollow" class="external text" href="https://ws-export.wmcloud.org/?format=epub&amp;lang=en&amp;page=A_History_of_Japanese_Literature">EPUB</a>
+        <a href="https://ws-export.wmcloud.org/?format=rtf&amp;lang=en&amp;page=A_History_of_Japanese_Literature">RTF</a>
+        <a href="https://ws-export.wmcloud.org/?format=mobi&amp;lang=en&amp;page=A_History_of_Japanese_Literature">MOBI</a>
+        """
+        let link = BookLinks.best(in: html, base: URL(string: "https://en.wikisource.org/wiki/Main_Page")!)
+        XCTAssertEqual(link?.format, "EPUB")
+        XCTAssertTrue(link?.url.absoluteString.contains("format=epub") ?? false)
+    }
+    func testListsOfBooksAskYouToPickOne() {
+        let html = #"<a href="/ebooks/84.epub3.images">A</a><a href="/ebooks/345.epub3.images">B</a>"#
+        XCTAssertNil(BookLinks.best(in: html, base: URL(string: "https://www.gutenberg.org/ebooks/search/?query=x")!))
+        XCTAssertNil(BookLinks.best(in: #"<a href="/ebooks/84">Frankenstein</a>"#, base: URL(string: "https://www.gutenberg.org/")!))
+    }
+}

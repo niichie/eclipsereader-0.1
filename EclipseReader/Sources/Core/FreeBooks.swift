@@ -202,3 +202,74 @@ extension WebsiteHTTPClient {
         return target
     }
 }
+
+/// A book file linked from the page that's open in the browser.
+public struct BookDownloadLink: Equatable, Sendable {
+    public let url: URL
+    /// "EPUB", "AZW3", "MOBI" or "FB2".
+    public let format: String
+}
+
+/// Finds the best download on a single book's page (Project Gutenberg, Standard Ebooks, Wikisource's
+/// "Grab a download", or any page linking .epub/.mobi/.azw3/.fb2 files). Pages linking several
+/// different books (search results, lists) return nil, so the browser asks you to open one.
+public enum BookLinks {
+    public static let libraryHosts = ["gutenberg.org", "standardebooks.org", "wikisource.org"]
+
+    public static func best(in html: String, base: URL) -> BookDownloadLink? {
+        var found: [(link: BookDownloadLink, book: String, score: Int)] = []
+        for m in LinkedSource.matches(#"(?is)<a\b[^>]*href=["']([^"'#]+)["']"#, html) {
+            let href = m[0].replacingOccurrences(of: "&amp;", with: "&")
+            guard let url = LinkedSource.resolve(href, base: base), WebLink.publicHTTPS(url),
+                  let match = kind(of: url) else { continue }
+            found.append((BookDownloadLink(url: polished(url), format: match.0), bookKey(url), match.1))
+        }
+        guard !found.isEmpty, Set(found.map(\.book)).count == 1 else { return nil }
+        return found.max { $0.score < $1.score }?.link
+    }
+
+    /// Format and preference (higher is better) for a download address, or nil when it isn't a book file.
+    static func kind(of url: URL) -> (String, Int)? {
+        let path = url.path.lowercased()
+        let format = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+            .first { $0.name == "format" }?.value?.lowercased()
+        if url.host?.lowercased().hasPrefix("ws-export.") == true {
+            switch format { case "epub", "epub-3": return ("EPUB", 90); case "mobi": return ("MOBI", 50); default: return nil }
+        }
+        if path.hasSuffix(".kepub.epub") { return ("EPUB", 60) }
+        if path.hasSuffix("_advanced.epub") { return ("EPUB", 70) }
+        if path.hasSuffix(".epub3.images") { return ("EPUB", 95) }
+        if path.hasSuffix(".epub.images") { return ("EPUB", 85) }
+        if path.hasSuffix(".epub.noimages") { return ("EPUB", 75) }
+        if path.hasSuffix(".epub") { return ("EPUB", 90) }
+        if path.hasSuffix(".azw3") { return ("AZW3", 55) }
+        if path.hasSuffix(".kf8.images") { return ("AZW3", 54) }
+        if path.hasSuffix(".mobi") || path.hasSuffix(".kindle.images") { return ("MOBI", 50) }
+        if path.hasSuffix(".fb2") || path.hasSuffix(".fb2.zip") { return ("FB2", 40) }
+        return nil
+    }
+
+    /// Which book a download belongs to: its formats share one key.
+    static func bookKey(_ url: URL) -> String {
+        if let page = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "page" })?.value {
+            return "page:" + page
+        }
+        if let id = LinkedSource.firstMatch(#"/ebooks/(\d+)\."#, url.path) { return "pg:" + id }
+        if let range = url.path.range(of: "/downloads/") { return "folder:" + url.path[..<range.lowerBound] }
+        var name = url.lastPathComponent.lowercased()
+        for suffix in ["_advanced.epub", ".kepub.epub", ".epub", ".azw3", ".mobi", ".fb2.zip", ".fb2"] where name.hasSuffix(suffix) {
+            name = String(name.dropLast(suffix.count)); break
+        }
+        return (url.host ?? "") + url.deletingLastPathComponent().path + "/" + name
+    }
+
+    /// Standard Ebooks shows a thank-you page unless the link says it's a download.
+    static func polished(_ url: URL) -> URL {
+        guard url.host?.lowercased().hasSuffix("standardebooks.org") == true, url.path.contains("/downloads/"),
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        if parts.queryItems?.contains(where: { $0.name == "source" }) != true {
+            parts.queryItems = (parts.queryItems ?? []) + [URLQueryItem(name: "source", value: "download")]
+        }
+        return parts.url ?? url
+    }
+}
