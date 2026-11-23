@@ -138,4 +138,98 @@ final class LiveProbeTests: XCTestCase {
             return (!media.isEmpty, "\(media.count): \(media.first?.title ?? String(data: data.prefix(200), encoding: .utf8) ?? "")")
         }
     }
+
+    // MARK: Diagnostics: what the broken sources actually send back
+
+    private func body(_ address: String, ua: String? = "iphone", accept: String? = nil, headers: [String: String] = [:]) async -> (Int, String, String) {
+        guard let url = URL(string: address) else { return (0, "", "") }
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        switch ua {
+        case "iphone": request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        case "desktop": request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
+        case .some(let custom): request.setValue(custom, forHTTPHeaderField: "User-Agent")
+        case .none: break
+        }
+        if let accept { request.setValue(accept, forHTTPHeaderField: "Accept") }
+        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let http = response as? HTTPURLResponse
+            return (http?.statusCode ?? 0, http?.value(forHTTPHeaderField: "Content-Type") ?? "", String(data: data, encoding: .utf8) ?? "<binary \(data.count)B>")
+        } catch { return (-1, "", "\(error)") }
+    }
+    /// Text around the first match of a pattern, flattened to one line.
+    private func around(_ text: String, _ pattern: String, before: Int = 200, after: Int = 1200) -> String {
+        guard let r = text.range(of: pattern, options: .regularExpression) else { return "<no \(pattern)>" }
+        let start = text.index(r.lowerBound, offsetBy: -min(before, text.distance(from: text.startIndex, to: r.lowerBound)))
+        let end = text.index(r.lowerBound, offsetBy: min(after, text.distance(from: r.lowerBound, to: text.endIndex)))
+        return String(text[start..<end]).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ")
+    }
+    private func dump(_ name: String, _ text: String) { print("DUMP|\(name)|\(text.prefix(2400))") }
+    private func links(_ html: String, _ pattern: String, limit: Int = 25) -> String {
+        var seen = Set<String>()
+        var out: [String] = []
+        for m in LinkedSource.matches(#"href=["']([^"'#]+)["']"#, html) where m[0].range(of: pattern, options: .regularExpression) != nil {
+            if seen.insert(m[0]).inserted { out.append(m[0]) }
+            if out.count >= limit { break }
+        }
+        return out.joined(separator: " ")
+    }
+
+    func testDiagnostics() async {
+        for (label, ua) in [("iphone", "iphone"), ("app", "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"), ("none", nil)] as [(String, String?)] {
+            let (status, type, text) = await body("https://api.mangadex.org/manga?limit=1&title=chainsaw", ua: ua, accept: "application/json")
+            dump("mangadex ua=\(label)", "\(status) \(type) :: \(text.prefix(500))")
+        }
+        let wc = "https://weebcentral.com/series/01J76XYCERXE60T7FKXVCCAQ0H"
+        let (s1, t1, list) = await body(wc + "/full-chapter-list", headers: ["Referer": wc + "/Jujutsu-Kaisen"])
+        dump("weebcentral list", "\(s1) \(t1) \(list.count)B links: \(links(list, "chapters/", limit: 5)) :: \(around(list, "chapter", before: 300, after: 1500))")
+        let (s1b, _, listHX) = await body(wc + "/full-chapter-list", headers: ["Referer": wc + "/Jujutsu-Kaisen", "HX-Request": "true", "HX-Current-URL": wc + "/Jujutsu-Kaisen", "HX-Target": "chapter-list"])
+        dump("weebcentral list hx", "\(s1b) \(listHX.count)B links: \(links(listHX, "chapters/", limit: 5)) :: \(listHX.prefix(800))")
+        let (s2, _, page) = await body(wc + "/Jujutsu-Kaisen")
+        dump("weebcentral series", "\(s2) \(page.count)B chapterlinks: \(links(page, "chapters/", limit: 5)) hx: \(around(page, "full-chapter-list", before: 600, after: 600))")
+
+        let (s3, _, chapter) = await body("https://mangadot.net/chapter/32749?source=user")
+        dump("mangadot chapter", "\(s3) \(chapter.count)B img: \(around(chapter, #"\.(webp|jpg|jpeg|png)"#, before: 600, after: 600)) || api: \(around(chapter, "/api/", before: 200, after: 400))")
+        let (_, _, dotSeries) = await body("https://mangadot.net/manga/118")
+        dump("mangadot series", "\(dotSeries.count)B chapterlinks=\(LinkedSource.matches(#"/chapter/\d+"#, dotSeries).count) api: \(around(dotSeries, "/api/", before: 200, after: 400)) || more: \(around(dotSeries, #"(?i)load more|show all|page=2"#, before: 300, after: 300))")
+
+        let (_, _, asura) = await body("https://asurascans.com/comics")
+        dump("asura links", links(asura, "asurascans\\.com/|^/", limit: 40))
+        for q in ["https://asurascans.com/comics?name=solo", "https://asurascans.com/series?name=solo", "https://asurascans.com/comics?search=solo", "https://asurascans.com/search?q=solo"] {
+            let (st, _, html) = await body(q)
+            dump("asura search \(q)", "\(st) \(html.count)B solo-links: \(links(html, "(?i)solo", limit: 8))")
+        }
+        let (_, _, comix) = await body("https://comix.to/")
+        dump("comix links", links(comix, "^/|comix\\.to/", limit: 40) + " || search: " + around(comix, #"(?i)search"#, before: 200, after: 500))
+        for q in ["https://comix.to/browser?keyword=solo", "https://comix.to/search?keyword=solo", "https://comix.to/api/v2/manga?keyword=solo&limit=5"] {
+            let (st, type, html) = await body(q)
+            dump("comix search \(q)", "\(st) \(type) \(html.count)B solo-links: \(links(html, "(?i)solo", limit: 8)) :: \(html.prefix(300))")
+        }
+
+        let (_, _, se) = await body("https://standardebooks.org/ebooks?query=dracula")
+        dump("standardebooks search", around(se, "schema:Book", before: 300, after: 2000))
+        let (sp, _, popular) = await body("https://standardebooks.org/ebooks?sort=popularity&per-page=48")
+        dump("standardebooks popular", "\(sp) books: \(links(popular, #"^/ebooks/[^/]+/[^/?]+$"#, limit: 12))")
+
+        for mirror in ["https://gutenberg.pglaf.org/cache/epub/345/pg345-images-3.epub", "https://aleph.pglaf.org/cache/epub/345/pg345-images-3.epub",
+                       "https://www.gutenberg.org/cache/epub/345/pg345-images-3.epub", "https://gutenberg.pglaf.org/3/4/345/"] {
+            let (st, type, text) = await body(mirror)
+            dump("gutenberg mirror \(mirror)", "\(st) \(type) \(text.count) :: \(text.prefix(200))")
+        }
+        let (gs, gt, opds) = await body("https://www.gutenberg.org/ebooks/search.opds/?query=dracula")
+        dump("gutenberg opds", "\(gs) \(gt) :: \(around(opds, "<entry", before: 0, after: 1800))")
+
+        let started = Date()
+        let (js, _, jikan) = await body("https://api.jikan.moe/v4/top/manga?page=1", ua: nil, accept: "application/json")
+        dump("jikan", "\(js) \(String(format: "%.1fs", Date().timeIntervalSince(started))) \(jikan.prefix(200))")
+
+        for (name, home) in [("Tapas", "https://tapas.io/"), ("Tappytoon", "https://www.tappytoon.com/en"), ("Manta", "https://manta.net/en"),
+                             ("GlobalComix", "https://globalcomix.com/"), ("Comikey", "https://comikey.com/")] {
+            let (_, _, html) = await body(home)
+            let first = GlobalSearch.results(in: html, base: URL(string: home)!).first
+            dump("official \(name)", "first series: \(first?.url.absoluteString ?? "-") links: \(links(html, "(?i)series|comic|title|manga|episode", limit: 8))")
+            if let url = first?.url { await chapters("official \(name)", url: url) }
+        }
+    }
 }

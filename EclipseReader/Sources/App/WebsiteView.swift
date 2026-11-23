@@ -37,7 +37,7 @@ struct WebsiteView: View {
 }
 
 @MainActor
-final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate {
+final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
     let webView: WKWebView
     @Published var error: String?
     @Published var loading = true
@@ -58,7 +58,7 @@ final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate, WK
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
-        webView.navigationDelegate = self; webView.allowsBackForwardNavigationGestures = true
+        webView.navigationDelegate = self; webView.uiDelegate = self; webView.allowsBackForwardNavigationGestures = true
         webView.isOpaque = false; webView.backgroundColor = .black
         // Single-page sites change address without a full load; follow those too.
         urlObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
@@ -110,7 +110,20 @@ final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail(error) }
     private func fail(_ error: Error) {
         loading = false; canGoBack = webView.canGoBack
-        if (error as NSError).code != NSURLErrorCancelled { self.error = error.localizedDescription }
+        let ns = error as NSError
+        // Cancelled loads, and links that turned into a download ("frame load interrupted"), aren't errors.
+        if ns.code == NSURLErrorCancelled || (ns.domain == "WebKitErrorDomain" && ns.code == 102) { return }
+        self.error = error.localizedDescription
+    }
+    /// Links that open a new window (target="_blank", common for downloads and chapter links) open here instead.
+    /// Script pop-ups (ads) are ignored.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url,
+           openWeb ? WebLink.publicHTTPS(url) : sameSite(url) {
+            webView.load(navigationAction.request)
+        }
+        return nil
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {

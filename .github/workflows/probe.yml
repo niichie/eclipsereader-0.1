@@ -2,6 +2,10 @@ name: Probe sources
 # Checks every manga and book source against the live sites, using the app's own code.
 on:
   workflow_dispatch:
+    inputs:
+      filter:
+        description: Which probe tests to run
+        default: LiveProbeTests
 permissions:
   contents: read
 jobs:
@@ -19,8 +23,8 @@ jobs:
         env:
           LIVE_PROBE: "1"
         run: |
-          swift test --filter LiveProbeTests 2>&1 | tee probe.log | grep -E "PROBE\||error:|Executed" || true
-          grep "PROBE|" probe.log > probe-report.txt || true
+          swift test --filter "${{ inputs.filter || 'LiveProbeTests' }}" 2>&1 | tee probe.log | grep -E "PROBE\||DUMP\||error:|Executed" || true
+          grep -E "PROBE\||DUMP\|" probe.log > probe-report.txt || true
       - uses: actions/upload-artifact@v4
         with:
           name: probe-report
