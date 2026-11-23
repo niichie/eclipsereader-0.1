@@ -30,7 +30,7 @@ public enum FreeBooks {
         return results.compactMap { entry -> FreeBook? in
             guard let id = entry["id"] as? Int, let title = entry["title"] as? String else { return nil }
             let formats = entry["formats"] as? [String: String] ?? [:]
-            let epub = formats.first { $0.key.hasPrefix("application/epub+zip") }?.value.flatMap(URL.init(string:))
+            let epub = formats.first(where: { $0.key.hasPrefix("application/epub+zip") }).flatMap { URL(string: $0.value) }
             let cover = formats["image/jpeg"].flatMap(URL.init(string:))
             let author = ((entry["authors"] as? [[String: Any]])?.first?["name"] as? String).map(flipName)
             let downloads = entry["download_count"] as? Int
