@@ -34,4 +34,11 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(results.first?.title, "Tower of God")
         XCTAssertEqual(results.first?.id, "webtoons-95")
     }
+
+    func testIrrelevantHomePageCardsAreDropped() {
+        let items = [DiscoverItem(id: "a", title: "Solo Leveling", url: URL(string: "https://x.example.com/manga/a")!, cover: nil, detail: nil),
+                     DiscoverItem(id: "b", title: "Omniscient Reader", url: URL(string: "https://x.example.com/manga/b")!, cover: nil, detail: nil)]
+        XCTAssertEqual(GlobalSearch.relevant(items, to: "solo").map(\.id), ["a"])
+        XCTAssertEqual(GlobalSearch.relevant(items, to: "  ").count, 2)
+    }
 }

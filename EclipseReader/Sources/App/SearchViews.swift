@@ -37,11 +37,7 @@ final class GlobalSearchModel: ObservableObject {
             tasks.append(Task { [weak self] in
                 let phase: Phase
                 do {
-                    var found = try await GlobalSearch.search(source, query: text)
-                    if found.isEmpty, case .site = source.kind {
-                        found = await Self.rendered(source, query: text)
-                    }
-                    phase = .done(found)
+                    phase = .done(try await GlobalSearch.search(source, query: text))
                 } catch {
                     // Sites that only answer browsers: read their search page the way Safari would.
                     if case .site = source.kind {
@@ -60,7 +56,7 @@ final class GlobalSearchModel: ObservableObject {
     private static func rendered(_ source: SearchSource, query: String) async -> [DiscoverItem] {
         guard case .site(let root) = source.kind, let url = GlobalSearch.searchURLs(root: root, query: query).last,
               let html = try? await PageRenderer.html(for: url, timeout: 15) else { return [] }
-        return GlobalSearch.results(in: html, base: url)
+        return GlobalSearch.relevant(GlobalSearch.results(in: html, base: url), to: query)
     }
     func cancel() {
         tasks.forEach { $0.cancel() }

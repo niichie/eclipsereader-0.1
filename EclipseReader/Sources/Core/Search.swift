@@ -39,22 +39,33 @@ public enum GlobalSearch {
                                 URLQueryItem(name: "order", value: "Descending"), URLQueryItem(name: "official", value: "Any"),
                                 URLQueryItem(name: "display_mode", value: "Full Display")]
             guard let url = parts.url else { return [] }
-            return weebCentralResults(in: try await text(url, http: http))
+            return relevant(weebCentralResults(in: try await text(url, http: http)), to: q)
         case .webtoons:
             var parts = URLComponents(string: "https://www.webtoons.com/en/search")!
             parts.queryItems = [URLQueryItem(name: "keyword", value: q)]
             guard let url = parts.url else { return [] }
-            return webtoonsResults(in: try await text(url, http: http), base: url)
+            return relevant(webtoonsResults(in: try await text(url, http: http), base: url), to: q)
         case .site(let root):
             var lastError: Error?
             for url in searchURLs(root: root, query: q) {
                 do {
-                    let found = results(in: try await text(url, http: http), base: url)
+                    let found = relevant(results(in: try await text(url, http: http), base: url), to: q)
                     if !found.isEmpty { return found }
                 } catch { lastError = error }
             }
             if let lastError { throw lastError }
             return []
+        }
+    }
+
+    /// Keeps results whose title shares a word with the query. Sites without a real search page
+    /// answer `?s=` with their home page; this stops those covers showing up as matches.
+    public static func relevant(_ items: [DiscoverItem], to query: String) -> [DiscoverItem] {
+        let words = query.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 2 }
+        guard !words.isEmpty else { return items }
+        return items.filter { item in
+            let title = item.title.lowercased()
+            return words.contains { title.contains($0) }
         }
     }
 
