@@ -26,7 +26,7 @@ enum SiteCatalog {
     /// Manga & manhwa sites that search, add and read in the app: open a series and tap Add.
     static let popular: [CatalogSite] = [
         site("Asura Scans", "https://asurascans.com/comics", "Action manhwa, fast releases", "flame"),
-        site("MangaDot", "https://mangadot.net/", "Manga, manhwa and manhua", "circle.grid.cross"),
+        site("MangaDot", "https://mangadot.net/", "Latest ~50 chapters per series (all need an account)", "circle.grid.cross"),
     ]
     /// Official publishers whose free chapters add and read in the app.
     static let official: [CatalogSite] = [
