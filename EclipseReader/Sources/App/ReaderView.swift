@@ -51,6 +51,14 @@ struct ReaderView: View {
     init(chapter: Chapter) { _chapter = State(initialValue: chapter) }
     private var prefetchKey: String { "\(chapter.id)-\(page)-\(phase == .active)-\(pages.count)" }
     var body: some View {
+        // Books read as books; everything else in the page reader.
+        if BookLink.isBook(chapter) {
+            BookReaderView(chapter: chapter)
+        } else {
+            mangaBody
+        }
+    }
+    private var mangaBody: some View {
         GeometryReader { geometry in
             let groups = ReadingOrder.groups(count: pages.count, landscape: ReadingOrder.canPair(width: geometry.size.width, height: geometry.size.height),
                 spreads: effective.landscapeSpreads, wide: effective.detectWidePages ? wide : [])

@@ -38,8 +38,38 @@
                 <string>com.adobe.pdf</string>
             </array>
         </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>Book</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array>
+                <string>org.idpf.epub-container</string>
+                <string>com.personal.eclipse.mobi</string>
+                <string>com.personal.eclipse.fb2</string>
+                <string>public.rtf</string>
+                <string>public.plain-text</string>
+                <string>org.openxmlformats.wordprocessingml.document</string>
+                <string>org.oasis-open.opendocument.text</string>
+            </array>
+        </dict>
     </array>
     <key>UTImportedTypeDeclarations</key><array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.personal.eclipse.mobi</string>
+            <key>UTTypeDescription</key><string>Kindle Book</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict>
+                <key>public.filename-extension</key><array><string>mobi</string><string>azw</string><string>azw3</string><string>prc</string><string>kf8</string></array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.personal.eclipse.fb2</string>
+            <key>UTTypeDescription</key><string>FictionBook</string>
+            <key>UTTypeConformsTo</key><array><string>public.xml</string><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict>
+                <key>public.filename-extension</key><array><string>fb2</string></array>
+            </dict>
+        </dict>
         <dict>
             <key>UTTypeIdentifier</key><string>com.personal.eclipse.cbz</string>
             <key>UTTypeDescription</key><string>Comic Book Archive</string>

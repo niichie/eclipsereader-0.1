@@ -122,6 +122,7 @@ struct BrowseView: View {
                     section("Official & free", detail: nil) {
                         siteGrid(SiteCatalog.official)
                     }
+                    BooksBrowseSection(browsing: $browsing, opened: $opened)
                 }
                 .padding(20)
                 .frame(maxWidth: 900)
@@ -365,6 +366,27 @@ struct MangaBrowserView: View {
             .presentationDetents([.medium, .large])
         }
         .sheet(item: $viewing) { series in SeriesSheet(series: series).environmentObject(model) }
+        .onAppear {
+            // Anything downloaded in the browser (EPUB, MOBI, CBZ, PDF…) goes straight into the library.
+            browser.downloaded = { file in
+                Task {
+                    do {
+                        let series = try await model.importFiles([file], copy: true)
+                        lastAdded = series
+                        show("Added \(series.title)" + (series.kind == .book ? " to Boring books without pictures" : ""))
+                    } catch {
+                        show("Couldn’t open that download: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+        .overlay(alignment: .top) {
+            if browser.downloading {
+                Label("Downloading…", systemImage: "arrow.down.circle")
+                    .font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule()).padding(.top, 64)
+            }
+        }
         // Read what the page is (series, chapter, or a list of many series) so the Add button can say.
         .sheet(isPresented: $guiding) {
             AddGuideSheet(summary: summary, host: browser.currentURL?.host?.replacingOccurrences(of: "www.", with: "") ?? "",

@@ -7,35 +7,62 @@ struct MangaQuote: Hashable, Sendable {
     let work: String
 }
 
+/// Lines only from the best-rated works: manga that score 8+ on MyAnimeList (most 9+), and books
+/// rated 4+ on Goodreads. Short lines, attributed.
 enum Quotes {
-    static let all: [MangaQuote] = [
+    static let manga: [MangaQuote] = [
         MangaQuote(text: "In this world, is the destiny of mankind controlled by some transcendental entity or law?", who: "Narration", work: "Berserk"),
-        MangaQuote(text: "Arise.", who: "Sung Jinwoo", work: "Solo Leveling"),
-        MangaQuote(text: "If you win, you live. If you lose, you die. If you don't fight, you can't win!", who: "Eren Yeager", work: "Attack on Titan"),
+        MangaQuote(text: "You have no enemies. No one in this world has any enemies.", who: "Thors", work: "Vinland Saga"),
+        MangaQuote(text: "A true warrior needs no sword.", who: "Thors", work: "Vinland Saga"),
+        MangaQuote(text: "If you give up, that's when the game is over.", who: "Coach Anzai", work: "Slam Dunk"),
         MangaQuote(text: "A lesson without pain is meaningless.", who: "Edward Elric", work: "Fullmetal Alchemist"),
-        MangaQuote(text: "Fear is not evil. It tells you what your weakness is.", who: "Gildarts Clive", work: "Fairy Tail"),
-        MangaQuote(text: "Hard work is worthless for those that don't believe in themselves.", who: "Naruto Uzumaki", work: "Naruto"),
+        MangaQuote(text: "If you don't take risks, you can't create a future.", who: "Monkey D. Luffy", work: "One Piece"),
+        MangaQuote(text: "The only thing humans are equal in is death.", who: "Johan Liebert", work: "Monster"),
         MangaQuote(text: "You should enjoy the little detours to the fullest.", who: "Ging Freecss", work: "Hunter × Hunter"),
+        MangaQuote(text: "If you win, you live. If you lose, you die. If you don't fight, you can't win!", who: "Eren Yeager", work: "Attack on Titan"),
+        MangaQuote(text: "I'll leave tomorrow's problems to tomorrow's me.", who: "Saitama", work: "One-Punch Man"),
+        MangaQuote(text: "Arise.", who: "Sung Jinwoo", work: "Solo Leveling"),
         MangaQuote(text: "Throughout Heaven and Earth, I alone am the honored one.", who: "Satoru Gojo", work: "Jujutsu Kaisen"),
         MangaQuote(text: "Stand proud. You are strong.", who: "Ryomen Sukuna", work: "Jujutsu Kaisen"),
-        MangaQuote(text: "Set your heart ablaze.", who: "Kyojuro Rengoku", work: "Demon Slayer"),
-        MangaQuote(text: "Surpass your limits. Right here, right now!", who: "Yami Sukehiro", work: "Black Clover"),
-        MangaQuote(text: "Being weak is nothing to be ashamed of. Staying weak is.", who: "Fuegoleon Vermillion", work: "Black Clover"),
-        MangaQuote(text: "I'll leave tomorrow's problems to tomorrow's me.", who: "Saitama", work: "One-Punch Man"),
-        MangaQuote(text: "People's lives don't end when they die. It ends when they lose faith.", who: "Itachi Uchiha", work: "Naruto"),
-        MangaQuote(text: "If you don't take risks, you can't create a future.", who: "Monkey D. Luffy", work: "One Piece"),
+        MangaQuote(text: "Hard work is worthless for those that don't believe in themselves.", who: "Naruto Uzumaki", work: "Naruto"),
     ]
+    static let books: [MangaQuote] = [
+        MangaQuote(text: "Live for more.", who: "Eo", work: "Red Rising"),
+        MangaQuote(text: "Fear is the mind-killer.", who: "Frank Herbert", work: "Dune"),
+        MangaQuote(text: "Not all those who wander are lost.", who: "J.R.R. Tolkien", work: "The Fellowship of the Ring"),
+        MangaQuote(text: "Life before death. Strength before weakness. Journey before destination.", who: "The First Ideal", work: "The Way of Kings"),
+        MangaQuote(text: "There's always another secret.", who: "Kelsier", work: "Mistborn"),
+        MangaQuote(text: "Fist my bump.", who: "Rocky", work: "Project Hail Mary"),
+        MangaQuote(text: "Winter is coming.", who: "Eddard Stark", work: "A Game of Thrones"),
+        MangaQuote(text: "It is our choices that show what we truly are, far more than our abilities.", who: "Albus Dumbledore", work: "Harry Potter and the Chamber of Secrets"),
+        MangaQuote(text: "Don't Panic.", who: "Douglas Adams", work: "The Hitchhiker's Guide to the Galaxy"),
+        MangaQuote(text: "Who controls the past controls the future.", who: "George Orwell", work: "1984"),
+        MangaQuote(text: "So it goes.", who: "Kurt Vonnegut", work: "Slaughterhouse-Five"),
+        MangaQuote(text: "I am no bird; and no net ensnares me.", who: "Jane Eyre", work: "Jane Eyre"),
+        MangaQuote(text: "We accept the love we think we deserve.", who: "Charlie", work: "The Perks of Being a Wallflower"),
+        MangaQuote(text: "Tomorrow is always fresh, with no mistakes in it yet.", who: "Anne Shirley", work: "Anne of Green Gables"),
+        MangaQuote(text: "The mystery of human existence lies not in just staying alive, but in finding something to live for.", who: "Fyodor Dostoevsky", work: "The Brothers Karamazov"),
+    ]
+    static var all: [MangaQuote] { manga }
     /// Picked once per launch.
-    static let launch = all.randomElement() ?? all[0]
+    static let launch = manga.randomElement() ?? manga[0]
+    static let launchBook = books.randomElement() ?? books[0]
 }
 
 /// The launch quote: big serif line, eclipse-coloured rule. "Read" takes you to the series it's
 /// from (your library, or a search of every site), the shuffle button picks another, × closes it.
 struct QuoteCard: View {
-    @State private var quote = Quotes.launch
+    @State private var quote: MangaQuote
+    let pool: [MangaQuote]
     var compact = false
     let read: (MangaQuote) -> Void
     let close: () -> Void
+    /// A card for manga (default) or for books (`books: true`).
+    init(books: Bool = false, compact: Bool = false, read: @escaping (MangaQuote) -> Void, close: @escaping () -> Void) {
+        _quote = State(initialValue: books ? Quotes.launchBook : Quotes.launch)
+        pool = books ? Quotes.books : Quotes.manga
+        self.compact = compact; self.read = read; self.close = close
+    }
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             Capsule().fill(Eclipse.corona).frame(width: 3)
@@ -62,7 +89,7 @@ struct QuoteCard: View {
                     Button {
                         withAnimation(.snappy) {
                             var next = quote
-                            while next == quote, Quotes.all.count > 1 { next = Quotes.all.randomElement() ?? quote }
+                            while next == quote, pool.count > 1 { next = pool.randomElement() ?? quote }
                             quote = next
                         }
                     } label: {

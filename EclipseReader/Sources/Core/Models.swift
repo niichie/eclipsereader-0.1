@@ -188,6 +188,8 @@ public struct LibraryState: Codable, Sendable {
     /// Downloads: only on Wi-Fi; remove a chapter's download once it's read.
     public var downloadWiFiOnly: Bool?
     public var deleteAfterReading: Bool?
+    /// Where you are in each book: section and character offset (survives font changes).
+    public var bookPositions: [String: BookPosition]?
     /// AniList: linked media per series, and the signed-in token.
     public var aniListLinks: [String: Int]?
     public var aniListToken: String?
@@ -261,6 +263,13 @@ public enum SourceError: Error, LocalizedError, Equatable, Sendable {
     }
 }
 
+public struct BookPosition: Codable, Hashable, Sendable {
+    public var section: Int
+    public var offset: Int
+    public var updated: Date
+    public init(section: Int, offset: Int, updated: Date = Date()) { self.section = section; self.offset = offset; self.updated = updated }
+}
+
 /// A shelf of the user's own making ("Plan to read", "Favourites"…).
 public struct LibraryCategory: Codable, Hashable, Identifiable, Sendable {
     public var id: String
@@ -273,7 +282,7 @@ public struct LibraryCategory: Codable, Hashable, Identifiable, Sendable {
 
 /// A whole manga/manhwa added by the user, from a website or from Files.
 public struct MangaSeries: Codable, Hashable, Identifiable, Sendable {
-    public enum Kind: String, Codable, Sendable { case web, local }
+    public enum Kind: String, Codable, Sendable { case web, local, book }
     public let id: String
     public var url: URL
     public var title: String
@@ -284,9 +293,12 @@ public struct MangaSeries: Codable, Hashable, Identifiable, Sendable {
     public var added: Date
     /// Synopsis from the site, when it has one.
     public var summary: String?
-    public init(id: String, url: URL, title: String, cover: URL? = nil, kind: Kind, chapters: [Chapter], added: Date = Date(), summary: String? = nil) {
+    /// The writer, for books.
+    public var author: String?
+    public init(id: String, url: URL, title: String, cover: URL? = nil, kind: Kind, chapters: [Chapter], added: Date = Date(),
+                summary: String? = nil, author: String? = nil) {
         self.id = id; self.url = url; self.title = title; self.cover = cover; self.kind = kind; self.chapters = chapters; self.added = added
-        self.summary = summary
+        self.summary = summary; self.author = author
     }
 }
 

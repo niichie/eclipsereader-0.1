@@ -21,7 +21,7 @@ struct RootView: View {
 }
 
 enum LibraryFilter: String, CaseIterable, Identifiable {
-    case all, new, reading, downloaded, manga, manhwa, manhua, webtoon, comic, files
+    case all, new, reading, downloaded, manga, manhwa, manhua, webtoon, comic, books, files
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -34,6 +34,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .manhua: "Manhua"
         case .webtoon: "Webtoons"
         case .comic: "Comics"
+        case .books: "Boring books without pictures"
         case .files: "On device"
         }
     }
@@ -65,6 +66,12 @@ struct LibraryView: View {
     @State private var searchingEverywhere = false
     /// Closed with × for this launch (turn it off for good in sort & display options).
     @State private var quoteClosed = false
+    @State private var pickClosed = false
+    @State private var bookQuoteClosed = false
+    @State private var bookPickClosed = false
+    @State private var bookSearch: QuoteSearch?
+    @AppStorage("libraryShowPick") private var showPick = true
+    @ObservedObject private var picks = PickStore.shared
     @State private var quoteSearch: QuoteSearch?
     struct QuoteSearch: Identifiable { let query: String; var id: String { query } }
     @Namespace private var zoom
@@ -77,11 +84,12 @@ struct LibraryView: View {
         case .new: model.newCount(series) > 0
         case .downloaded: model.downloadedCount(series) > 0 || series.kind == .local
         case .reading: model.lastRead(series) != nil && model.readCount(series) < series.chapters.count
-        case .manga: model.style(for: series.id) == .manga
-        case .manhwa: model.style(for: series.id) == .manhwa
-        case .manhua: model.style(for: series.id) == .manhua
-        case .webtoon: model.style(for: series.id) == .webtoon
-        case .comic: model.style(for: series.id) == .comic
+        case .manga: series.kind != .book && model.style(for: series.id) == .manga
+        case .manhwa: series.kind != .book && model.style(for: series.id) == .manhwa
+        case .manhua: series.kind != .book && model.style(for: series.id) == .manhua
+        case .webtoon: series.kind != .book && model.style(for: series.id) == .webtoon
+        case .comic: series.kind != .book && model.style(for: series.id) == .comic
+        case .books: series.kind == .book
         case .files: series.kind == .local
         }
     }
@@ -120,6 +128,23 @@ struct LibraryView: View {
                                 withAnimation(.snappy) { quoteClosed = true }
                             })
                             .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                        if query.isEmpty, showPick, !pickClosed, filter == .all, let pick = picks.manga {
+                            PickCard(pick: pick, read: { readPick(pick) }, next: { withAnimation(.snappy) { picks.shuffle(book: false) } },
+                                     close: { withAnimation(.snappy) { pickClosed = true } })
+                                .transition(.opacity)
+                        }
+                        // Books get their own quote and pick, once there are books in the library.
+                        if query.isEmpty, model.hasBooks, filter == .all || filter == .books {
+                            if showQuote && !bookQuoteClosed {
+                                QuoteCard(books: true, compact: geometry.size.width < 420, read: { readBook($0.work) }, close: {
+                                    withAnimation(.snappy) { bookQuoteClosed = true }
+                                })
+                            }
+                            if showPick && !bookPickClosed, let pick = picks.book {
+                                PickCard(pick: pick, read: { readBook(pick.title) }, next: { withAnimation(.snappy) { picks.shuffle(book: true) } },
+                                         close: { withAnimation(.snappy) { bookPickClosed = true } })
+                            }
                         }
                         if query.isEmpty, showContinue, filter == .all, let chapter = model.lastChapter {
                             ContinueBar(chapter: chapter, resume: { reader = chapter },
@@ -179,6 +204,12 @@ struct LibraryView: View {
             .sheet(isPresented: $options) { LibraryOptionsSheet().environmentObject(model).presentationDetents([.medium, .large]) }
             .sheet(isPresented: $searchingEverywhere) { GlobalSearchSheet(query: query).environmentObject(model) }
             .sheet(item: $quoteSearch) { item in GlobalSearchSheet(query: item.query).environmentObject(model) }
+            .sheet(item: $bookSearch) { item in BookSearchSheet(query: item.query).environmentObject(model) }
+            .task {
+                let owned = Set(model.allSeries.map { $0.title.lowercased() })
+                if showPick { await picks.loadManga(excluding: owned) }
+                if showPick && model.hasBooks { await picks.loadBooks(excluding: owned) }
+            }
             .navigationDestination(item: $openSeries) { series in
                 SeriesView(seriesID: series.id, reader: $reader).zoomDestination(series.id, in: zoom)
             }
@@ -200,6 +231,22 @@ struct LibraryView: View {
             openSeries = owned
         } else {
             quoteSearch = QuoteSearch(query: quote.work)
+        }
+    }
+
+    /// A recommended manga: open it if it's yours, otherwise search every site for it.
+    private func readPick(_ pick: Recommendation) {
+        let title = pick.title.lowercased()
+        if let owned = model.librarySeries.first(where: { $0.title.lowercased() == title }) { openSeries = owned }
+        else { quoteSearch = QuoteSearch(query: pick.title) }
+    }
+    /// A book from a quote or pick: open your copy, or look for it in the free libraries.
+    private func readBook(_ title: String) {
+        let lower = title.lowercased()
+        if let owned = model.librarySeries.first(where: { $0.kind == .book && ($0.title.lowercased() == lower || $0.title.lowercased().contains(lower)) }) {
+            openSeries = owned
+        } else {
+            bookSearch = QuoteSearch(query: title)
         }
     }
 
@@ -305,6 +352,7 @@ struct LibraryOptionsSheet: View {
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
+    @AppStorage("libraryShowPick") private var showPick = true
     var body: some View {
         NavigationStack {
             Form {
@@ -320,6 +368,7 @@ struct LibraryOptionsSheet: View {
                     Toggle("Titles on covers", isOn: $titlesOnCovers)
                     Toggle("Continue reading bar", isOn: $showContinue)
                     Toggle("Quote of the launch", isOn: $showQuote)
+                    Toggle("Pick of the launch", isOn: $showPick)
                 }
             }
             .scrollContentBackground(.hidden).background(Eclipse.surface)
@@ -700,6 +749,7 @@ struct LibrarySettingsPage: View {
     @AppStorage("libraryDensity") private var density = LibraryDensity.comfortable.rawValue
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
+    @AppStorage("libraryShowPick") private var showPick = true
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     @State private var alertMessage: String?
     var body: some View {
@@ -711,6 +761,7 @@ struct LibrarySettingsPage: View {
                 Toggle("Titles on covers", isOn: $titlesOnCovers)
                 Toggle("Continue reading bar", isOn: $showContinue)
                 Toggle("Quote of the launch", isOn: $showQuote)
+                Toggle("Pick of the launch (MyAnimeList & Open Library)", isOn: $showPick)
             }
             Section {
                 Button {
@@ -1108,7 +1159,7 @@ struct SeriesCard: View {
         let unread = max(0, total - read)
         let new = model.newCount(series)
         let offline = model.downloadedCount(series)
-        let style = series.kind == .local ? nil : Optional(model.style(for: series.id))
+        let style = series.kind == .web ? Optional(model.style(for: series.id)) : nil
         let reading = model.lastRead(series) != nil && read < total
         let k = min(1.45, max(0.8, width / 156))
         let radius = 10 * min(1.3, k)
@@ -1165,6 +1216,9 @@ struct SeriesCard: View {
                         if let style {
                             Text(style.tag).font(.system(size: 8.5 * k, weight: .heavy)).tracking(0.6)
                                 .padding(.horizontal, 5 * k).padding(.vertical, 3 * k)
+                        } else if series.kind == .book {
+                            Text("BOOK").font(.system(size: 8.5 * k, weight: .heavy)).tracking(0.6)
+                                .padding(.horizontal, 5 * k).padding(.vertical, 3 * k)
                         } else {
                             Image(systemName: "internaldrive.fill").font(.system(size: 9 * k, weight: .bold))
                                 .padding(4 * k)
@@ -1173,7 +1227,7 @@ struct SeriesCard: View {
                     .foregroundStyle(.white.opacity(0.9))
                     .background(.ultraThinMaterial, in: Capsule())
                     .padding(6 * k)
-                    .accessibilityLabel(style?.title ?? "On this device")
+                    .accessibilityLabel(style?.title ?? (series.kind == .book ? "Book" : "On this device"))
                 }
                 .clipShape(RoundedRectangle(cornerRadius: radius))
                 .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(Color.white.opacity(0.07)))
@@ -1513,11 +1567,11 @@ struct SeriesHeader: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(series.title).font(.title2.weight(.heavy)).lineLimit(4).minimumScaleFactor(0.8)
                         .fixedSize(horizontal: false, vertical: true)
-                    Label(builtIn ? "Built in" : series.kind == .web ? (series.url.host?.replacingOccurrences(of: "www.", with: "") ?? "Website") : "On this device",
-                          systemImage: series.kind == .local ? "internaldrive" : "globe")
+                    Label(builtIn ? "Built in" : series.kind == .book ? (series.author ?? "Book") : series.kind == .web ? (series.url.host?.replacingOccurrences(of: "www.", with: "") ?? "Website") : "On this device",
+                          systemImage: series.kind == .local ? "internaldrive" : series.kind == .book ? "person" : "globe")
                         .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                     HStack(spacing: 6) {
-                        chip(style.title, symbol: style.symbol)
+                        if series.kind == .book { chip("Book", symbol: "text.book.closed") } else { chip(style.title, symbol: style.symbol) }
                         if model.downloadedCount(series) > 0 { chip("\(model.downloadedCount(series))", symbol: "arrow.down.circle.fill") }
                     }
                     Text(series.chapters.isEmpty ? "Loading chapters…" : "\(read) of \(series.chapters.count) read")
@@ -1547,12 +1601,14 @@ struct SeriesHeader: View {
                 }
                 .buttonStyle(PressableStyle()).disabled(resume == nil)
                 .accessibilityIdentifier("seriesContinue")
-                Menu {
-                    Picker("Reads as", selection: Binding(get: { model.styleOverride(series.id) }, set: { model.setStyle($0, for: series.id) })) {
-                        ForEach(ReadingStyle.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol).tag($0) }
-                    }
-                } label: { squareButton(style.symbol) }
-                    .accessibilityLabel("Reads as \(style.title)")
+                if series.kind != .book {
+                    Menu {
+                        Picker("Reads as", selection: Binding(get: { model.styleOverride(series.id) }, set: { model.setStyle($0, for: series.id) })) {
+                            ForEach(ReadingStyle.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol).tag($0) }
+                        }
+                    } label: { squareButton(style.symbol) }
+                        .accessibilityLabel("Reads as \(style.title)")
+                }
                 if series.kind == .web {
                     Menu {
                         Button {
@@ -1759,7 +1815,7 @@ struct CoverPicker: View {
                         }
                     }
                     if let error { Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
-                    if !series.chapters.isEmpty {
+                    if !series.chapters.isEmpty && series.kind != .book {
                         Text("Or use a page").font(.headline)
                         if loading { ProgressView().frame(maxWidth: .infinity) }
                         if !loading && choices.isEmpty { Text("Pages couldn’t be loaded. Check your connection.").foregroundStyle(.secondary) }
@@ -1778,7 +1834,7 @@ struct CoverPicker: View {
             .background(EclipseBackground())
             .navigationTitle("Cover").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { dismiss() }.fontWeight(.semibold) }
-            .task { choices = await model.coverChoices(series); loading = false }
+            .task { if series.kind != .book { choices = await model.coverChoices(series) }; loading = false }
             .onChange(of: photo) { _, item in
                 guard let item else { return }
                 apply {
@@ -1844,7 +1900,7 @@ struct AddMangaView: View {
     @State private var browse: URL?
     @State private var importing = false
     @State private var copy = true
-    private static let types: [UTType] = [.folder, .zip, .pdf, .image] + [UTType(filenameExtension: "cbz")].compactMap { $0 }
+    private static let types: [UTType] = [.folder, .zip, .pdf, .image] + [UTType(filenameExtension: "cbz")].compactMap { $0 } + BookLink.types
     var body: some View {
         NavigationStack {
             Form {
@@ -1875,7 +1931,7 @@ struct AddMangaView: View {
                         .disabled(working)
                     Toggle("Copy into eclipsereader", isOn: $copy)
                 } header: { Text("From Files, iCloud or a drive") } footer: {
-                    Text(copy ? "CBZ, ZIP, PDF, images or folders. Copies are readable offline; your originals are never changed."
+                    Text(copy ? "Manga: CBZ, ZIP, PDF, images or folders. Books: EPUB, MOBI, AZW3, FB2, TXT, RTF, HTML, DOCX, ODT. Copies are readable offline; your originals are never changed."
                               : "Reads straight from the original location (good for large collections on an external SSD). The drive must be connected while reading.")
                 }
             }

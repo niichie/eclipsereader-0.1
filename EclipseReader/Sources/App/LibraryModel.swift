@@ -419,7 +419,16 @@ final class LibraryModel: ObservableObject {
         save()
     }
     func importFiles(_ urls: [URL], copy: Bool) async throws -> MangaSeries {
-        let series = try await LocalBooks.shared.importSeries(urls, copy: copy)
+        // Books (EPUB, MOBI, TXT…) join "Boring books without pictures"; everything else is read as pages.
+        let books = urls.filter { BookFormat.from(fileExtension: $0.pathExtension) != nil }
+        var first: MangaSeries?
+        for book in books {
+            let series = try await importBook(book)
+            if first == nil { first = series }
+        }
+        let rest = urls.filter { BookFormat.from(fileExtension: $0.pathExtension) == nil }
+        if rest.isEmpty, let first { return first }
+        let series = try await LocalBooks.shared.importSeries(rest, copy: copy)
         state.series = [series] + allSeries
         save()
         return series
@@ -440,6 +449,10 @@ final class LibraryModel: ObservableObject {
         if series.kind == .local {
             let chapters = series.chapters
             Task { for c in chapters { await LocalBooks.shared.delete(c) } }
+        }
+        if series.kind == .book, let file = BookLink.file(of: series.url) {
+            state.bookPositions?[series.id] = nil
+            Task { await BookStore.shared.delete(file) }
         }
     }
     func rename(_ series: MangaSeries, to title: String) {

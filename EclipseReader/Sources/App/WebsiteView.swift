@@ -37,7 +37,7 @@ struct WebsiteView: View {
 }
 
 @MainActor
-final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate {
+final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate {
     let webView: WKWebView
     @Published var error: String?
     @Published var loading = true
@@ -138,6 +138,50 @@ final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate {
         func root(_ h: String) -> String { h.split(separator: ".").suffix(2).joined(separator: ".") }
         return root(host) == root(home)
     }
+    // MARK: Downloads (books and comics from any site land in the library)
+
+    /// Called with the downloaded file once it's saved.
+    var downloaded: ((URL) -> Void)?
+    @Published var downloading = false
+    private var destinations: [ObjectIdentifier: URL] = [:]
+    static let downloadable: Set<String> = ["epub", "kepub", "mobi", "azw", "azw3", "prc", "fb2", "txt", "rtf", "docx", "odt", "pdf", "cbz", "zip"]
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
+        let response = navigationResponse.response
+        let mime = (response.mimeType ?? "").lowercased()
+        let ext = ((response.suggestedFilename ?? response.url?.lastPathComponent ?? "") as NSString).pathExtension.lowercased()
+        let attachment = ((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? "").lowercased().contains("attachment")
+        let bookMime = mime.contains("epub") || mime.contains("mobipocket") || mime.contains("x-mobi") || mime.contains("fictionbook")
+        let wanted = bookMime || (Self.downloadable.contains(ext) && (attachment || !navigationResponse.canShowMIMEType || ext != "txt" && ext != "pdf"))
+        decisionHandler(navigationResponse.isForMainFrame && wanted ? .download : .allow)
+    }
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+        downloading = true
+    }
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+        downloading = true
+    }
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
+                  completionHandler: @escaping @MainActor @Sendable (URL?) -> Void) {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("download-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let name = suggestedFilename.isEmpty ? "download" : suggestedFilename.replacingOccurrences(of: "/", with: "-")
+        let target = folder.appendingPathComponent(name)
+        destinations[ObjectIdentifier(download)] = target
+        completionHandler(target)
+    }
+    func downloadDidFinish(_ download: WKDownload) {
+        downloading = false
+        if let file = destinations.removeValue(forKey: ObjectIdentifier(download)) { downloaded?(file) }
+    }
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        downloading = false
+        destinations.removeValue(forKey: ObjectIdentifier(download))
+        self.error = "The download didn’t finish: \(error.localizedDescription)"
+    }
+
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         loading = false; error = "The website process stopped. Tap Reload to reopen it."
     }
