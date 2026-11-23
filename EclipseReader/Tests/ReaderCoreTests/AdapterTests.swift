@@ -64,6 +64,17 @@ final class AdapterTests: XCTestCase {
         """
         let chapters = WeebCentral.chapters(in: html)
         XCTAssertEqual(chapters.map(\.number), ["1", "2"])
+        // Current pages use relative links, with the title inside nested spans.
+        let current = """
+        <div class="flex items-center"><a href="/chapters/01KTQQFD92S235Y7CXWVF17S7M" class="hover:bg-base-300 flex-1">
+        <span class="me-2"><img src="/static/images/chapter-badge-official.svg" alt=""></span>
+        <span class="grow flex items-center gap-2"><span class="">Chapter 271.5</span><span x-show="new_chapter"></span></span>
+        <time datetime="2026-06-10T02:58:38.500Z">2026-06-10</time></a></div>
+        <a href="/chapters/01J8Z9PYBBKZ3ZWY18RP8FKP50" class="hover:bg-base-300"><span class="grow"><span>Chapter 271</span></span></a>
+        """
+        let now = WeebCentral.chapters(in: current)
+        XCTAssertEqual(now.map(\.number), ["271", "271.5"])
+        XCTAssertEqual(now.last?.url.absoluteString, "https://weebcentral.com/chapters/01KTQQFD92S235Y7CXWVF17S7M")
         XCTAssertTrue(WeebCentral.handles(URL(string: "https://weebcentral.com/series/01J76XY7E9FNDZ1DBBM6PBJPFK/Solo")!))
     }
 

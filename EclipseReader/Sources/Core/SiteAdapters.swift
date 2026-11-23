@@ -179,8 +179,8 @@ struct WeebCentral {
         if let chapter = Self.chapterID(url), Self.seriesID(url) == nil {
             // A chapter: its page links back to the series.
             let html = try await text(url, referer: nil)
-            if let href = LinkedSource.firstMatch(#"href=["'](https://weebcentral\.com/series/[0-9A-Za-z]+[^"']*)["']"#, html),
-               let series = URL(string: href) {
+            if let href = LinkedSource.firstMatch(#"href=["']((?:https://weebcentral\.com)?/series/[0-9A-Za-z]+[^"']*)["']"#, html),
+               let series = LinkedSource.resolve(href, base: URL(string: "https://weebcentral.com/")!) {
                 var found = try await inspect(series)
                 found = LinkInspection(title: found.title, cover: found.cover, pages: (try? await pages(url)) ?? [],
                                        chapters: found.chapters, style: found.style, summary: found.summary)
@@ -207,8 +207,10 @@ struct WeebCentral {
     static func chapters(in html: String) -> [Chapter] {
         var seen = Set<String>()
         var found: [Chapter] = []
-        for m in LinkedSource.matches(#"(?is)<a\b[^>]*href=["'](https://weebcentral\.com/chapters/[0-9A-Za-z]+)["'][^>]*>(.*?)</a>"#, html) {
-            guard let url = URL(string: m[0]), seen.insert(url.absoluteString).inserted else { continue }
+        // Links are absolute on older pages and relative ("/chapters/…") on current ones.
+        for m in LinkedSource.matches(#"(?is)<a\b[^>]*href=["']((?:https://weebcentral\.com)?/chapters/[0-9A-Za-z]+)["'][^>]*>(.*?)</a>"#, html) {
+            guard let url = URL(string: m[0].hasPrefix("/") ? "https://weebcentral.com" + m[0] : m[0]),
+                  seen.insert(url.absoluteString).inserted else { continue }
             let text = LinkedSource.plain(m[1])
             let name = LinkedSource.firstMatch(#"((?:Chapter|Episode|Ch\.?)\s*[\d.]+)"#, text) ?? text
             let n = ChapterOrder.number(name) ?? ChapterOrder.number(text)

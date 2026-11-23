@@ -232,4 +232,30 @@ final class LiveProbeTests: XCTestCase {
             if let url = first?.url { await chapters("official \(name)", url: url) }
         }
     }
+
+    func testDiagnostics2() async {
+        let (_, _, comics) = await body("https://asurascans.com/comics")
+        let slugs = Set(LinkedSource.matches(#"href=["'](/comics/[a-z0-9-]+)["']"#, comics).map { $0[0] })
+        dump("asura /comics", "\(comics.count)B \(slugs.count) series links; overgeared: \(around(comics, "(?i)overgeared", before: 400, after: 600))")
+        let (_, _, browse) = await body("https://asurascans.com/browse")
+        let browseSlugs = Set(LinkedSource.matches(#"href=["'](/comics/[a-z0-9-]+)["']"#, browse).map { $0[0] })
+        dump("asura /browse", "\(browse.count)B \(browseSlugs.count) series links; api: \(around(browse, #"(?i)api[./]"#, before: 200, after: 500)) || search: \(around(browse, #"(?i)search"#, before: 300, after: 600))")
+        for q in ["https://asurascans.com/browse?search=murim", "https://asurascans.com/browse?q=murim", "https://asurascans.com/browse/comics?search=murim", "https://asurascans.com/comics?page=2"] {
+            let (st, _, html) = await body(q)
+            let found = Set(LinkedSource.matches(#"href=["'](/comics/[a-z0-9-]+)["']"#, html).map { $0[0] })
+            dump("asura try \(q)", "\(st) \(html.count)B \(found.count) links: \(found.filter { $0.contains("murim") }.joined(separator: " "))")
+        }
+        await chapters("Asura", url: URL(string: "https://asurascans.com/comics/overgeared-7de80a82")!)
+
+        let (_, _, chapter) = await body("https://mangadot.net/chapter/32749?source=user")
+        let webps = LinkedSource.matches(#"([A-Za-z0-9_/.-]*\d{3}\.webp)"#, chapter).map { $0[0] }
+        dump("mangadot chapter", "\(webps.count) webp refs: \(Array(Set(webps)).sorted().prefix(6)) || 002: \(around(chapter, "002", before: 600, after: 600)) || pages: \(around(chapter, #"(?i)\"pages\"|pageCount|page_count|totalPages"#, before: 300, after: 600))")
+        dump("mangadot chapter tail", String(chapter.suffix(2400)))
+        let (_, _, series) = await body("https://mangadot.net/manga/118")
+        let chapterLinks = LinkedSource.matches(#"/chapter/(\d+)"#, series).map { $0[0] }
+        dump("mangadot series", "links \(chapterLinks.count) unique \(Set(chapterLinks).count) || chapters json: \(around(series, #"(?i)\"chapters\"|chapterCount|totalChapters"#, before: 200, after: 900))")
+
+        let (_, _, comix) = await body("https://comix.to/")
+        dump("comix structure", "data-page: \(around(comix, "data-page", before: 50, after: 400)) || slug: \(around(comix, #"\"slug\""#, before: 300, after: 300)) || title-path: \(around(comix, #"/title/"#, before: 300, after: 300)) || hash: \(around(comix, #"hash_id|hid"#, before: 200, after: 300))")
+    }
 }
