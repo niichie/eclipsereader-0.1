@@ -168,24 +168,52 @@ public struct LinkedSource: Sendable {
         for pattern in patterns {
             if let raw = firstMatch(pattern, html), let url = resolve(raw, base: base), !looksLikeLogo(url) { return url }
         }
-        // Cover-like <img>: class, alt or file name mentions a cover, poster or thumbnail.
+        // Cover-like <img>: class, alt or file name mentions a cover, poster or thumbnail; an image
+        // whose alt text is the series title wins over the rest (related-series covers come later).
         let inert = html.replacingOccurrences(of: #"(?is)<(script|style|template|noscript)\b[^>]*>.*?</\1\s*>"#,
                                               with: "", options: .regularExpression)
+        let title = seriesTitle(in: html)?.lowercased()
+        var hinted: URL?
         for tag in ReadBerserkParser.tags("img", inert) {
             let fields = ReadBerserkParser.attributes(tag)
-            let hint = [fields["class"], fields["alt"], fields["id"], fields["src"], fields["data-src"]]
-                .compactMap { $0?.lowercased() }.joined(separator: " ")
-            guard ["cover", "poster", "thumbnail", "summary_image", "wp-post-image", "series-image"].contains(where: hint.contains)
-            else { continue }
+            let srcset = fields["srcset"] ?? fields["data-srcset"]
             let raw = ["data-src", "data-lazy-src", "data-original", "src"].lazy.compactMap { fields[$0] }
                 .first { !$0.hasPrefix("data:") && !$0.isEmpty }
-            if let raw, let url = resolve(raw, base: base), !looksLikeLogo(url) { return url }
+                ?? srcset?.split(separator: ",").first.map { String($0.split(separator: " ").first ?? "") }
+            guard let raw, let url = resolve(raw, base: base), !looksLikeLogo(url) else { continue }
+            let alt = (fields["alt"] ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+            if let title, !title.isEmpty, alt == title || (alt.count > 3 && title.hasPrefix(alt)) {
+                if ["avatar", "author", "user"].contains(where: url.path.lowercased().contains) { continue }
+                return url
+            }
+            if hinted == nil {
+                let hint = [fields["class"], fields["alt"], fields["id"], url.absoluteString]
+                    .compactMap { $0?.lowercased() }.joined(separator: " ")
+                if ["cover", "poster", "thumbnail", "summary_image", "wp-post-image", "series-image"].contains(where: hint.contains) {
+                    hinted = url
+                }
+            }
         }
+        if let hinted { return hinted }
+        // Data written into scripts by modern sites (Next.js and similar).
+        let keyed = #"(?is)"(?:cover|coverUrl|cover_url|coverImage|poster|thumbnail|thumb)"\s*:\s*"(https?:[^"]+?\.(?:jpe?g|png|webp|avif)[^"]*)""#
+        if let raw = firstMatch(keyed, html), let url = resolve(raw, base: base), !looksLikeLogo(url) { return url }
         return nil
     }
     static func resolve(_ raw: String, base: URL) -> URL? {
         let clean = decodeEntities(raw).trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\/", with: "/")
-        guard let url = URL(string: clean, relativeTo: base)?.absoluteURL, WebLink.publicHTTPS(url) else { return nil }
+        guard var url = URL(string: clean, relativeTo: base)?.absoluteURL else { return nil }
+        // Image optimiser addresses (/_next/image?url=…, /cdn-cgi/image/…/https://…): use the original image.
+        if url.path.hasSuffix("/_next/image") || url.path.hasSuffix("/_vercel/image"),
+           let inner = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "url" })?.value,
+           let original = URL(string: inner, relativeTo: base)?.absoluteURL {
+            url = original
+        } else if let range = url.absoluteString.range(of: "/cdn-cgi/image/"),
+                  let start = url.absoluteString[range.upperBound...].range(of: "https://"),
+                  let original = URL(string: String(url.absoluteString[start.lowerBound...])) {
+            url = original
+        }
+        guard WebLink.publicHTTPS(url) else { return nil }
         return url
     }
     static func looksLikeLogo(_ url: URL) -> Bool {

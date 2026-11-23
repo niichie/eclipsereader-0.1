@@ -112,7 +112,8 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     private var start: (() -> Void)?
     enum Alignment { case center, leftEdge, rightEdge }
     var alignment: Alignment = .center
-    var tapped: (() -> Void)?
+    /// Single tap, with where it landed across the screen (0 = left edge, 1 = right edge).
+    var tapped: ((CGFloat) -> Void)?
     /// Part of a continuous vertical strip: pinned to the top, sub-pixel overflow ignored.
     var seamless = false
     override init(frame: CGRect) {
@@ -135,7 +136,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         retry.isHidden = true
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(zoom(_:)))
         doubleTap.numberOfTapsRequired = 2; scroll.addGestureRecognizer(doubleTap)
-        let singleTap = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(toggleControls(_:)))
         singleTap.require(toFail: doubleTap); scroll.addGestureRecognizer(singleTap)
         scroll.accessibilityLabel = "Manga page. Pinch or double tap to zoom."
     }
@@ -223,7 +224,11 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
     func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
     @objc private func retryPage() { start?() }
-    @objc private func toggleControls() { tapped?() }
+    @objc private func toggleControls(_ recognizer: UITapGestureRecognizer) {
+        let width = window?.bounds.width ?? bounds.width
+        let x = recognizer.location(in: window ?? self).x
+        tapped?(width > 0 ? min(1, max(0, x / width)) : 0.5)
+    }
     @objc private func zoom(_ recognizer: UITapGestureRecognizer) {
         guard imageView.image != nil else { return }
         if scroll.zoomScale > baseScale * 1.05 { scroll.setZoomScale(baseScale, animated: !UIAccessibility.isReduceMotionEnabled) }
@@ -246,10 +251,10 @@ final class PageCanvasController: UIViewController {
     private let chapter: Chapter
     private let pipeline: ImagePipeline
     private let preferences: ReaderPreferences
-    private let tapped: () -> Void
+    private let tapped: (CGFloat) -> Void
     private let dimensions: (Int, Double) -> Void
     init(groupIndex: Int, group: PageGroup, pages: [MangaPage], chapter: Chapter,
-         pipeline: ImagePipeline, preferences: ReaderPreferences, tap: @escaping () -> Void,
+         pipeline: ImagePipeline, preferences: ReaderPreferences, tap: @escaping (CGFloat) -> Void,
          dimensions: @escaping (Int, Double) -> Void) {
         self.groupIndex = groupIndex; self.group = group; self.pages = pages; self.chapter = chapter
         self.pipeline = pipeline; self.preferences = preferences; tapped = tap; self.dimensions = dimensions

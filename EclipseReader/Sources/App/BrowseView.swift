@@ -153,8 +153,13 @@ struct MangaBrowserView: View {
                 Button { dismiss() } label: { Image(systemName: "xmark").font(.headline).frame(width: 36, height: 36) }
                     .accessibilityLabel("Close browser")
                 HStack(spacing: 8) {
-                    Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
-                    TextField("Search or enter a website", text: $address, onEditingChanged: { editing = $0 })
+                    Image(systemName: browser.currentURL?.scheme == "https" ? "lock.fill" : "globe").font(.caption2).foregroundStyle(.secondary)
+                    TextField("Search or enter a website", text: $address, onEditingChanged: { now in
+                        editing = now
+                        // Full address while typing, just the site name otherwise (like Safari).
+                        if now, let url = browser.currentURL { address = url.absoluteString }
+                        else if let host = browser.currentURL?.host { address = host.replacingOccurrences(of: "www.", with: "") }
+                    })
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.webSearch)
                         .submitLabel(.go).onSubmit { browser.go(address) }
                         .font(.subheadline)
@@ -191,30 +196,13 @@ struct MangaBrowserView: View {
             }
             if let error = browser.error { Text(error).font(.footnote).foregroundStyle(.orange).padding(8) }
 
-            HStack(spacing: 0) {
-                Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left").frame(maxWidth: .infinity) }
-                    .disabled(!browser.canGoBack).accessibilityLabel("Back")
-                Button { browser.webView.goForward() } label: { Image(systemName: "chevron.right").frame(maxWidth: .infinity) }
-                    .disabled(!browser.canGoForward).accessibilityLabel("Forward")
-                Button { addCurrent() } label: {
-                    HStack(spacing: 6) {
-                        if adding { ProgressView().controlSize(.small).tint(.black) } else { Image(systemName: "plus") }
-                        Text("Add to library").font(.subheadline.weight(.bold))
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(Eclipse.highlight, in: Capsule()).foregroundStyle(.black)
-                }.disabled(adding).accessibilityIdentifier("browserAdd")
-                Button { browser.loading ? browser.webView.stopLoading() : browser.reload() } label: {
-                    Image(systemName: browser.loading ? "xmark" : "arrow.clockwise").frame(maxWidth: .infinity)
-                }.accessibilityLabel(browser.loading ? "Stop" : "Reload")
-                Button { readCurrent() } label: { Image(systemName: "book").frame(maxWidth: .infinity) }
-                    .accessibilityLabel("Read this page in the reader")
-            }
-            .font(.title3).padding(.vertical, 10).background(.ultraThinMaterial)
+            BrowserToolbar(browser: browser, adding: adding, add: addCurrent, read: readCurrent)
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
-        .onChange(of: browser.currentURL) { _, url in if !editing, let url { address = url.absoluteString } }
+        .onChange(of: browser.currentURL) { _, url in
+            if !editing, let host = url?.host { address = host.replacingOccurrences(of: "www.", with: "") }
+        }
         .fullScreenCover(item: $reader) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
     }
     private func rootURL(_ url: URL) -> URL {
@@ -234,7 +222,7 @@ struct MangaBrowserView: View {
         Task {
             defer { adding = false }
             do {
-                switch try await model.addLink(url.absoluteString) {
+                switch try await model.addLink(url.absoluteString, html: await browser.pageHTML()) {
                 case .open(let chapter):
                     lastAdded = nil; reader = chapter
                 case .series(let series, _):
@@ -253,7 +241,7 @@ struct MangaBrowserView: View {
         Task {
             defer { adding = false }
             do {
-                switch try await model.addLink(url.absoluteString) {
+                switch try await model.addLink(url.absoluteString, html: await browser.pageHTML()) {
                 case .open(let chapter): reader = chapter
                 case .series(let series, let chapter):
                     lastAdded = series
@@ -261,5 +249,55 @@ struct MangaBrowserView: View {
                 }
             } catch { show("This page has no readable manga pages. Try opening a chapter.") }
         }
+    }
+}
+
+/// Back, forward, a prominent "Add to library", reload and read. Sized so it never wraps:
+/// the add button shortens to "Add" and then to an icon on narrow screens.
+private struct BrowserToolbar: View {
+    @ObservedObject var browser: WebsiteBrowser
+    let adding: Bool
+    let add: () -> Void
+    let read: () -> Void
+    var body: some View {
+        HStack(spacing: 2) {
+            barButton("chevron.left", "Back") { browser.webView.goBack() }.disabled(!browser.canGoBack)
+            barButton("chevron.right", "Forward") { browser.webView.goForward() }.disabled(!browser.canGoForward)
+            Spacer(minLength: 6)
+            Button(action: add) {
+                ViewThatFits(in: .horizontal) {
+                    addLabel("Add to library")
+                    addLabel("Add")
+                    addLabel(nil)
+                }
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(adding)
+            .accessibilityLabel("Add to library")
+            .accessibilityIdentifier("browserAdd")
+            Spacer(minLength: 6)
+            barButton(browser.loading ? "xmark" : "arrow.clockwise", browser.loading ? "Stop" : "Reload") {
+                browser.loading ? browser.webView.stopLoading() : browser.reload()
+            }
+            barButton("book", "Read this page in the reader", action: read)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { Rectangle().fill(Eclipse.hairline).frame(height: 0.5) }
+    }
+    private func barButton(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 19, weight: .medium)).frame(width: 44, height: 44)
+        }.accessibilityLabel(label)
+    }
+    private func addLabel(_ text: String?) -> some View {
+        HStack(spacing: 6) {
+            if adding { ProgressView().controlSize(.small).tint(.black) } else { Image(systemName: "plus").font(.subheadline.weight(.heavy)) }
+            if let text { Text(text).font(.subheadline.weight(.bold)).lineLimit(1).fixedSize() }
+        }
+        .padding(.horizontal, text == nil ? 13 : 18).frame(height: 40)
+        .background(Eclipse.highlight, in: Capsule())
+        .foregroundStyle(.black)
+        .shadow(color: Eclipse.highlight.opacity(0.35), radius: 10, y: 2)
     }
 }

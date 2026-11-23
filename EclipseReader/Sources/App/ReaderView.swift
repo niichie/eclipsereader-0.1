@@ -17,6 +17,7 @@ struct ReaderView: View {
     @State private var wide = Set<Int>()
     @State private var dimming = 0.0
     @AppStorage("readerWarmth") private var warmth = 0.0
+    @AppStorage("keepScreenOn") private var keepScreenOn = true
     @State private var webtoon = false
     @StateObject private var translator = TranslateModel()
     @State private var handle = ReaderHandle()
@@ -47,27 +48,30 @@ struct ReaderView: View {
             let groups = ReadingOrder.groups(count: pages.count, landscape: ReadingOrder.canPair(width: geometry.size.width, height: geometry.size.height),
                 spreads: effective.landscapeSpreads, wide: effective.detectWidePages ? wide : [])
             let showBars = controls || failure != nil || loading
-            VStack(spacing: 0) {
-                if showBars { readerHeader }
+            ZStack {
                 ZStack {
                     Color.black
-                    if loading { ProgressView("Opening chapter…").tint(.white) }
-                    else if let failure {
-                        VStack(spacing: 20) {
+                    if loading {
+                        VStack(spacing: 14) {
+                            EclipseMark(size: 44).symbolEffectPulse()
+                            Text("Opening \(chapter.title)…").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }.padding(.horizontal, 32)
+                    } else if let failure {
+                        VStack(spacing: 16) {
                             SourceNotice(message: failure) { retry += 1 }
                             if chapter.url.scheme == "https" {
-                                Button("Open Website Mode") { website = true }.buttonStyle(.borderedProminent).tint(.gray)
+                                Button("Open in browser", systemImage: "safari") { website = true }
+                                    .buttonStyle(.borderedProminent).tint(Eclipse.accent)
                             }
-                        }.padding(24)
+                        }.padding(24).frame(maxWidth: 520)
                     } else {
                         ReaderSurface(pages: pages, groups: groups, chapter: chapter, pipeline: library.pipeline,
                             preferences: effective, handle: handle, page: $page,
-                            tap: { withAnimation(.easeInOut(duration: 0.2)) { controls.toggle() } },
+                            tap: { x in tapped(at: x, groups: groups) },
                             dimensions: { index, ratio in
                                 if ratio > 1.15 && effective.detectWidePages { wide.insert(index) }
                                 if ratio < 0.36 { tallPages += 1; if tallPages >= 3 || pages.count == 1 { markWebtoon() } }
                             })
-
                     }
                     Color(red: 1.0, green: 0.62, blue: 0.32).opacity(warmth).blendMode(.multiply).allowsHitTesting(false)
                     Color.black.opacity(dimming).allowsHitTesting(false)
@@ -80,15 +84,28 @@ struct ReaderView: View {
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if translator.active {
-                    if translator.presentation == .list { TranslationPanel(model: translator) }
-                    TranslationBar(model: translator) { scanNonce += 1 }
+                // Artwork uses the whole height (like a printed page held up to the screen);
+                // the sides stay clear of notches and the Duo's status column.
+                .ignoresSafeArea(.container, edges: .vertical)
+
+                // Controls float over the page so it never resizes when they appear.
+                VStack(spacing: 0) {
+                    if showBars {
+                        readerHeader.transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    Spacer(minLength: 0)
+                    if translator.active {
+                        if translator.presentation == .list { TranslationPanel(model: translator) }
+                        TranslationBar(model: translator) { scanNonce += 1 }
+                    }
+                    if showBars && !pages.isEmpty {
+                        navigationBar(groups: groups).transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
-                if showBars && !pages.isEmpty { navigationBar(groups: groups) }
             }.foregroundStyle(.white)
-                .statusBarHidden(!controls)
-                .persistentSystemOverlays(controls ? .automatic : .hidden)
+                .statusBarHidden(!showBars)
+                .persistentSystemOverlays(showBars ? .automatic : .hidden)
+                .animation(.snappy(duration: 0.22), value: showBars)
                 .task(id: "\(chapter.id)-\(retry)") { await load() }
                 .task(id: prefetchKey) {
                     guard phase == .active, !pages.isEmpty else { return }
@@ -98,7 +115,8 @@ struct ReaderView: View {
                 }
                 .onChange(of: page) { _, _ in remember() }
                 .onChange(of: phase) { _, phase in if phase != .active { remember() } }
-                .onDisappear { remember() }
+                .onDisappear { remember(); UIApplication.shared.isIdleTimerDisabled = false }
+                .onAppear { UIApplication.shared.isIdleTimerDisabled = keepScreenOn }
                 .sheet(isPresented: $settings) {
                     NavigationStack {
                         Form {
@@ -142,26 +160,32 @@ struct ReaderView: View {
                 }
         }.background(.black)
     }
+    private var seriesTitle: String? {
+        library.series(id: library.seriesID(for: chapter))?.title
+    }
     private var readerHeader: some View {
-        HStack(spacing: 12) {
-            Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                .accessibilityLabel("Close reader")
-            VStack(alignment: .leading, spacing: 3) {
-                Text(chapter.title).font(.headline).lineLimit(1)
-                Text(effective.mode == .vertical ? "Vertical" : effective.direction.title)
-                    .font(.caption).foregroundStyle(.secondary)
+        HStack(spacing: 6) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.down").font(.headline).frame(width: 44, height: 44)
+            }.accessibilityLabel("Close reader")
+            VStack(alignment: .leading, spacing: 1) {
+                if let seriesTitle {
+                    Text(seriesTitle).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Text(chapter.title).font(.subheadline.weight(.bold)).lineLimit(1)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 4)
             Button {
                 translator.targetCode = library.preferences.translateTarget ?? "en"
                 if translator.active { translator.active = false; translator.clear() } else { translator.active = true; scanNonce += 1 }
             } label: {
-                Image(systemName: translator.active ? "character.bubble.fill" : "character.bubble").frame(width: 44, height: 44)
+                Image(systemName: translator.active ? "character.bubble.fill" : "character.bubble")
+                    .foregroundStyle(translator.active ? Eclipse.highlight : .white)
+                    .frame(width: 44, height: 44)
             }.accessibilityLabel(translator.active ? "Turn off translation" : "Translate this page")
                 .accessibilityIdentifier("translatePage")
             Menu {
-                Button("Reading settings", systemImage: "slider.horizontal.3") { settings = true }
-                if chapter.url.scheme == "https" { Button("Website Mode", systemImage: "globe") { website = true } }
+                if chapter.url.scheme == "https" { Button("Open in browser", systemImage: "safari") { website = true } }
                 Button("Reload chapter", systemImage: "arrow.clockwise") { retry += 1 }
                 if library.canDownload(chapter) && !library.isDownloaded(chapter) && library.downloads[chapter.id] == nil {
                     Button("Download chapter", systemImage: "arrow.down.circle") { library.download([chapter]) }
@@ -173,24 +197,106 @@ struct ReaderView: View {
                         Task { try? await library.chooseCoverPage(current, seriesID: seriesID) }
                     }
                 }
-            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+                if chapter.url.scheme == "https" {
+                    ShareLink(item: chapter.url) { Label("Share link", systemImage: "square.and.arrow.up") }
+                }
+            } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
                 .accessibilityLabel("Reader options")
-        }.padding(.horizontal, 8).padding(.vertical, 4).background(.ultraThinMaterial)
+        }
+        .font(.title3)
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) { Rectangle().fill(Eclipse.hairline).frame(height: 0.5) }
     }
+    /// Page slider between previous/next chapter buttons; flipped for right-to-left manga so
+    /// the slider moves the same way the pages do. Below it, quick settings.
     private func navigationBar(groups: [PageGroup]) -> some View {
-        VStack(spacing: 14) {
-            HStack {
-                Button("Previous") { move(-1, groups: groups) }.disabled(page == 0)
-                Spacer()
-                Text("\(page + 1) / \(pages.count)").monospacedDigit().font(.subheadline)
-                    .accessibilityLabel("Page \(page + 1) of \(pages.count)").accessibilityIdentifier("logicalPage")
-                Spacer()
-                Button("Next") { move(1, groups: groups) }
-            }.frame(minHeight: 36)
-            Slider(value: Binding(get: { Double(page) }, set: { page = Int($0.rounded()) }),
-                in: 0...Double(max(1, pages.count - 1)), step: 1)
-                .disabled(pages.count == 1).accessibilityLabel("Page position")
-        }.padding(.horizontal, 24).padding(.vertical, 12).background(.ultraThinMaterial)
+        let rtl = effective.mode == .paged && effective.direction == .rightToLeft
+        let previous = library.previous(before: chapter)
+        let next = library.next(after: chapter)
+        return VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                chapterButton("backward.end.fill", "Previous chapter", enabled: previous != nil) { if let previous { open(previous) } }
+                HStack(spacing: 10) {
+                    Text("\(page + 1)").monospacedDigit().font(.footnote.weight(.semibold)).frame(minWidth: 22)
+                        .accessibilityLabel("Page \(page + 1) of \(pages.count)").accessibilityIdentifier("logicalPage")
+                    Slider(value: Binding(get: { Double(page) }, set: { page = Int($0.rounded()) }),
+                           in: 0...Double(max(1, pages.count - 1)), step: 1)
+                        .tint(Eclipse.accent)
+                        .disabled(pages.count == 1).accessibilityLabel("Page position")
+                    Text("\(pages.count)").monospacedDigit().font(.footnote).foregroundStyle(.secondary).frame(minWidth: 22)
+                }
+                .padding(.horizontal, 14).frame(height: 44)
+                .background(.thinMaterial, in: Capsule())
+                chapterButton("forward.end.fill", "Next chapter", enabled: next != nil) { if let next { open(next) } }
+            }
+            .environment(\.layoutDirection, rtl ? .rightToLeft : .leftToRight)
+            HStack(spacing: 0) {
+                Menu {
+                    Picker("This series reads as", selection: Binding(
+                        get: { library.styleOverride(library.seriesID(for: chapter)) },
+                        set: { library.setStyle($0, for: library.seriesID(for: chapter)) })) {
+                        ForEach(ReadingStyle.allCases, id: \.self) { style in
+                            Label(style.title, systemImage: style.symbol).tag(style)
+                        }
+                    }
+                } label: { quickLabel(effective.mode == .vertical ? "arrow.up.and.down.text.horizontal" : "book.pages", effective.mode == .vertical ? "Scroll" : (rtl ? "RTL" : "LTR")) }
+                    .accessibilityLabel("Reading mode")
+                if effective.mode == .paged {
+                    Button { toggleTrim() } label: { quickLabel("crop", "Crop", on: effective.trimMargins ?? true) }
+                        .accessibilityLabel("Trim page margins")
+                } else {
+                    Button { library.preferences.verticalGap = !(library.preferences.verticalGap ?? false) } label: {
+                        quickLabel("rectangle.split.1x2", "Gap", on: library.preferences.verticalGap ?? false)
+                    }.accessibilityLabel("Gap between pages")
+                }
+                Button { warmth = warmth > 0 ? 0 : 0.3 } label: { quickLabel("moon.haze", "Warm", on: warmth > 0) }
+                    .accessibilityLabel("Warm night filter")
+                Button { settings = true } label: { quickLabel("slider.horizontal.3", "Settings") }
+                    .accessibilityLabel("Reading settings")
+            }
+        }
+        .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 6)
+        .frame(maxWidth: 640)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { Rectangle().fill(Eclipse.hairline).frame(height: 0.5) }
+    }
+    private func chapterButton(_ symbol: String, _ label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
+                .frame(width: 44, height: 44).background(.thinMaterial, in: Circle())
+        }
+        .disabled(!enabled).opacity(enabled ? 1 : 0.35)
+        .accessibilityLabel(label)
+    }
+    private func quickLabel(_ symbol: String, _ title: String, on: Bool = false) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: symbol).font(.system(size: 17, weight: .medium))
+            Text(title).font(.caption2.weight(.medium)).lineLimit(1)
+        }
+        .foregroundStyle(on ? Eclipse.highlight : .white)
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .contentShape(Rectangle())
+    }
+    private func toggleTrim() {
+        library.preferences.trimMargins = !(library.preferences.trimMargins ?? true)
+    }
+    private func open(_ target: Chapter) {
+        remember()
+        pages = []; loading = true; chapter = target
+    }
+    /// Tap the left or right edge to turn the page (direction-aware), the middle to show or hide controls.
+    private func tapped(at x: CGFloat, groups: [PageGroup]) {
+        let zones = (library.preferences.tapZones ?? true) && effective.mode == .paged
+        if zones && (x < 0.3 || x > 0.7) {
+            let leftward = x < 0.3
+            let forward = effective.direction == .rightToLeft ? leftward : !leftward
+            if controls { controls = false }
+            move(forward ? 1 : -1, groups: groups)
+        } else {
+            controls.toggle()
+        }
     }
     private func load() async {
         loading = true; failure = nil; pages = []; wide = []
@@ -209,6 +315,16 @@ struct ReaderView: View {
                 return w / h > 1.15
             })
             loading = false; remember()
+            #if DEBUG
+            let testing = ProcessInfo.processInfo.arguments.contains("--reader-regression")
+            #else
+            let testing = false
+            #endif
+            if !testing {
+                // Show the controls briefly, then get out of the way of the artwork.
+                try? await Task.sleep(for: .seconds(2.2))
+                if requested.id == chapter.id && !Task.isCancelled { controls = false }
+            }
         } catch is CancellationError { }
         catch let error as URLError where error.code == .cancelled { }
         catch { if !Task.isCancelled && requested.id == chapter.id { failure = error.localizedDescription; loading = false } }
@@ -237,7 +353,7 @@ struct ReaderSurface: UIViewControllerRepresentable {
     let preferences: ReaderPreferences
     let handle: ReaderHandle
     @Binding var page: Int
-    let tap: () -> Void
+    let tap: (CGFloat) -> Void
     let dimensions: (Int, Double) -> Void
     func makeUIViewController(context: Context) -> ReaderContainerController {
         let controller = ReaderContainerController()

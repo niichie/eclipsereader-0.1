@@ -11,8 +11,6 @@ struct WebsiteView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Text("Website Mode · Native page turns and exact page progress are unavailable here.")
-                    .font(.footnote).foregroundStyle(.secondary).padding(12)
                 WebsiteSurface(browser: browser, url: url)
                 if let error = browser.error {
                     Text(error).font(.subheadline).foregroundStyle(.orange).padding(12)
@@ -61,6 +59,10 @@ final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate {
         webView.isOpaque = false; webView.backgroundColor = .black
     }
     func reload() { error = nil; webView.reload() }
+    /// The page exactly as it is showing (after scripts ran and any site check passed).
+    func pageHTML() async -> String? {
+        try? await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String
+    }
     /// Loads the first page once ad and tracker blocking is in place.
     func start(_ url: URL) {
         Task { [weak self] in

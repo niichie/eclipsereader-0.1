@@ -108,6 +108,8 @@ public struct ReaderPreferences: Codable, Equatable, Sendable {
     public var quality: ImageQuality?
     /// A thin gap between pages in vertical scrolling. nil means off (seamless strips).
     public var verticalGap: Bool?
+    /// Tap the left/right edge of a page to turn it. nil means on.
+    public var tapZones: Bool?
     public init() {}
     /// Global settings are the manga defaults; other styles adjust only what they must.
     public func applying(_ style: ReadingStyle) -> ReaderPreferences {
@@ -210,13 +212,13 @@ public enum SourceError: Error, LocalizedError, Equatable, Sendable {
     case unavailable(Int), restricted, missingChapter, unsupportedStructure, timeout, invalidImage, insecureURL
     public var errorDescription: String? {
         switch self {
-        case .unavailable(let status): "The website is unavailable (HTTP \(status)). Try again later."
-        case .restricted: "The website refused direct access or requires a browser session. Open Website Mode; the app will not bypass access restrictions."
+        case .unavailable(let status): "The site isn’t responding right now (error \(status)). Try again later."
+        case .restricted: "This site only opens in a browser. Open it in the browser once (it may ask you to confirm you’re human), then try again."
         case .missingChapter: "This chapter is no longer available on the website."
-        case .unsupportedStructure: "The website structure is not supported by this adapter. Try Website Mode."
+        case .unsupportedStructure: "eclipsereader couldn’t find this chapter’s pages. Open it in the browser, or try again."
         case .timeout: "The request timed out. Check your connection and try again."
-        case .invalidImage: "This page could not be loaded as an image. Retry or open Website Mode."
-        case .insecureURL: "The source returned an unexpected or insecure address."
+        case .invalidImage: "This page didn’t load as an image. Try again, or open it in the browser."
+        case .insecureURL: "The site sent the reader to an unsafe address, so it was blocked."
         }
     }
 }

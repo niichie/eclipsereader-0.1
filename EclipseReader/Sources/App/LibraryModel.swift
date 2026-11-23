@@ -228,7 +228,9 @@ final class LibraryModel: ObservableObject {
     enum LinkResult { case open(Chapter), series(MangaSeries, open: Chapter?) }
     /// Adds a whole series from a pasted link. A series page adds every chapter; a chapter
     /// page adds the series its chapter picker lists (when it has one) and opens that chapter.
-    func addLink(_ text: String) async throws -> LinkResult {
+    /// `html` is the page as the in-app browser shows it right now: it has already passed any
+    /// browser check and run its scripts, so it is read first (covers and chapter lists included).
+    func addLink(_ text: String, html: String? = nil) async throws -> LinkResult {
         guard let url = WebLink.parse(text) else { throw AddLinkError.invalid }
         if let known = ReadBerserkParser.normalize(url.absoluteString, relativeTo: ReadBerserkParser.home) {
             if let chapter = state.chapters.first(where: { $0.url == known }) { return .open(chapter) }
@@ -238,8 +240,16 @@ final class LibraryModel: ObservableObject {
         if let existing = allSeries.first(where: { $0.chapters.contains { $0.url == url } }) {
             return .series(existing, open: existing.chapters.first { $0.url == url })
         }
-        let found = try await inspectAny(url)
-        let series = MangaSeries(id: "web-" + url.absoluteString, url: url, title: found.title, cover: found.cover ?? found.pages.first?.url,
+        var live: LinkInspection?
+        if let html, !Webtoons.handles(url), let seen = try? LinkedSource.analyze(html: html, url: url),
+           seen.chapters.count >= 2 || !seen.pages.isEmpty {
+            live = seen
+        }
+        let found: LinkInspection
+        if let live { found = live } else { found = try await inspectAny(url) }
+        // No cover art on the page: leave it empty so the library looks for the site's art later,
+        // then falls back to a cropped first page.
+        let series = MangaSeries(id: "web-" + url.absoluteString, url: url, title: found.title, cover: found.cover,
                                  kind: .web, chapters: found.chapters)
         state.series = [series] + allSeries
         if let style = found.style { var map = state.detectedStyles ?? [:]; map[series.id] = style; state.detectedStyles = map }
@@ -408,6 +418,12 @@ final class LibraryModel: ObservableObject {
         for series in librarySeries { for chapter in series.chapters { map[chapter.id] = (series, chapter) } }
         return map
     }
+    /// Forgets where you stopped in every chapter; finished chapters stay marked as read.
+    func clearHistory() {
+        state.progress = state.progress.filter { $0.value.completed }
+        state.lastChapterID = nil
+        save()
+    }
     func removeHistory(_ chapter: Chapter) {
         state.progress[chapter.id] = nil
         if state.lastChapterID == chapter.id { state.lastChapterID = nil }
@@ -555,6 +571,14 @@ final class LibraryModel: ObservableObject {
     func save() {
         do { try repository.save(state); persistenceError = nil }
         catch { persistenceError = "Progress could not be saved: \(error.localizedDescription)" }
+    }
+    func previous(before chapter: Chapter) -> Chapter? {
+        if let series = self.series(containing: chapter) {
+            guard let i = series.chapters.firstIndex(where: { $0.id == chapter.id }), i > 0 else { return nil }
+            return series.chapters[i - 1]
+        }
+        guard let index = state.chapters.firstIndex(where: { $0.id == chapter.id }), index > 0 else { return nil }
+        return state.chapters[index - 1]
     }
     func next(after chapter: Chapter) -> Chapter? {
         if let series = self.series(containing: chapter) {

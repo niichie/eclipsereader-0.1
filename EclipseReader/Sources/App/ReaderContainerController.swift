@@ -9,7 +9,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
     private var pipeline: ImagePipeline?
     private var preferences = ReaderPreferences()
     private var changed: ((Int) -> Void)?
-    private var tapped: (() -> Void)?
+    private var tapped: ((CGFloat) -> Void)?
     private var dimensions: ((Int, Double) -> Void)?
     private var pager: UIPageViewController?
     private var collection: UICollectionView?
@@ -23,7 +23,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
     override func loadView() { view = UIView(); view.backgroundColor = .black }
     func configure(pages: [MangaPage], groups: [PageGroup], chapter: Chapter, pipeline: ImagePipeline,
                    preferences: ReaderPreferences, page: Int, changed: @escaping (Int) -> Void,
-                   tap: @escaping () -> Void, dimensions: @escaping (Int, Double) -> Void) {
+                   tap: @escaping (CGFloat) -> Void, dimensions: @escaping (Int, Double) -> Void) {
         loadViewIfNeeded()
         self.changed = changed; tapped = tap; self.dimensions = dimensions
         let key = "\(chapter.id)|\(preferences.mode)|\(preferences.transition)|\(preferences.direction)|\(preferences.advanceOnLeftSwipe)|\(preferences.fit)|\(preferences.doubleTapZoom)|\(preferences.trimMargins ?? true)|\(preferences.quality?.rawValue ?? "auto")|\(preferences.verticalGap ?? false)|\(groups.map(\.indices))"
@@ -51,8 +51,21 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
                let displayed = pager.viewControllers?.first as? PageCanvasController, displayed.groupIndex != index {
                 let forward = index > displayed.groupIndex
                 let dir: UIPageViewController.NavigationDirection = forward == preferences.advanceOnLeftSwipe ? .forward : .reverse
-                // Programmatic jumps are instantaneous; gestures retain curl/slide animation.
-                pager.setViewControllers([canvas(index)], direction: dir, animated: false)
+                // Taps on the page edges turn one page with the usual animation; longer jumps
+                // (slider, chapter change) are instantaneous.
+                let adjacent = abs(index - displayed.groupIndex) == 1 && !UIAccessibility.isReduceMotionEnabled
+                if adjacent {
+                    turning = true
+                    pager.setViewControllers([canvas(index)], direction: dir, animated: true) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self else { return }
+                            self.turning = false
+                            if let pending = self.pendingUpdate { self.pendingUpdate = nil; pending(self.current) }
+                        }
+                    }
+                } else {
+                    pager.setViewControllers([canvas(index)], direction: dir, animated: false)
+                }
             }
             if let collection, !collection.isDragging, !collection.isDecelerating,
                collection.numberOfItems(inSection: 0) > target {
@@ -113,7 +126,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
     private func canvas(_ index: Int) -> PageCanvasController {
         let chapterID = chapter?.id
         return PageCanvasController(groupIndex: index, group: groups[index], pages: pages, chapter: chapter!, pipeline: pipeline!,
-            preferences: preferences, tap: { [weak self] in self?.tapped?() },
+            preferences: preferences, tap: { [weak self] x in self?.tapped?(x) },
             dimensions: { [weak self] index, ratio in
                 // Never mutate SwiftUI state synchronously during a representable update.
                 Task { @MainActor [weak self] in
@@ -154,7 +167,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "page", for: indexPath) as! VerticalPageCell
         var fit = preferences; fit.fit = .width // Cell has the page's aspect ratio; fill its width edge to edge.
         let index = indexPath.item
-        cell.canvas.tapped = { [weak self] in self?.tapped?() }
+        cell.canvas.tapped = { [weak self] x in self?.tapped?(x) }
         cell.canvas.configure(page: pages[index], index: index, chapter: chapter!, pipeline: pipeline!, preferences: fit) { [weak self, weak collectionView] i, ratio in
             guard let self, collectionView === self.collection, pages.indices.contains(i) else { return }
             if ratios[i] != ratio {

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import WebKit
 
 /// Blocks requests to common ad, pop-up and tracking networks in eclipsereader's web views.
@@ -17,18 +18,27 @@ enum AdBlock {
         "openx.net", "scorecardresearch.com", "quantserve.com", "hotjar.com", "yandex.ru", "mc.yandex.ru", "adskeeper.com",
         "bidgear.com", "monetag.com", "galaksion.com", "realsrv.com", "highperformanceformat.com", "profitablegatecpm.com",
     ]
+    static let appBanners = [
+        "[class*='smartbanner']", "[id*='smartbanner']", "[class*='app-banner']", "[class*='app_banner']", "[class*='AppBanner']",
+        "[class*='app-install']", "[class*='app_install']", "[class*='appInstall']", "[class*='app-download']",
+        "[class*='app_download']", "[class*='appDownload']", "[class*='open-in-app']", "[class*='openInApp']",
+        "[class*='getTheApp']", "[class*='get-the-app']", "[class*='app_promotion']", "[class*='appPromotion']",
+    ].joined(separator: ", ")
     static func rules() async -> WKContentRuleList? {
         if let compiled { return compiled }
         guard !attempted else { return nil }
         attempted = true
-        let list = domains.map { domain -> [String: Any] in
+        var list = domains.map { domain -> [String: Any] in
             let escaped = domain.replacingOccurrences(of: ".", with: "\\.")
             return ["trigger": ["url-filter": "^https?://([^/]+\\.)?\(escaped)[:/]", "load-type": ["third-party"]],
                     "action": ["type": "block"]]
         }
+        // Cosmetic: hide "get the app" banners and pop-ups that cover the comic.
+        list.append(["trigger": ["url-filter": ".*"],
+                     "action": ["type": "css-display-none", "selector": appBanners]])
         guard let data = try? JSONSerialization.data(withJSONObject: list),
               let json = String(data: data, encoding: .utf8) else { return nil }
-        compiled = try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "eclipse-adblock-v1", encodedContentRuleList: json)
+        compiled = try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "eclipse-adblock-v2", encodedContentRuleList: json)
         return compiled
     }
 }
@@ -56,6 +66,14 @@ final class PageRenderer: NSObject, WKNavigationDelegate {
         guard WebLink.publicHTTPS(url) else { throw SourceError.insecureURL }
         let renderer = PageRenderer()
         if let rules = await AdBlock.rules() { renderer.webView.configuration.userContentController.add(rules) }
+        // Pages only run lazy-loading code while they're in a window: host it invisibly.
+        let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        if let window {
+            renderer.webView.alpha = 0.01
+            renderer.webView.isUserInteractionEnabled = false
+            window.insertSubview(renderer.webView, at: 0)
+        }
+        defer { renderer.webView.removeFromSuperview() }
         return try await renderer.render(url, timeout: timeout)
     }
 

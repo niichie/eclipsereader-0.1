@@ -102,3 +102,21 @@ extension View {
         if #available(iOS 18.0, *) { self.navigationTransition(.zoom(sourceID: id, in: namespace)) } else { self }
     }
 }
+
+extension View {
+    /// Gentle breathing pulse for loading marks (off with Reduce Motion).
+    func symbolEffectPulse() -> some View { modifier(PulseModifier()) }
+}
+private struct PulseModifier: ViewModifier {
+    @State private var on = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(on ? 1.06 : 0.94)
+            .opacity(on ? 1 : 0.7)
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { on = true }
+            }
+    }
+}
