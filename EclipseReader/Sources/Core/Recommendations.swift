@@ -24,7 +24,7 @@ public enum Recommendations {
     static func parseJikan(_ data: Data) throws -> [Recommendation] {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let list = object["data"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
-        return list.compactMap { entry in
+        return list.compactMap { entry -> Recommendation? in
             guard let id = entry["mal_id"] as? Int, let score = entry["score"] as? Double, score >= 8.0 else { return nil }
             let title = (entry["title_english"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? entry["title"] as? String ?? "Untitled"
             let images = (entry["images"] as? [String: Any])?["jpg"] as? [String: Any]
@@ -54,7 +54,7 @@ public enum Recommendations {
     static func parseOpenLibrary(_ data: Data, minimumRatings: Int = 40) throws -> [Recommendation] {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let docs = object["docs"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
-        return docs.compactMap { doc in
+        return docs.compactMap { doc -> Recommendation? in
             guard let key = doc["key"] as? String, let title = doc["title"] as? String,
                   let rating = doc["ratings_average"] as? Double, rating >= 4.0,
                   (doc["ratings_count"] as? Int ?? 0) >= minimumRatings, let coverID = doc["cover_i"] as? Int else { return nil }

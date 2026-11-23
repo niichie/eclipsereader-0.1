@@ -15,7 +15,7 @@ struct StatsPage: View {
         let today = calendar.startOfDay(for: Date())
         let readingLog = model.state.readingLog ?? [:]
         let finishedLog = model.state.finishedLog ?? [:]
-        let days: [Day] = (0..<14).reversed().compactMap { back in
+        let days: [Day] = (0..<14).reversed().compactMap { back -> Day? in
             guard let date = calendar.date(byAdding: .day, value: -back, to: today) else { return nil }
             let key = LibraryModel.day(date)
             return Day(date: date, minutes: (readingLog[key] ?? 0) / 60, finished: finishedLog[key] ?? 0)

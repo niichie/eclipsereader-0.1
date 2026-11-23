@@ -27,7 +27,7 @@ public enum FreeBooks {
     static func parseGutendex(_ data: Data) throws -> [FreeBook] {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let results = object["results"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
-        return results.compactMap { entry in
+        return results.compactMap { entry -> FreeBook? in
             guard let id = entry["id"] as? Int, let title = entry["title"] as? String else { return nil }
             let formats = entry["formats"] as? [String: String] ?? [:]
             let epub = formats.first { $0.key.hasPrefix("application/epub+zip") }?.value.flatMap(URL.init(string:))
@@ -56,7 +56,7 @@ public enum FreeBooks {
         let data = try await http.fetch(url, referer: nil, image: false)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let docs = object["docs"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
-        return docs.compactMap { doc in
+        return docs.compactMap { doc -> FreeBook? in
             guard let key = doc["key"] as? String, let title = doc["title"] as? String else { return nil }
             let access = doc["ebook_access"] as? String ?? "no_ebook"
             let rating = (doc["ratings_average"] as? Double).map { String(format: "★ %.1f", $0) }
