@@ -49,7 +49,6 @@ struct ReaderView: View {
         var prefs = library.preferences.applying(style)
         if let strength = library.state.seriesCleanup?[seriesID] {
             prefs.enhance = strength > 0
-            prefs.cleanupStrength = strength
         }
         return prefs
     }
@@ -364,11 +363,11 @@ struct ReaderView: View {
                 if let previous = returnChapter {
                     Button("Return to " + previous.title) { open(previous); returnChapter = nil }
                 }
-                Menu("Scan cleanup for this series") {
-                    ForEach(["Use global setting", "Off", "Light", "Standard", "Strong"], id: \.self) { label in
+                Menu("Enhance scans for this series") {
+                    ForEach(["Use global setting", "Off", "On"], id: \.self) { label in
                         Button(label) {
                             var overrides = library.state.seriesCleanup ?? [:]
-                            let levels = ["Off": 0.0, "Light": 0.018, "Standard": 0.035, "Strong": 0.06]
+                            let levels = ["Off": 0.0, "On": 1.0]
                             overrides[library.seriesID(for: chapter)] = levels[label]
                             library.state.seriesCleanup = overrides
                             library.save()

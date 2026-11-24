@@ -1,4 +1,5 @@
 import XCTest
+import CoreImage
 import SwiftUI
 @testable import EclipseReader
 
@@ -166,7 +167,7 @@ final class ReaderChecks: XCTestCase {
         XCTAssertNotNil(book.text(of: 0).attribute(.backgroundColor, at: hit.offset, effectiveRange: nil))
     }
 
-    func testEnhanceCleansScanNoiseAndPreservesInk() throws {
+    func testEnhanceMatchesOriginalScanRenderer() throws {
         let size = 64
         let gray = CGColorSpaceCreateDeviceGray()
         func bitmap() throws -> CGContext {
@@ -181,10 +182,9 @@ final class ReaderChecks: XCTestCase {
             }
         }
         let page = UIImage(cgImage: try XCTUnwrap(source.makeImage()))
-        for (index, data) in [try XCTUnwrap(page.pngData()), try XCTUnwrap(page.jpegData(compressionQuality: 0.8))].enumerated() {
+        for data in [try XCTUnwrap(page.pngData()), try XCTUnwrap(page.jpegData(compressionQuality: 0.8))] {
             let decoded = try XCTUnwrap(UIImage(data: data)?.cgImage)
-            let native = try XCTUnwrap(PageEnhancer.enhance(decoded, targetLongSide: 64))
-            XCTAssertEqual(native.width, size)
+            XCTAssertNil(PageEnhancer.enhance(decoded, targetLongSide: 64))
             let enlarged = try XCTUnwrap(PageEnhancer.enhance(decoded, targetLongSide: 256))
             XCTAssertEqual(enlarged.width, size * 2)
             let enlargedSize = size * 2
@@ -192,20 +192,16 @@ final class ReaderChecks: XCTestCase {
                 bitsPerComponent: 8, bytesPerRow: enlargedSize, space: gray, bitmapInfo: CGImageAlphaInfo.none.rawValue))
             zoom.draw(enlarged, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
             let ink = try XCTUnwrap(zoom.data).assumingMemoryBound(to: UInt8.self)
-            let baseline = try XCTUnwrap(PageEnhancer.enhance(decoded, targetLongSide: 256, strength: 0))
-            let center = 64 * enlargedSize + 64
-            let cleanedInk = Int(min(ink[center], ink[center + 1]))
-            zoom.draw(baseline, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
-            XCTAssertLessThanOrEqual(cleanedInk, Int(min(ink[center], ink[center + 1])) + 10,
-                                     "Cleanup must preserve enlarged thin-ink contrast")
-            let output = try bitmap()
-            output.draw(native, in: CGRect(x: 0, y: 0, width: size, height: size))
-            let values = try XCTUnwrap(output.data).assumingMemoryBound(to: UInt8.self)
-            XCTAssertLessThan(values[32 * size + 32], 70)
-            XCTAssertGreaterThan(values[32 * size + 31], 210)
-            if index == 0 {
-                XCTAssertLessThan(abs(Int(values[16]) - Int(values[17])), 4)
-            }
+            let actual = Data(bytes: ink, count: enlargedSize * enlargedSize)
+            // Reference filter chain from 7c6cd9f, before the scan-cleanup changes.
+            let scaled = CIImage(cgImage: decoded).applyingFilter("CILanczosScaleTransform",
+                parameters: [kCIInputScaleKey: 2.0, kCIInputAspectRatioKey: 1.0])
+            let original = scaled.applyingFilter("CINoiseReduction",
+                parameters: ["inputNoiseLevel": 0.012, "inputSharpness": 0.5])
+                .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.5, kCIInputRadiusKey: 1.5])
+            let expected = try XCTUnwrap(CIContext(options: [.cacheIntermediates: false]).createCGImage(original, from: scaled.extent.integral))
+            zoom.draw(expected, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
+            XCTAssertEqual(actual, Data(bytes: ink, count: enlargedSize * enlargedSize))
         }
     }
 

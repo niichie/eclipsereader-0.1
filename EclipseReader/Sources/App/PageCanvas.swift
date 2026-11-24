@@ -41,15 +41,16 @@ private actor PageDecoder {
         fingerprints[digest, default: []].insert(index)
         return fingerprints[digest, default: []].count >= 3
     }
-    func render(_ data: Data, trim: Bool, limit: Double, enhance: Bool, strength: Double, half: MangaPage.Half?) throws -> DecodedImage {
+    func render(_ data: Data, trim: Bool, limit: Double, enhance: Bool, half: MangaPage.Half?) throws -> DecodedImage {
         try Task.checkCancellation()
-        return try Self.decode(data, trim: trim, limit: limit, enhance: enhance, strength: strength, half: half)
+        return try Self.decode(data, trim: trim, limit: limit, enhance: enhance, half: half)
     }
     func panels(_ source: PanelSource, rtl: Bool) throws -> [PanelRect] {
         try Task.checkCancellation()
         return PanelSource.detect(source, rightToLeft: rtl)
     }
-    func tile(_ data: Data, region: CGRect, pixels: CGSize, strength: Double?) throws -> UIImage? {
+    private let tileContext = CIContext(options: [.cacheIntermediates: false])
+    func tile(_ data: Data, region: CGRect, pixels: CGSize) throws -> UIImage? {
         try Task.checkCancellation()
         guard let source = CIImage(data: data, options: [.applyOrientationProperty: true]) else { return nil }
         let bounds = source.extent
@@ -58,9 +59,11 @@ private actor PageDecoder {
         guard rect.width > 0, rect.height > 0 else { return nil }
         let scale = min(pixels.width / rect.width, pixels.height / rect.height, 2,
                         sqrt(4_000_000 / (rect.width * rect.height)))
-        let output = PageEnhancer.resample(source, scale: scale, strength: strength)
+        let output = source.clampedToExtent().applyingFilter("CILanczosScaleTransform", parameters: [
+            kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0
+        ])
         let transform = CGAffineTransform(scaleX: scale, y: scale)
-        guard let cg = PageEnhancer.context.createCGImage(output, from: rect.applying(transform).integral) else { return nil }
+        guard let cg = tileContext.createCGImage(output, from: rect.applying(transform).integral) else { return nil }
         return UIImage(cgImage: cg)
     }
     /// Normal pages decode to the device's quality limit on the long side. Webtoon strips (tall and
@@ -70,7 +73,7 @@ private actor PageDecoder {
         if height > width * 2.5 && width <= 1600 { return min(long, 16384) }
         return min(long, limit)
     }
-    static func decode(_ data: Data, trim: Bool = true, limit: Double = 4096, enhance: Bool = false, strength: Double = 0.035,
+    static func decode(_ data: Data, trim: Bool = true, limit: Double = 4096, enhance: Bool = false,
                        half: MangaPage.Half? = nil) throws -> DecodedImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -81,7 +84,7 @@ private actor PageDecoder {
                 [kCGImageSourceCreateThumbnailFromImageAlways: true,
                  kCGImageSourceCreateThumbnailWithTransform: true,
                  kCGImageSourceShouldCacheImmediately: true,
-                 kCGImageSourceThumbnailMaxPixelSize: min(maxPixels(width: width, height: height, limit: limit), max(width, height) * sqrt(8_000_000 / (width * height)))] as CFDictionary)
+                 kCGImageSourceThumbnailMaxPixelSize: enhance ? maxPixels(width: width, height: height, limit: limit) : min(maxPixels(width: width, height: height, limit: limit), max(width, height) * sqrt(8_000_000 / (width * height)))] as CFDictionary)
         else { throw SourceError.invalidImage }
         var base = cg
         var left = 0.0
@@ -96,13 +99,13 @@ private actor PageDecoder {
         var final = base.cropping(to: crop) ?? base
         let region = CGRect(x: (left + crop.minX) / CGFloat(cg.width), y: crop.minY / CGFloat(cg.height),
                             width: crop.width / CGFloat(cg.width), height: crop.height / CGFloat(cg.height))
-        if enhance {
+        if enhance, final.height <= final.width * 3 || final.width < 720 {
             let target = final.height > final.width * 3
                 ? 1440 * Double(final.height) / Double(final.width)
                 : limit * 0.66
-            final = PageEnhancer.enhance(final, targetLongSide: target, strength: strength) ?? final
+            final = PageEnhancer.enhance(final, targetLongSide: target) ?? final
         }
-        return DecodedImage(image: UIImage(cgImage: final), sourceRegion: region, needsTiles: max(width, height) > Double(max(cg.width, cg.height)) * 1.01, ratio: Double(final.width) / Double(final.height))
+        return DecodedImage(image: UIImage(cgImage: final), sourceRegion: region, needsTiles: !enhance && max(width, height) > Double(max(cg.width, cg.height)) * 1.01, ratio: Double(final.width) / Double(final.height))
     }
     /// Removes plain white or black scan margins (the bars beside single pages).
     /// Conservative: an edge row/column is trimmed only when ~98% of it is blank,
@@ -277,7 +280,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                     try Task.checkCancellation()
                     let half = page.half
                     let decoded = try await PageDecoder.shared.render(data, trim: trim, limit: limit, enhance: enhance,
-                                                                      strength: preferences.cleanupStrength ?? 0.035, half: half)
+                                                                      half: half)
                     let repeated = page.half == nil && page.url.scheme == "https"
                     let duplicate = repeated ? await PageDecoder.shared.isRepeated(data, chapter: chapter.id, index: index) : false
                     try Task.checkCancellation()
@@ -447,11 +450,10 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                             height: visible.height / box.height * sourceRegion.height)
         let density = scroll.zoomScale * traitCollection.displayScale
         let pixels = CGSize(width: visible.width * density, height: visible.height * density)
-        let strength = !comparing && preference.enhance == true ? preference.cleanupStrength ?? 0.035 : nil
         detailWork = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(120))
-                let tile = try await PageDecoder.shared.tile(data, region: region, pixels: pixels, strength: strength)
+                let tile = try await PageDecoder.shared.tile(data, region: region, pixels: pixels)
                 try Task.checkCancellation()
                 self?.detail.frame = visible
                 self?.detail.image = tile

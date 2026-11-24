@@ -242,7 +242,6 @@ public struct ReaderPreferences: Codable, Equatable, Sendable {
     public var tapZones: Bool?
     /// Sharpen and upscale low-resolution scans while decoding. nil means off.
     public var enhance: Bool?
-    public var cleanupStrength: Double?
     /// Show two-page scans as two single pages in portrait. nil means on.
     public var splitSpreads: Bool?
     /// Guided view: step through a page panel by panel. nil means off.

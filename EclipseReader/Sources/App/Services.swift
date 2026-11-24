@@ -176,38 +176,18 @@ struct CoverTint: Sendable, Equatable {
     }
 }
 
-/// Clean low-contrast noise at source resolution so enlargement does not amplify it.
+/// Upscale and clean low-resolution scans (Core Image: Lanczos, light noise reduction, luminance sharpening).
 enum PageEnhancer {
-    nonisolated(unsafe) static let context = CIContext(options: [.cacheIntermediates: false])
-
-    static func resample(_ source: CIImage, scale: CGFloat, strength: Double?) -> CIImage {
-        let input = source.clampedToExtent()
-        var image = input
-        if let strength, strength > 0 {
-            let clean = input.applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": strength, "inputSharpness": 0.0])
-            // Protect both sides of fine strokes while cleaning low-contrast paper texture.
-            let edges = input.applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 4.0])
-                .applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: 1.0])
-            image = input.applyingFilter("CIBlendWithMask", parameters: [
-                kCIInputBackgroundImageKey: clean, kCIInputMaskImageKey: edges
-            ])
-        }
-        return scale == 1 ? image : image.applyingFilter("CILanczosScaleTransform", parameters: [
-            kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0
-        ])
-    }
-
-    static func enhance(_ image: CGImage, targetLongSide: Double, strength: Double = 0.035) -> CGImage? {
-        let width = Double(image.width)
-        let height = Double(image.height)
-        let long = max(width, height)
-        let pixels = width * height
-        // Bound the extra decoded surface, including long strips held by the scroll reader.
-        guard pixels <= 8_000_000, long <= 16_384 else { return nil }
-        let scale = min(2, max(1, targetLongSide / long), sqrt(8_000_000 / pixels), 16_384 / long)
+    nonisolated(unsafe) private static let context = CIContext(options: [.cacheIntermediates: false])
+    static func enhance(_ image: CGImage, targetLongSide: Double) -> CGImage? {
+        let long = Double(max(image.width, image.height))
+        guard long > 0, long < targetLongSide * 0.8 else { return nil }
+        let scale = min(2.0, targetLongSide / long)
         let input = CIImage(cgImage: image)
-        let output = resample(input, scale: scale, strength: strength)
-        let bounds = CGRect(x: 0, y: 0, width: floor(width * scale), height: floor(height * scale))
-        return context.createCGImage(output, from: bounds)
+        let scaled = input.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0])
+        let clean = scaled
+            .applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.012, "inputSharpness": 0.5])
+            .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.5, kCIInputRadiusKey: 1.5])
+        return context.createCGImage(clean, from: scaled.extent.integral)
     }
 }
