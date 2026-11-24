@@ -95,4 +95,16 @@ final class SpotlightPreferenceTests: XCTestCase {
         XCTAssertNotNil(QuoteFeed.picksQuery(SpotlightPreference(categories: [.manhwa], origins: ["KR"]), page: 2)?.range(of: #"countryOfOrigin: "KR""#))
         XCTAssertNil(QuoteFeed.picksQuery(SpotlightPreference(categories: [.comics], origins: ["JP"]), page: 1))
     }
+
+    /// Picks show whole sentences that fit the card, never a line cut off mid-sentence.
+    func testSynopsisLinesAreWholeSentencesThatFit() throws {
+        let short = try XCTUnwrap(QuoteFeed.synopsisLine("A young skater trains every morning before school. Her coach was once a champion. Years pass."))
+        XCTAssertLessThanOrEqual(short.count, QuoteFeed.synopsisLimit)
+        XCTAssertTrue(short.hasSuffix("."))
+        XCTAssertTrue(short.hasPrefix("A young skater"))
+        let rambling = "A girl from an old dynasty is carried a thousand years forward in time and lands in front of a startled student, who must now hide her from his family, his school and every curious neighbour on the block, while she learns about phones."
+        XCTAssertNil(QuoteFeed.synopsisLine(rambling), "a first sentence longer than the card fits should skip the pick")
+        let tooLong = Spotlight(quote: LaunchQuote(text: rambling, who: "Manhua pick", work: "Example"), media: nil, pick: true)
+        XCTAssertFalse(QuoteFeed.fitsCard(tooLong))
+    }
 }

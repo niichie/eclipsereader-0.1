@@ -244,24 +244,43 @@ public enum QuoteFeed {
         }
         return mixed
     }
-    /// The opening of a synopsis, as one or two sentences without credits or markup.
+    /// Longest synopsis line the launch card shows; it always fits the card without being cut off.
+    public static let synopsisLimit = 140
+    /// The opening of a synopsis: whole sentences only, up to `synopsisLimit` characters, without
+    /// credits or markup. Nil when even the first sentence is longer, so that series is skipped
+    /// rather than shown with its line cut off mid-sentence.
     static func synopsisLine(_ raw: String?) -> String? {
         guard let raw else { return nil }
-        var text = raw.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
+        let text = raw.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\((?:Source|Written by)[^)]*\)|\[(?:Written by|Source)[^\]]*\]"#, with: "", options: [.regularExpression, .caseInsensitive])
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
         guard text.count >= 20 else { return nil }
-        var line = ""
-        for sentence in text.components(separatedBy: ". ") {
-            let piece = line.isEmpty ? sentence : line + ". " + sentence
-            if piece.count > 170 { break }
-            line = piece
-            if line.count >= 70 { break }
+        // Sentences end at . ! ? (or …) followed by a space; "Mr." style abbreviations are rare in synopses.
+        var sentences: [String] = []
+        var current = ""
+        let characters = Array(text)
+        for (i, c) in characters.enumerated() {
+            current.append(c)
+            let next = i + 1 < characters.count ? characters[i + 1] : " "
+            if ".!?…".contains(c), next == " " || next == "\"" || next == "”" {
+                sentences.append(current.trimmingCharacters(in: .whitespaces)); current = ""
+            }
         }
-        if line.isEmpty { line = String(text.prefix(160)) + "…"; text = line }
-        if !line.hasSuffix(".") && !line.hasSuffix("!") && !line.hasSuffix("?") && !line.hasSuffix("…") { line += "." }
+        if !current.trimmingCharacters(in: .whitespaces).isEmpty { sentences.append(current.trimmingCharacters(in: .whitespaces)) }
+        var line = ""
+        for sentence in sentences {
+            let piece = line.isEmpty ? sentence : line + " " + sentence
+            if piece.count > synopsisLimit { break }
+            line = piece
+            if line.count >= 60 { break }
+        }
+        guard line.count >= 20, let last = line.last, ".!?…\"”".contains(last) else { return nil }
         return line
+    }
+    /// Cards saved by an earlier version may hold a longer, cut-off synopsis.
+    public static func fitsCard(_ spotlight: Spotlight) -> Bool {
+        !spotlight.pick || spotlight.quote.text.count <= synopsisLimit
     }
 
     struct Hit { let media: SpotlightMedia; let names: [String] }

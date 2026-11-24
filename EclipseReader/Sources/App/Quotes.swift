@@ -75,7 +75,7 @@ actor QuoteCache {
     func read(settings: String) -> [VerifiedQuote] {
         guard let data = try? Data(contentsOf: url), let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
               snapshot.settings == settings else { return [] }
-        return snapshot.cards.filter { Date().timeIntervalSince($0.checked) < 12 * 3600 }
+        return snapshot.cards.filter { Date().timeIntervalSince($0.checked) < 12 * 3600 && QuoteFeed.fitsCard($0.item) }
     }
     func write(_ cards: [VerifiedQuote], settings: String) {
         try? JSONEncoder().encode(Snapshot(settings: settings, cards: cards)).write(to: url, options: .atomic)
@@ -352,12 +352,22 @@ struct SpotlightCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: compact ? 5 : 7) {
-                Text(spotlight.pick ? quote.text : "“\(quote.text)”")
-                    .font(spotlight.pick ? .system(compact ? .subheadline : .title3, design: .serif).weight(.semibold)
-                                         : .system(compact ? .subheadline : .title3, design: .serif).italic().weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(compact ? 4 : 5)
-                    .fixedSize(horizontal: false, vertical: true)
+                if spotlight.pick {
+                    // A pick is a synopsis, not a quote: labelled, plain and smaller, and never cut off
+                    // (picks only carry whole sentences of up to 140 characters).
+                    Text("SYNOPSIS").font(.caption2.weight(.heavy)).tracking(1.2).foregroundStyle(.secondary)
+                    Text(quote.text)
+                        .font(compact ? .footnote : .body)
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("“\(quote.text)”")
+                        .font(.system(compact ? .subheadline : .title3, design: .serif).italic().weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(compact ? 4 : 5)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text(quote.who.isEmpty || quote.who == quote.work ? quote.work : "\(quote.who) · \(quote.work)")
                     .font(.caption.weight(.semibold)).foregroundStyle(Eclipse.highlight.opacity(0.9)).lineLimit(1)
                 if let meta { Text(meta).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
