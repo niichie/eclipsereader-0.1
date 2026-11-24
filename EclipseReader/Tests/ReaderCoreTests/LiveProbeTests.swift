@@ -372,4 +372,17 @@ final class LiveProbeTests: XCTestCase {
             await image("Open Library cover", cover)
         }
     }
+
+    func testDiagnostics5() async {
+        let (_, _, home) = await body("https://mangadot.net/")
+        dump("mangadot home search", around(home, #"(?i)search"#, before: 300, after: 700))
+        dump("mangadot home forms", LinkedSource.matches(#"(?is)<form\b[^>]*>"#, home).map { $0.joined() }.joined(separator: " ") + " || " + links(home, "(?i)search|browse|catalog|library|directory", limit: 20))
+        for q in ["https://mangadot.net/search?q=solo%20leveling", "https://mangadot.net/search?query=solo%20leveling", "https://mangadot.net/browse?q=solo%20leveling",
+                  "https://mangadot.net/browse?search=solo%20leveling", "https://mangadot.net/manga?q=solo%20leveling", "https://mangadot.net/search/solo%20leveling",
+                  "https://mangadot.net/api/search?q=solo%20leveling", "https://mangadot.net/api/manga/search?q=solo%20leveling"] {
+            let (st, type, html) = await body(q)
+            let found = Set(LinkedSource.matches(#"/manga/(\d+)"#, html).map { $0[0] })
+            dump("mangadot try \(q)", "\(st) \(type) \(html.count)B manga links \(found.count) solo? \(html.lowercased().contains("solo leveling")) :: \(html.prefix(160))")
+        }
+    }
 }
