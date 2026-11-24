@@ -216,8 +216,9 @@ struct LibraryView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         // One card: a line from a top-rated series is the recommendation.
                         if query.isEmpty, showQuote, !quoteClosed, filter == .all, categoryID == nil {
-                            if let spotlight = spotlights.manga {
-                                SpotlightCard(spotlight: spotlight, width: contentWidth, owned: ownedSeries(spotlight) != nil, shuffling: spotlights.loadingManga,
+                            if let card = spotlights.current {
+                                let spotlight = card.item
+                                SpotlightCard(card: card, width: contentWidth, owned: ownedSeries(spotlight) != nil, shuffling: spotlights.loadingManga,
                                               read: { readSpotlight(spotlight) },
                                               next: { Task { await spotlights.nextManga(owned: ownedKeys, model: model) } },
                                               close: { withAnimation(.snappy) { quoteClosed = true } })
@@ -1700,6 +1701,7 @@ struct CoverView: View {
     let referer: Chapter?
     /// Called when the cover can't be loaded, so the library can pick another one.
     var onFail: (() -> Void)? = nil
+    var artworkOnly = false
     @State private var image: UIImage?
     @MainActor private static let cache = NSCache<NSURL, UIImage>()
     @State private var failed = false
@@ -1720,6 +1722,7 @@ struct CoverView: View {
                 }
             }
             .clipped()
+            .opacity(artworkOnly && image == nil ? 0 : 1)
             .animation(.easeOut(duration: 0.25), value: image != nil)
             .task(id: url) {
             guard let url else { return }
@@ -1742,7 +1745,9 @@ struct CoverView: View {
                 }
                 return CoverThumb(image: UIImage(cgImage: cg))
             }.value
+            guard !Task.isCancelled else { return }
             if let thumb { Self.cache.setObject(thumb.image, forKey: url as NSURL); image = thumb.image }
+            else { failed = true; onFail?() }
         }
     }
 }

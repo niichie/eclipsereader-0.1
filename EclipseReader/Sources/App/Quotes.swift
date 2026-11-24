@@ -19,6 +19,24 @@ struct VerifiedQuote: Codable, Sendable {
     let item: Spotlight
     let destination: QuoteDestination
     var checked = Date()
+    var searchCover: URL?
+    var pageThumbnail: Data?
+
+    var sourceURL: URL {
+        switch destination {
+        case .manga(let url, _), .novel(let url, _): return url
+        }
+    }
+
+    var coverURLs: [URL] {
+        let sourceCover: URL?
+        switch destination {
+        case .manga(_, let info): sourceCover = info.cover
+        case .novel(_, let info): sourceCover = info.cover
+        }
+        var seen = Set<URL>()
+        return [item.media?.cover, sourceCover, searchCover].compactMap { $0 }.filter { seen.insert($0).inserted }
+    }
 }
 
 actor QuoteCache {
@@ -50,7 +68,7 @@ final class SpotlightStore: ObservableObject {
     private var mangaQueue: [Spotlight] = []
     private var generation = UUID()
     private var ready: [VerifiedQuote] = []
-    private var current: VerifiedQuote?
+    private(set) var current: VerifiedQuote?
     private var worker: Task<Void, Never>?
     private var cacheSettings: String?
     private let cache: QuoteCache
@@ -143,8 +161,7 @@ final class SpotlightStore: ObservableObject {
                         guard skip.insert(key).inserted, !lines.contains(line),
                               !ready.contains(where: { QuoteFeed.workKey($0.item.work) == key }) else { continue }
                         group.addTask { [self] in
-                            guard let destination = await verifiedDestination(candidate, model: model) else { return nil }
-                            return VerifiedQuote(item: candidate, destination: destination)
+                            await verifiedDestination(candidate, model: model)
                         }
                     }
                     for await card in group {
@@ -175,7 +192,7 @@ final class SpotlightStore: ObservableObject {
         UserDefaults.standard.set((item.media?.category ?? .manga).rawValue, forKey: "spotlightLastKind")
     }
 
-    private func verifiedDestination(_ item: Spotlight, model: LibraryModel) async -> QuoteDestination? {
+    private func verifiedDestination(_ item: Spotlight, model: LibraryModel) async -> VerifiedQuote? {
         let novel = item.media?.category == .novels
         guard !novel || Features.novelsOn else { return nil }
         let sources = GlobalSearchModel.sources(saved: model.sources, novels: novel).filter { source in
@@ -187,7 +204,7 @@ final class SpotlightStore: ObservableObject {
         while !remaining.isEmpty && !Task.isCancelled {
             let batch = remaining.prefix(2)
             remaining = remaining.dropFirst(batch.count)
-            let found: QuoteDestination? = await withTaskGroup(of: QuoteDestination?.self) { group in
+            let found: VerifiedQuote? = await withTaskGroup(of: VerifiedQuote?.self) { group in
                 for source in batch {
                     group.addTask {
                         try? await withDeadline(6) { try await Self.check(item, source: source, pipeline: pipeline) }
@@ -203,7 +220,7 @@ final class SpotlightStore: ObservableObject {
         return nil
     }
 
-    nonisolated private static func check(_ item: Spotlight, source: SearchSource, pipeline: ImagePipeline) async throws -> QuoteDestination? {
+    nonisolated private static func check(_ item: Spotlight, source: SearchSource, pipeline: ImagePipeline) async throws -> VerifiedQuote? {
         let query = source.novels ? item.media?.native ?? item.work : item.work
         let aliases = Set([item.work, item.quote.work, item.media?.native].compactMap { $0 }.map(QuoteFeed.workKey))
         let hits = try await GlobalSearch.search(source, query: query)
@@ -213,16 +230,18 @@ final class SpotlightStore: ObservableObject {
                 let novels = NovelSource()
                 guard let info = try? await novels.info(hit.url), let first = info.chapters.first,
                       let text = try? await novels.chapter(first.url), !text.locked, !text.blocks(base: first.url).isEmpty else { continue }
-                return .novel(hit.url, info)
+                return VerifiedQuote(item: item, destination: .novel(hit.url, info), searchCover: hit.cover)
             }
             let reader = LinkedSource()
             guard let info = try? await reader.inspect(hit.url), let first = info.chapters.first,
                   let pages = try? await reader.pages(first.url), let page = pages.first,
                   let bytes = try? await pipeline.data(for: page, chapter: first),
                   let image = CGImageSourceCreateWithData(bytes as CFData, nil),
-                  CGImageSourceCreateThumbnailAtIndex(image, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                      kCGImageSourceThumbnailMaxPixelSize: 16] as CFDictionary) != nil else { continue }
-            return .manga(hit.url, info)
+                  let thumb = CGImageSourceCreateThumbnailAtIndex(image, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: 300] as CFDictionary) else { continue }
+            return VerifiedQuote(item: item, destination: .manga(hit.url, info), searchCover: hit.cover,
+                                 pageThumbnail: UIImage(cgImage: thumb).jpegData(compressionQuality: 0.8))
         }
         return nil
     }
@@ -286,7 +305,8 @@ final class SpotlightStore: ObservableObject {
 /// The launch card: a line from a top-rated series, its cover and score, and a button to start reading it.
 /// Sized to the screen: compact on phones (and the Duo's front screen), roomier on iPad.
 struct SpotlightCard: View {
-    let spotlight: Spotlight
+    let card: VerifiedQuote
+    private var spotlight: Spotlight { card.item }
     let width: CGFloat
     var owned = false
     var busy = false
@@ -307,14 +327,13 @@ struct SpotlightCard: View {
     }
     var body: some View {
         let quote = spotlight.quote
-        let cover = CGSize(width: compact ? 56 : 74, height: compact ? 80 : 106)
+        let coverWidth: CGFloat = width < 330 ? 44 : (compact ? 56 : 74)
         HStack(alignment: .top, spacing: compact ? 12 : 14) {
-            if width >= 330, let url = spotlight.media?.cover {
-                CoverView(url: url, referer: nil)
-                    .frame(width: cover.width, height: cover.height)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .accessibilityHidden(true)
-            }
+            SpotlightCover(card: card)
+                .id(card.item.id)
+                .frame(width: coverWidth, height: coverWidth / 0.7)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: compact ? 5 : 7) {
                 Text(spotlight.pick ? quote.text : "“\(quote.text)”")
                     .font(spotlight.pick ? .system(compact ? .subheadline : .title3, design: .serif).weight(.semibold)
@@ -368,6 +387,30 @@ struct SpotlightCard: View {
             Button(action: next) { Label("Another series", systemImage: "shuffle") }
             Button(action: close) { Label("Close for now", systemImage: "xmark") }
         }
+    }
+}
+
+private struct SpotlightCover: View {
+    let card: VerifiedQuote
+    @State private var index = 0
+    @State private var thumbnail: UIImage?
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Eclipse.accent, Eclipse.surface], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Text(card.item.work).font(.system(size: 11, weight: .bold, design: .serif))
+                .foregroundStyle(.white).multilineTextAlignment(.center).minimumScaleFactor(0.65).padding(4)
+            if let thumbnail {
+                Color.clear.overlay { Image(uiImage: thumbnail).resizable().scaledToFill() }.clipped()
+            }
+            if card.coverURLs.indices.contains(index) {
+                let url = card.coverURLs[index]
+                CoverView(url: url, referer: Chapter(url: card.sourceURL, title: "", number: ""),
+                          onFail: { index += 1 }, artworkOnly: true)
+                    .id(url)
+            }
+        }
+        .task { thumbnail = card.pageThumbnail.flatMap { UIImage(data: $0) } }
     }
 }
 

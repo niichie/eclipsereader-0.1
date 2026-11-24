@@ -11,6 +11,22 @@ final class ReaderChecks: XCTestCase {
         ("Pride and Prejudice (Standard Ebooks)", "https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice/downloads/jane-austen_pride-and-prejudice.epub?source=download"),
         ("Alice (Project Gutenberg mirror, pictures)", "https://gutenberg.pglaf.org/cache/epub/11/pg11-images-3.epub"),
     ]
+    func testQuoteCoversSurviveMissingMetadataAndCacheRoundTrip() throws {
+        let series = URL(string: "https://example.org/series")!
+        let cover = series.appendingPathComponent("cover.jpg")
+        let alternate = series.appendingPathComponent("alternate.jpg")
+        for work in ["One-Punch Man", "Your Lie in April"] {
+            let quote = LaunchQuote(text: "Fixture", who: "Speaker", work: work)
+            let item = Spotlight(quote: quote, media: nil)
+            let info = LinkInspection(title: work, cover: cover, pages: [], chapters: [ReaderTestFixture.chapter])
+            let card = VerifiedQuote(item: item, destination: .manga(series, info), searchCover: alternate)
+            let cached = try JSONDecoder().decode(VerifiedQuote.self, from: JSONEncoder().encode(card))
+            XCTAssertEqual(cached.coverURLs, [cover, alternate])
+            let oldCard = VerifiedQuote(item: item, destination: .manga(series, info))
+            XCTAssertEqual(oldCard.coverURLs, [cover])
+        }
+    }
+
     func testVerifiedQuoteCacheLoadsAndShufflesWithoutWaitingForSources() async throws {
         let model = model()
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
