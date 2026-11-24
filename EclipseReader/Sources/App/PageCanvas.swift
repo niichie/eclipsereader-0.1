@@ -272,7 +272,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
             guard let self else { return }
             clearDetail(); work?.cancel(); imageView.image = nil; imageView.isAccessibilityElement = false; message.text = nil; retry.isHidden = true; spinner.startAnimating()
             let trim = preferences.trimMargins ?? true
-            let enhance = preferences.enhance ?? false
+            let enhance = preferences.enhance ?? true
             let limit = DisplayQuality.longSide(preferences.quality ?? .automatic)
             work = Task { [weak self] in
                 do {

@@ -36,6 +36,7 @@ struct BrowseView: View {
     @State private var opened: MangaSeries?
     @State private var addingID: String?
     @State private var discoverError: String?
+    @Environment(\.horizontalSizeClass) private var sizeClass
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -77,7 +78,7 @@ struct BrowseView: View {
                         section("Popular on MangaDex", detail: nil) {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 LazyHStack(alignment: .top, spacing: 12) {
-                                    ForEach(popular) { item in discoverCard(item).frame(width: 112) }
+                                    ForEach(popular) { item in discoverCard(item).frame(width: Eclipse.cardWidth(regular: sizeClass == .regular)) }
                                 }.padding(.vertical, 2)
                             }
                         }
@@ -112,7 +113,7 @@ struct BrowseView: View {
                     if booksOn && searchingText == nil { BooksBrowseSection(browsing: $browsing, opened: $opened) }
                 }
                 .padding(20)
-                .frame(maxWidth: 900)
+                .frame(maxWidth: 1280)
                 .frame(maxWidth: .infinity)
             }
             .background(EclipseBackground())

@@ -610,7 +610,7 @@ struct DiscoverStrip: View {
     @MainActor private static var memory: [String: [DiscoverItem]] = [:]
     private var memoryKey: String { "\(seedID ?? similarTo ?? "popular")|\(style?.rawValue ?? "")" }
     var body: some View {
-        let cardWidth = min(150, max(104, width / 3.6))
+        let cardWidth = Eclipse.cardWidth(available: width)
         let shown = items.filter { item in (similarTo == nil || model.state.hiddenRecommendationTitles?.contains(QuoteFeed.workKey(item.title)) != true) && !model.libraryMembers.contains { $0.url == item.url } }
         VStack(alignment: .leading, spacing: 10) {
             if similarTo != nil || !items.isEmpty {
@@ -824,7 +824,7 @@ private struct TextRecommendationStrip: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 Text(title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
                 Text(detail).font(.caption2).foregroundStyle(.secondary)
-            }.frame(width: min(150, max(104, width / 3.6)))
+            }.frame(width: Eclipse.cardWidth(available: width))
         }.buttonStyle(PressableStyle()).contextMenu { Button("Less like this") { model.hideSuggestion(title) } }
     }
 }
@@ -1656,7 +1656,7 @@ struct ReaderPreferencesForm: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Toggle(isOn: Binding(get: { preferences.enhance ?? false }, set: { preferences.enhance = $0 })) {
+            Toggle(isOn: Binding(get: { preferences.enhance ?? true }, set: { preferences.enhance = $0 })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Enhance scanned pages")
                     Text("Whiter paper, solid ink and crisp lettering; small pages are upscaled to your screen").font(.caption).foregroundStyle(.secondary)
@@ -2316,6 +2316,18 @@ struct SeriesHeader: View {
                     Menu {
                         Picker("Reads as", selection: Binding(get: { model.styleOverride(series.id) }, set: { model.setStyle($0, for: series.id) })) {
                             ForEach(ReadingStyle.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol).tag($0) }
+                        }
+                        if !series.readsAsText {
+                            Picker("Enhance scans", selection: Binding(get: { model.state.seriesEnhance?[series.id] }, set: { value in
+                                var map = model.state.seriesEnhance ?? [:]
+                                map[series.id] = value
+                                model.state.seriesEnhance = map
+                                model.save()
+                            })) {
+                                Text("Enhance: use global setting").tag(Bool?.none)
+                                Label("Enhance: on", systemImage: "wand.and.stars").tag(Bool?.some(true))
+                                Text("Enhance: off").tag(Bool?.some(false))
+                            }
                         }
                     } label: { squareButton(style.symbol) }
                         .accessibilityLabel("Reads as \(style.title)")

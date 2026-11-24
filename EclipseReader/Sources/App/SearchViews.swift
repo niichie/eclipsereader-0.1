@@ -111,6 +111,8 @@ struct GlobalSearchResults: View {
     /// Shows a busy overlay on the item being added or opened.
     var busyID: String?
     @State private var browser: BrowseTarget?
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var cardWidth: CGFloat { Eclipse.cardWidth(regular: sizeClass == .regular) }
     var showLibrary = true
     let pick: (DiscoverItem) -> Void
     var body: some View {
@@ -133,7 +135,7 @@ struct GlobalSearchResults: View {
                         ForEach(0..<4, id: \.self) { _ in
                             RoundedRectangle(cornerRadius: 10).fill(Eclipse.surfaceHigh)
                                 .overlay(ShimmerView().clipShape(RoundedRectangle(cornerRadius: 10)))
-                                .frame(width: 108, height: 154)
+                                .frame(width: cardWidth, height: cardWidth / 0.7)
                         }
                     }
                 case .done(let items) where !items.isEmpty:
@@ -175,7 +177,20 @@ struct GlobalSearchResults: View {
                 }
                 .padding(.horizontal, 14).padding(.vertical, 11).eclipseCard(cornerRadius: 12)
             }
-            if !empty.isEmpty && search.finished {
+            let anything = !mine.isEmpty || search.sections.contains { section in
+                if case .done(let items) = section.phase { return !items.isEmpty } else { return false }
+            }
+            if search.finished && !search.query.isEmpty && !anything {
+                // Nothing anywhere: say what was searched and how to widen it, instead of a blank page.
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("No results for “\(search.query)”", systemImage: "magnifyingglass").font(.headline)
+                    Text(search.sections.isEmpty
+                         ? "Every site is switched off for search. Turn some back on in the sites menu."
+                         : "Searched \(search.sections.count) site\(search.sections.count == 1 ? "" : "s"). Try a shorter title or the original-language name, or switch more sites on in the sites menu.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(16).eclipseCard(cornerRadius: 14)
+            } else if !empty.isEmpty && search.finished {
                 Text("No matches on " + empty.map(\.source.name).joined(separator: ", ") + ".")
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -211,8 +226,8 @@ struct GlobalSearchResults: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 5) {
                 CoverView(url: cover, referer: referer, title: title)
-                    .frame(width: 108, height: 154)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .frame(width: cardWidth, height: cardWidth / 0.7)
+                    .clipShape(RoundedRectangle(cornerRadius: Eclipse.cardRadius))
                     .overlay {
                         if busy {
                             ZStack { Color.black.opacity(0.5); ProgressView().tint(.white) }
@@ -229,7 +244,7 @@ struct GlobalSearchResults: View {
                 Text(title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
                 if let detail { Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
             }
-            .frame(width: 108, alignment: .leading)
+            .frame(width: cardWidth, alignment: .leading)
         }
         .buttonStyle(PressableStyle())
         .disabled(busy)
@@ -433,7 +448,7 @@ struct GlobalSearchSheet: View {
                     }
                     GlobalSearchResults(search: search, busyID: busyID) { item in open(item) }
                 }
-                .padding(20).frame(maxWidth: 900).frame(maxWidth: .infinity)
+                .padding(20).frame(maxWidth: 1280).frame(maxWidth: .infinity)
             }
             .background(EclipseBackground())
             .navigationTitle("Search everywhere").navigationBarTitleDisplayMode(.inline)

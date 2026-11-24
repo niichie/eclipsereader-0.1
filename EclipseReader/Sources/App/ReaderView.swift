@@ -384,7 +384,7 @@ struct ReaderView: View {
                     let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
                     let source = chapter.url.scheme == "https" ? chapter.url.host ?? "Website" : "Local"
                     let dimensions = pages[safe: page].map { "\(Int($0.width ?? 0)) × \(Int($0.height ?? 0))" } ?? "unknown"
-                    UIPasteboard.general.string = "EclipseReader \(version) (\(build))\nSource: \(source)\nPage: \(page + 1)/\(pages.count)\nPublished dimensions: \(dimensions)\n\(handle.diagnostics(page: page))\nMode: \(effective.mode)\nEnhance: \(effective.enhance == true)\nChapter load failed: \(failure != nil)"
+                    UIPasteboard.general.string = "EclipseReader \(version) (\(build))\nSource: \(source)\nPage: \(page + 1)/\(pages.count)\nPublished dimensions: \(dimensions)\n\(handle.diagnostics(page: page))\nMode: \(effective.mode)\nEnhance: \(effective.enhance ?? true)\nChapter load failed: \(failure != nil)"
                     flash("Reader report copied")
                 }
                 if library.isDownloaded(chapter), let index = origin[safe: page] ?? (pages.indices.contains(page) ? page : nil) {

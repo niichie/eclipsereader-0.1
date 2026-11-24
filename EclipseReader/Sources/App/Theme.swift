@@ -5,6 +5,10 @@ enum Eclipse {
     /// Deep violet accent with a warm yellow highlight, kept subtle so artwork stays the focus.
     static let accent = Color(red: 0.54, green: 0.30, blue: 0.93)
     static let highlight = Color(red: 1.0, green: 0.80, blue: 0.20)
+    /// One cover-card size everywhere (Browse, search, recommendations): wider on roomy screens.
+    static func cardWidth(regular: Bool) -> CGFloat { regular ? 140 : 112 }
+    static func cardWidth(available: CGFloat) -> CGFloat { available > 700 ? 140 : 112 }
+    static let cardRadius: CGFloat = 10
     static let surface = Color(white: 0.075)
     static let surfaceHigh = Color(white: 0.12)
     static let hairline = Color.white.opacity(0.08)

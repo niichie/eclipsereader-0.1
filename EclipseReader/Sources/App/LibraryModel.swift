@@ -104,6 +104,12 @@ final class LibraryModel: ObservableObject {
             restored.coverChecked = restored.coverChecked?.filter { !reset.contains($0) }
             restored.defaultsVersion = 5
         }
+        // v6: the rebuilt scan enhancer is on by default, including for existing installs
+        // (it was off by default while it did little). It can still be turned off in Reader settings.
+        if (restored.defaultsVersion ?? 0) < 6 {
+            restored.preferences.enhance = true
+            restored.defaultsVersion = 6
+        }
         #if DEBUG
         if ReaderTestFixture.demo { restored = ReaderTestFixture.demoState() }
         #endif

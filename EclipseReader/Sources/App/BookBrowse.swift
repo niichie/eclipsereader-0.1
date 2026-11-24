@@ -273,7 +273,7 @@ struct BookSearchSheet: View {
                     if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
                     BookSearchResults(search: search, busyID: busyID, openLocal: { opened = $0 }, browse: { browsing = BrowseTarget(url: $0) }, pick: open)
                 }
-                .padding(20).frame(maxWidth: 900).frame(maxWidth: .infinity)
+                .padding(20).frame(maxWidth: 1280).frame(maxWidth: .infinity)
             }
             .background(EclipseBackground())
             .navigationTitle("Find a book").navigationBarTitleDisplayMode(.inline)
