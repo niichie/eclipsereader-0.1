@@ -4,7 +4,10 @@ import UniformTypeIdentifiers
 /// Addresses for books in the library: eclipselib://book/<file> for the book, #<n> for a section.
 enum BookLink {
     static func isBook(_ chapter: Chapter) -> Bool { chapter.url.scheme == "eclipselib" && chapter.url.host == "book" }
-    static func file(of url: URL) -> String? { url.pathComponents.filter { $0 != "/" }.first }
+    static func file(of url: URL) -> String? {
+        guard url.scheme == "eclipselib", url.host == "book" else { return nil }
+        return url.pathComponents.filter { $0 != "/" }.first
+    }
     static func section(of chapter: Chapter) -> Int { Int(chapter.url.fragment ?? "") ?? 0 }
     static func book(_ file: String) -> URL { URL(string: "eclipselib://book/\(file)")! }
     static func section(_ file: String, _ index: Int) -> URL { URL(string: "eclipselib://book/\(file)#\(index)")! }
@@ -137,6 +140,17 @@ enum GeneratedCover {
 }
 
 extension LibraryModel {
+    func previewBook(_ book: FreeBook, page: URL, download: URL) -> MangaSeries {
+        if let saved = allSeries.first(where: { $0.bookDownloadURL == download }) { return saved }
+        var series = MangaSeries(id: "catalog-" + book.id, url: page, title: book.title, cover: book.cover,
+                                 kind: .book, chapters: [], author: book.author)
+        series.bookDownloadURL = download
+        series.inLibrary = false
+        state.series = [series] + allSeries
+        save()
+        return series
+    }
+
     /// Adds a book file to the library under "Boring books without pictures" (and turns books on).
     func importBook(_ source: URL, addToShelf: Bool = true, downloadURL: URL? = nil) async throws -> MangaSeries {
         let (file, document) = try await BookStore.shared.importBook(source)
@@ -151,8 +165,18 @@ extension LibraryModel {
         var series = MangaSeries(id: id, url: BookLink.book(file), title: document.title, cover: cover, kind: .book,
                                  chapters: chapters, summary: document.summary, author: document.author)
         if let downloadURL, let saved = allSeries.first(where: { $0.bookDownloadURL == downloadURL }) {
-            await BookStore.shared.delete(file)
-            return saved
+            if !saved.isCatalogBookPreview {
+                await BookStore.shared.delete(file)
+                return saved
+            }
+            var downloaded = saved
+            downloaded.url = series.url
+            downloaded.chapters = chapters
+            downloaded.summary = document.summary
+            downloaded.cover = saved.cover ?? cover
+            state.series = allSeries.map { $0.id == saved.id ? downloaded : $0 }
+            save()
+            return downloaded
         }
         series.bookDownloadURL = downloadURL
         series.inLibrary = addToShelf
@@ -181,7 +205,7 @@ extension LibraryModel {
     /// Downloads a free book (Project Gutenberg EPUB) straight into the library.
     /// Downloads a book into the library, trying Project Gutenberg's mirror when gutenberg.org is down.
     func downloadBook(_ url: URL) async throws -> MangaSeries {
-        if let saved = allSeries.first(where: { $0.bookDownloadURL == url }) { return saved }
+        if let saved = allSeries.first(where: { $0.bookDownloadURL == url && !$0.isCatalogBookPreview }) { return saved }
         let client = WebsiteHTTPClient()
         var lastError: Error = SourceError.unavailable(0)
         for candidate in [url] + FreeBooks.mirrors(for: url) {

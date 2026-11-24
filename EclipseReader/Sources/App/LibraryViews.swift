@@ -1208,7 +1208,7 @@ struct DownloadSettingsPage: View {
                     }
                 }
             }
-            let offline = (model.librarySeries + model.allSeries.filter { !$0.isLibraryMember }).filter { model.downloadedCount($0) > 0 || (!$0.isLibraryMember && !$0.isOnline) }
+            let offline = (model.librarySeries + model.allSeries.filter { !$0.isLibraryMember }).filter { model.downloadedCount($0) > 0 || (!$0.isLibraryMember && !$0.isOnline && !$0.isCatalogBookPreview) }
             if !offline.isEmpty {
                 Section("On this device") {
                     ForEach(offline) { series in
@@ -1761,7 +1761,18 @@ struct SeriesView: View {
                         }
                     }
                     if series.chapters.isEmpty {
-                        if builtIn || (series.isOnline && (!checked || updating)) {
+                        if series.isCatalogBookPreview, let download = series.bookDownloadURL {
+                            Button {
+                                updating = true
+                                Task {
+                                    defer { updating = false }
+                                    do { _ = try await model.downloadBook(download) }
+                                    catch { message = error.localizedDescription }
+                                }
+                            } label: {
+                                Label(updating ? "Downloading…" : "Download book", systemImage: "arrow.down.circle")
+                            }.disabled(updating)
+                        } else if builtIn || (series.isOnline && (!checked || updating)) {
                             HStack(spacing: 10) {
                                 ProgressView()
                                 Text(builtIn && !model.loading ? "No chapters yet. Pull to refresh." : "Loading chapters…").foregroundStyle(.secondary)
@@ -2037,7 +2048,7 @@ struct SeriesHeader: View {
                         else { chip(style.title, symbol: style.symbol) }
                         if model.downloadedCount(series) > 0 { chip("\(model.downloadedCount(series))", symbol: "arrow.down.circle.fill") }
                     }
-                    Text(series.chapters.isEmpty ? (checking ? "Loading chapters…" : "No chapters to read")
+                    Text(series.chapters.isEmpty ? (series.isCatalogBookPreview ? "Available online" : checking ? "Loading chapters…" : "No chapters to read")
                          : series.kind == .book ? (read == 0 ? "Not started" : read >= series.chapters.count ? "Finished" : "\(Int(Double(read) / Double(series.chapters.count) * 100))% read")
                          : "\(read) of \(series.chapters.count) read")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -2046,11 +2057,14 @@ struct SeriesHeader: View {
             }
             if let summary = series.summary, !summary.isEmpty { SynopsisText(text: BookText.richText(summary)) }
             HStack(spacing: 10) {
-                Button { if let resume { reader = resume } } label: {
+                Button {
+                    if series.isCatalogBookPreview { website = true }
+                    else if let resume { reader = resume }
+                } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "play.fill")
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(resume == nil ? "No chapters yet" : started ? "Continue" : "Start reading").font(.headline)
+                            Text(series.isCatalogBookPreview ? "Open book online" : resume == nil ? "No chapters yet" : started ? "Continue" : "Start reading").font(.headline)
                             if let resume {
                                 Text(ChapterText.split(resume.title).name).font(.caption).opacity(0.8).lineLimit(1)
                             }
@@ -2064,7 +2078,7 @@ struct SeriesHeader: View {
                     .overlay(RoundedRectangle(cornerRadius: 16).fill(.black.opacity(lightTint ? 0 : 0.18)))
                     .shadow(color: tint.opacity(0.45), radius: 14, y: 6)
                 }
-                .buttonStyle(PressableStyle()).disabled(resume == nil)
+                .buttonStyle(PressableStyle()).disabled(resume == nil && !series.isCatalogBookPreview)
                 .accessibilityIdentifier("seriesContinue")
                 if series.kind != .book {
                     Menu {

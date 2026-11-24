@@ -166,8 +166,8 @@ struct BooksBrowseSection: View {
     }
     private func open(_ book: FreeBook, downloadFile: Bool) {
         message = nil
-        if let url = book.download, let saved = model.allSeries.first(where: { $0.bookDownloadURL == url }) {
-            opened = saved
+        if !downloadFile, let page = book.page, let download = book.download {
+            opened = model.previewBook(book, page: page, download: download)
         } else if downloadFile, let download = book.download {
             busyID = book.id
             Task {
@@ -270,8 +270,8 @@ struct BookSearchSheet: View {
     }
     private func open(_ book: FreeBook, downloadFile: Bool) {
         message = nil
-        if let url = book.download, let saved = model.allSeries.first(where: { $0.bookDownloadURL == url }) {
-            opened = saved
+        if !downloadFile, let page = book.page, let download = book.download {
+            opened = model.previewBook(book, page: page, download: download)
         } else if downloadFile, let download = book.download {
             busyID = book.id
             Task {

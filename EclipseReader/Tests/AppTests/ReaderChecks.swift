@@ -62,6 +62,25 @@ final class ReaderChecks: XCTestCase {
         add(attachment)
     }
 
+    func testCatalogBookCanJoinLibraryWithoutDownloading() throws {
+        let model = model()
+        let original = model.state
+        defer { model.state = original; model.save() }
+        let page = try XCTUnwrap(URL(string: "https://example.org/book"))
+        let epub = page.appendingPathExtension("epub")
+        let book = FreeBook(id: "fixture", title: "Fixture", author: nil, cover: nil,
+                            download: epub, page: page, detail: nil, source: "Fixture")
+        let preview = model.previewBook(book, page: page, download: epub)
+        XCTAssertFalse(preview.isLibraryMember)
+        XCTAssertTrue(model.addToLibrary(preview).isLibraryMember)
+        let saved = model.previewBook(book, page: page, download: epub)
+        XCTAssertTrue(saved.isCatalogBookPreview)
+        XCTAssertEqual(saved.url, page)
+        XCTAssertNil(BookLink.file(of: saved.url))
+        XCTAssertTrue(saved.chapters.isEmpty)
+        XCTAssertEqual(model.librarySeries.filter { $0.id == saved.id }.count, 1)
+    }
+
     func testPreviewProgressAndExplicitLibraryAddition() async throws {
         let model = model()
         let original = model.state
