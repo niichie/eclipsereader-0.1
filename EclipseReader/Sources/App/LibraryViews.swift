@@ -1701,7 +1701,6 @@ struct CoverView: View {
     let referer: Chapter?
     /// Called when the cover can't be loaded, so the library can pick another one.
     var onFail: (() -> Void)? = nil
-    var artworkOnly = false
     @State private var image: UIImage?
     @MainActor private static let cache = NSCache<NSURL, UIImage>()
     @State private var failed = false
@@ -1722,7 +1721,6 @@ struct CoverView: View {
                 }
             }
             .clipped()
-            .opacity(artworkOnly && image == nil ? 0 : 1)
             .animation(.easeOut(duration: 0.25), value: image != nil)
             .task(id: url) {
             guard let url else { return }

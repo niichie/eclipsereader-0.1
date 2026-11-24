@@ -20,7 +20,31 @@ struct VerifiedQuote: Codable, Sendable {
     let destination: QuoteDestination
     var checked = Date()
     var searchCover: URL?
-    var pageThumbnail: Data?
+    var thumbnail: Data?
+
+    /// Finish choosing the artwork before the card enters the shuffle queue.
+    func preparedCover(using pipeline: ImagePipeline) async -> Self {
+        var card = self
+        let chapter = Chapter(url: sourceURL, title: item.work, number: "")
+        let cover = try? await withDeadline(2.5) { () async throws -> Data? in
+            for url in coverURLs {
+                try Task.checkCancellation()
+                if let bytes = try? await pipeline.data(for: MangaPage(url: url, label: "Cover"), chapter: chapter),
+                   let image = Self.thumbnailData(bytes) { return image }
+            }
+            return nil
+        }
+        if let cover { card.thumbnail = cover }
+        return card
+    }
+
+    static func thumbnailData(_ bytes: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 300] as CFDictionary)
+        else { return nil }
+        return UIImage(cgImage: image).jpegData(compressionQuality: 0.85)
+    }
 
     var sourceURL: URL {
         switch destination {
@@ -47,7 +71,7 @@ actor QuoteCache {
     }
     private let url: URL
     init(url: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("verified-spotlights-v1.json")) { self.url = url }
+        .appendingPathComponent("verified-spotlights-v2.json")) { self.url = url }
     func read(settings: String) -> [VerifiedQuote] {
         guard let data = try? Data(contentsOf: url), let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
               snapshot.settings == settings else { return [] }
@@ -215,7 +239,7 @@ final class SpotlightStore: ObservableObject {
                 }
                 return nil
             }
-            if let found { return found }
+            if let found { return await found.preparedCover(using: pipeline) }
         }
         return nil
     }
@@ -236,12 +260,8 @@ final class SpotlightStore: ObservableObject {
             guard let info = try? await reader.inspect(hit.url), let first = info.chapters.first,
                   let pages = try? await reader.pages(first.url), let page = pages.first,
                   let bytes = try? await pipeline.data(for: page, chapter: first),
-                  let image = CGImageSourceCreateWithData(bytes as CFData, nil),
-                  let thumb = CGImageSourceCreateThumbnailAtIndex(image, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                      kCGImageSourceCreateThumbnailWithTransform: true,
-                      kCGImageSourceThumbnailMaxPixelSize: 300] as CFDictionary) else { continue }
-            return VerifiedQuote(item: item, destination: .manga(hit.url, info), searchCover: hit.cover,
-                                 pageThumbnail: UIImage(cgImage: thumb).jpegData(compressionQuality: 0.8))
+                  let fallback = VerifiedQuote.thumbnailData(bytes) else { continue }
+            return VerifiedQuote(item: item, destination: .manga(hit.url, info), searchCover: hit.cover, thumbnail: fallback)
         }
         return nil
     }
@@ -392,8 +412,12 @@ struct SpotlightCard: View {
 
 private struct SpotlightCover: View {
     let card: VerifiedQuote
-    @State private var index = 0
-    @State private var thumbnail: UIImage?
+    private let thumbnail: UIImage?
+
+    init(card: VerifiedQuote) {
+        self.card = card
+        thumbnail = card.thumbnail.flatMap { UIImage(data: $0) }
+    }
 
     var body: some View {
         ZStack {
@@ -403,14 +427,7 @@ private struct SpotlightCover: View {
             if let thumbnail {
                 Color.clear.overlay { Image(uiImage: thumbnail).resizable().scaledToFill() }.clipped()
             }
-            if card.coverURLs.indices.contains(index) {
-                let url = card.coverURLs[index]
-                CoverView(url: url, referer: Chapter(url: card.sourceURL, title: "", number: ""),
-                          onFail: { index += 1 }, artworkOnly: true)
-                    .id(url)
-            }
         }
-        .task { thumbnail = card.pageThumbnail.flatMap { UIImage(data: $0) } }
     }
 }
 

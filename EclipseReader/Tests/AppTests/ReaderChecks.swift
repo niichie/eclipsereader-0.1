@@ -20,7 +20,7 @@ final class ReaderChecks: XCTestCase {
         let work = "One-Punch Man"
         let item = Spotlight(quote: LaunchQuote(text: "A quote", who: "Saitama", work: work), media: nil)
         let info = LinkInspection(title: work, cover: nil, pages: [], chapters: [page])
-        let card = VerifiedQuote(item: item, destination: .manga(page.url, info), pageThumbnail: try XCTUnwrap(art.pngData()))
+        let card = VerifiedQuote(item: item, destination: .manga(page.url, info), thumbnail: try XCTUnwrap(art.pngData()))
         for width: CGFloat in [300, 650] {
             let view = SpotlightCard(card: card, width: width, read: {}, next: {}, close: {}).frame(width: width)
             let window = show(view, size: CGSize(width: width, height: 360))
@@ -41,6 +41,28 @@ final class ReaderChecks: XCTestCase {
             XCTAssertTrue(visible, "Missing page artwork at width \(width)")
             window.isHidden = true
         }
+    }
+
+    func testPreparedQuoteKeepsOneThumbnailThroughCacheRestore() async throws {
+        let chapter = ReaderTestFixture.chapter
+        let title = "Tsubasa Reservoir Chronicle"
+        let item = Spotlight(quote: LaunchQuote(text: "Fixture", who: "Sakura", work: title), media: nil)
+        let artURL = URL(string: "eclipselib://fixture/cover")!
+        let info = LinkInspection(title: title, cover: artURL, pages: [], chapters: [chapter])
+        let source = ReaderTestFixture.render(chapter.url)
+        let art = ReaderTestFixture.render(URL(string: "https://example.invalid/cover/tsubasa")!)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let pipeline = ImagePipeline(cache: DiskImageCache(directory: directory), localData: { _ in art })
+        let fallback = try XCTUnwrap(VerifiedQuote.thumbnailData(source))
+        let card = VerifiedQuote(item: item, destination: .manga(chapter.url, info), thumbnail: fallback)
+        let prepared = await card.preparedCover(using: pipeline)
+        let selected = try XCTUnwrap(prepared.thumbnail)
+        XCTAssertNotEqual(selected, fallback)
+        let restored = try JSONDecoder().decode(VerifiedQuote.self, from: JSONEncoder().encode(prepared))
+        XCTAssertEqual(restored.thumbnail, selected)
+        let failed = ImagePipeline(cache: DiskImageCache(directory: directory), localData: { _ in Data() })
+        let offline = await card.preparedCover(using: failed)
+        XCTAssertEqual(offline.thumbnail, fallback)
     }
 
     func testQuoteCoversSurviveMissingMetadataAndCacheRoundTrip() throws {
