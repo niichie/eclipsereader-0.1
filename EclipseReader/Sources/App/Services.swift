@@ -97,7 +97,7 @@ enum AutoBackup {
             UserDefaults.standard.set(data, forKey: bookmarkKey)
         }
     }
-    private static func resolve() -> URL? {
+    static func resolve() -> URL? {
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return nil }
         var stale = false
         return try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)

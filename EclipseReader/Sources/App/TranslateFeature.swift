@@ -10,6 +10,15 @@ import Translation
 @MainActor
 final class ReaderHandle {
     weak var controller: UIViewController?
+    func diagnostics(page: Int) -> String {
+        func find(_ view: UIView) -> ZoomPageView? {
+            if let canvas = view as? ZoomPageView, canvas.pageIndex == page, canvas.window != nil { return canvas }
+            return view.subviews.lazy.compactMap { find($0) }.first
+        }
+        guard let view = controller?.view, let canvas = find(view) else { return "Page canvas unavailable" }
+        let dimensions = canvas.decodedSize.map { "\(Int($0.width)) × \(Int($0.height))" } ?? "unknown"
+        return "Decoded dimensions: \(dimensions)\nPage status: \(canvas.failureCategory ?? "Loaded")"
+    }
     func snapshot() -> UIImage? {
         guard let view = controller?.view, view.bounds.width > 0, view.bounds.height > 0 else { return nil }
         let format = UIGraphicsImageRendererFormat.preferred()

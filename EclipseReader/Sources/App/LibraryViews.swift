@@ -1373,6 +1373,7 @@ struct BrowserSettingsPage: View {
 }
 
 struct BackupSettingsPage: View {
+    @AppStorage("readerPositionSync") private var syncPositions = false
     @EnvironmentObject private var model: LibraryModel
     @State private var backupURL: URL?
     @State private var restoring = false
@@ -1397,6 +1398,9 @@ struct BackupSettingsPage: View {
             Section {
                 if let folder = autoFolder {
                     LabeledContent("Folder", value: folder)
+                    Toggle("Sync reading positions in this folder", isOn: $syncPositions)
+                        .onChange(of: syncPositions) { _, on in if on { Task { await model.syncPositions() } } }
+                    if syncPositions { Text("Choose the same shared folder on each device. Positions update when you leave or reopen the app.").font(.footnote) }
                     if let last = AutoBackup.lastBackup {
                         LabeledContent("Last backup", value: last.formatted(.relative(presentation: .named)))
                     }

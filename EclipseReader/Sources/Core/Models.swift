@@ -125,6 +125,7 @@ public struct SavedSite: Codable, Hashable, Identifiable, Sendable {
     public var hidden: Bool?
     public var favorite: Bool?
     /// A short description shown under the name.
+    public var highlightText: String?
     public var note: String?
     /// The bundled manifest entry this came from.
     public var bundledID: String?
@@ -156,6 +157,7 @@ public struct Bookmark: Codable, Hashable, Identifiable, Sendable {
     public var offset: Int?
     /// For books: the part of the book.
     public var section: Int?
+    public var highlightText: String?
     public var note: String?
     public var created: Date
     public init(id: String = UUID().uuidString, seriesID: String, chapterID: String, chapterTitle: String, page: Int, pageCount: Int,

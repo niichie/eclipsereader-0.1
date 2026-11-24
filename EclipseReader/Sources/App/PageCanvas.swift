@@ -1,5 +1,7 @@
 import UIKit
 import ImageIO
+import CoreImage
+import CryptoKit
 
 private struct DecodedImage: @unchecked Sendable {
     let image: UIImage
@@ -31,6 +33,14 @@ enum DisplayQuality {
 
 private actor PageDecoder {
     static let shared = PageDecoder()
+    private var checkedChapter: String?
+    private var fingerprints: [SHA256.Digest: Set<Int>] = [:]
+    func isRepeated(_ data: Data, chapter: String, index: Int) -> Bool {
+        if checkedChapter != chapter { checkedChapter = chapter; fingerprints.removeAll() }
+        let digest = SHA256.hash(data: data)
+        fingerprints[digest, default: []].insert(index)
+        return fingerprints[digest, default: []].count >= 3
+    }
     func render(_ data: Data, trim: Bool, limit: Double, enhance: Bool, strength: Double, half: MangaPage.Half?) throws -> DecodedImage {
         try Task.checkCancellation()
         return try Self.decode(data, trim: trim, limit: limit, enhance: enhance, strength: strength, half: half)
@@ -177,6 +187,8 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     private let detail = UIImageView()
     private var detailWork: Task<Void, Never>?
     private var originalData: Data?
+    private(set) var failureCategory: String?
+    var decodedSize: CGSize? { imageView.image?.size }
     private var sourceRegion = CGRect.zero
     private var needsTiles = false
     private var comparing = false
@@ -230,6 +242,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     deinit { work?.cancel() }
     func configure(page: MangaPage, index: Int, chapter: Chapter, pipeline: ImagePipeline,
                    preferences: ReaderPreferences, loaded: @escaping (Int, Double) -> Void) {
+        failureCategory = nil
         preference = preferences
         pageIndex = index
         imageView.accessibilityIdentifier = "art-\(index)"
@@ -247,8 +260,12 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                     let half = page.half
                     let decoded = try await PageDecoder.shared.render(data, trim: trim, limit: limit, enhance: enhance,
                                                                       strength: preferences.cleanupStrength ?? 0.035, half: half)
+                    let repeated = page.half == nil && page.url.scheme == "https"
+                    let duplicate = repeated ? await PageDecoder.shared.isRepeated(data, chapter: chapter.id, index: index) : false
                     try Task.checkCancellation()
                     guard let self else { return }
+                    failureCategory = duplicate ? "Repeated image" : nil
+                    message.text = duplicate ? "The source returned this image on several pages. Open the chapter in the browser to check it." : nil
                     originalData = data; sourceRegion = decoded.sourceRegion; needsTiles = decoded.needsTiles
                     spinner.stopAnimating(); imageView.image = decoded.image
                     resetFit(); loaded(index, decoded.ratio)
@@ -258,7 +275,17 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                 catch {
                     guard let self, !Task.isCancelled else { return }
                     if error as? SourceError == .invalidImage { await pipeline.cache.remove(page.url) }
-                    spinner.stopAnimating(); message.text = error.localizedDescription
+                    spinner.stopAnimating()
+                    if page.url.host == "offline" {
+                        failureCategory = "Offline page unreadable"
+                        message.text = "This offline page is missing or damaged. Open reader options and choose Repair offline page."
+                    } else if error as? SourceError == .restricted {
+                        failureCategory = "Website sign-in required"
+                        message.text = "Open the site in the browser and check your sign-in, then retry."
+                    } else {
+                        failureCategory = error is URLError ? "Network error" : "Page unavailable"
+                        message.text = error.localizedDescription
+                    }
                     retry.isHidden = false
                 }
             }

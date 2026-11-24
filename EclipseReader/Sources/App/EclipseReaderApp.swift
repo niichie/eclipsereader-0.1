@@ -45,6 +45,7 @@ struct EclipseReaderApp: App {
                     if phase == .background && model.state.notifyNew == true { ChapterAlerts.schedule() }
                     if phase == .background && appLock { locked = true; model.showHidden = false }
                     if phase == .active { AutoBackup.runIfDue(model) }
+                    if phase == .active || phase == .background { Task { await model.syncPositions() } }
                     if phase == .active { Task { await model.checkForUpdates() } }
                     if phase == .background { Task { try? await model.pipeline.cache.prune() } }
                 }

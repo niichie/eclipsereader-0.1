@@ -29,6 +29,9 @@ struct ReaderView: View {
     @State private var webtoon = false
     @StateObject private var translator = TranslateModel()
     @State private var handle = ReaderHandle()
+    @StateObject private var speaker = PassageSpeaker()
+    @State private var spokenBubbles: [String] = []
+    @State private var speechTask: Task<Void, Never>?
     @State private var scanNonce = 0
     @State private var tallPages = 0
     @State private var pickingCover = false
@@ -187,11 +190,11 @@ struct ReaderView: View {
                     activity.userInfo = ["chapter": chapter.id, "page": publishedPage, "count": publishedCount]
                     activity.isEligibleForHandoff = true
                 }
-                .onChange(of: page) { _, _ in logTime(); remember() }
+                .onChange(of: page) { _, _ in stopSpeech(); logTime(); remember() }
                 .onChange(of: phase) { _, phase in
                     if phase != .active { logTime(); remember() } else { lastActivity = Date() }
                 }
-                .onDisappear { logTime(); remember(); UIApplication.shared.isIdleTimerDisabled = false }
+                .onDisappear { stopSpeech(); logTime(); remember(); UIApplication.shared.isIdleTimerDisabled = false }
                 .onAppear { lastActivity = Date(); UIApplication.shared.isIdleTimerDisabled = keepScreenOn }
                 // A soft tap of the Taptic Engine for each page turn, like paper under the thumb.
                 .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.55), trigger: page) { _, _ in
@@ -324,6 +327,22 @@ struct ReaderView: View {
                 if library.canDownload(chapter) && !library.isDownloaded(chapter) && library.downloads[chapter.id] == nil {
                     Button("Download chapter", systemImage: "arrow.down.circle") { library.download([chapter]) }
                 }
+                Button("Read speech bubbles aloud", systemImage: "speaker.wave.2") {
+                    stopSpeech()
+                    guard let image = handle.snapshot() else { return }
+                    speechTask = Task {
+                        let blocks = await TextRecognizer.blocks(in: image, size: image.size)
+                        guard !Task.isCancelled else { return }
+                        spokenBubbles = blocks.map { $0.original }
+                        if spokenBubbles.isEmpty { flash("No readable text found") }
+                        else { speaker.start(spokenBubbles) }
+                    }
+                }
+                if !spokenBubbles.isEmpty {
+                    Button("Previous bubble") { speaker.play(max(0, speaker.position - 1)) }
+                    Button("Next bubble") { speaker.play(speaker.position + 1) }
+                    Button("Stop reading aloud") { stopSpeech() }
+                }
                 Menu("Scan cleanup for this series") {
                     ForEach(["Use global setting", "Off", "Light", "Standard", "Strong"], id: \.self) { label in
                         Button(label) {
@@ -339,7 +358,7 @@ struct ReaderView: View {
                     let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
                     let source = chapter.url.scheme == "https" ? chapter.url.host ?? "Website" : "Local"
                     let dimensions = pages[safe: page].map { "\(Int($0.width ?? 0)) × \(Int($0.height ?? 0))" } ?? "unknown"
-                    UIPasteboard.general.string = "EclipseReader \(version)\nSource: \(source)\nPage: \(page + 1)/\(pages.count)\nPublished dimensions: \(dimensions)\nMode: \(effective.mode)\nEnhance: \(effective.enhance == true)\nChapter load failed: \(failure != nil)"
+                    UIPasteboard.general.string = "EclipseReader \(version)\nSource: \(source)\nPage: \(page + 1)/\(pages.count)\nPublished dimensions: \(dimensions)\n\(handle.diagnostics(page: page))\nMode: \(effective.mode)\nEnhance: \(effective.enhance == true)\nChapter load failed: \(failure != nil)"
                     flash("Reader report copied")
                 }
                 if library.isDownloaded(chapter), let index = origin[safe: page] ?? (pages.indices.contains(page) ? page : nil) {
@@ -521,7 +540,9 @@ struct ReaderView: View {
                                      page: page, pageCount: pages.count))
         flash("Bookmarked page \(page + 1)")
     }
+    private func stopSpeech() { speechTask?.cancel(); speaker.stop(); spokenBubbles = [] }
     private func open(_ target: Chapter) {
+        stopSpeech()
         remember()
         scrub = nil; returnPage = nil; pages = []; loading = true; chapter = target
     }
@@ -538,6 +559,7 @@ struct ReaderView: View {
         }
     }
     private func load() async {
+        stopSpeech(); scrub = nil; returnPage = nil
         loading = true; failure = nil; pages = []; wide = []; origin = []; published = []
         let requested = chapter
         do {

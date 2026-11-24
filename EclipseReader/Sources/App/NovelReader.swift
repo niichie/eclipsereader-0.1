@@ -319,6 +319,9 @@ struct NovelReaderView: View {
     @State private var original: [BookBlock] = []
     @State private var document: BookDocument?
     @State private var images: [String: Data] = [:]
+    @StateObject private var speaker = PassageSpeaker()
+    @State private var passageTools = false
+    @State private var beforeSearch: BookPageRef?
     @State private var typeset: TypesetBook?
     @State private var page = 0
     @State private var chrome = true
@@ -421,12 +424,29 @@ struct NovelReaderView: View {
             }
             if !Syosetu.handles(chapter.url), let id = series?.id, NovelTranslator.isAlways(id) { translator.active = true }
         }
-        .onDisappear { logTime(); UIApplication.shared.isIdleTimerDisabled = false; pager.beyondEnd = nil }
+        .onDisappear { speaker.stop(); logTime(); UIApplication.shared.isIdleTimerDisabled = false; pager.beyondEnd = nil }
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: page) { _, _ in haptics }
         .novelTranslationRunner(translator)
         .onChange(of: translator.status) { _, now in if let now { show(now) } }
         // A translation arrived: set the chapter again in the new language.
         .onChange(of: translator.version) { _, _ in rebuild() }
+        .sheet(isPresented: $passageTools) {
+            if let typeset {
+                PassageTools(book: typeset, page: page, sections: 1, title: { _ in chapter.title }, jump: { section, offset in
+                    beforeSearch = typeset.pages[safe: page]
+                    page = typeset.page(for: section, offset: offset)
+                }, annotate: { section, offset, quote, note in
+                    guard let series else { return }
+                    var mark = Bookmark(seriesID: series.id, chapterID: chapter.id, chapterTitle: chapter.title,
+                                        page: typeset.page(for: section, offset: offset), pageCount: typeset.pages.count,
+                                        offset: offset, section: section, note: note.isEmpty ? quote : quote + "\n" + note)
+                    mark.highlightText = quote
+                    library.addBookmark(mark)
+                    typeset.applyHighlight(section: section, offset: offset, quote: quote)
+                    pager.refreshHighlights()
+                }, speaker: speaker)
+            }
+        }
         .sheet(isPresented: $settings) {
             BookSettingsSheet(fontRaw: $fontRaw, size: $size, spacing: $spacing, margin: $margin, justify: $justify,
                               themeRaw: $themeRaw, curl: $curl)
@@ -516,6 +536,9 @@ struct NovelReaderView: View {
         landAtEnd = false
         anchorOffset = nil
         let opening = typeset == nil
+        for mark in library.state.bookmarks ?? [] where mark.chapterID == chapter.id {
+            if let offset = mark.offset, let quote = mark.highlightText { result.applyHighlight(section: mark.section ?? 0, offset: offset, quote: quote) }
+        }
         typeset = result
         page = target
         if opening, result.pages.indices.contains(target), result.pages[target].section == 0 {
@@ -662,7 +685,19 @@ struct NovelReaderView: View {
                     Image(systemName: bookmarkHere == nil ? "bookmark" : "bookmark.fill").frame(width: 44, height: 44)
                 }
                 .accessibilityLabel(bookmarkHere == nil ? "Bookmark this page" : "Remove bookmark").disabled(currentRef == nil)
-                Button { contents = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
+                Menu {
+                    Button("Contents") { contents = true }
+                    Button("Find or highlight a passage") { passageTools = true }
+                    if let typeset, let ref = typeset.pages[safe: page] {
+                        Button("Read aloud from here") {
+                            speaker.start([(typeset.sections[ref.section].string as NSString).substring(from: ref.range.location)])
+                        }
+                    }
+                    Button("Stop reading aloud") { speaker.stop() }
+                    if let from = beforeSearch, let typeset {
+                        Button("Return to previous passage") { page = typeset.page(for: from.section, offset: from.range.location); beforeSearch = nil }
+                    }
+                } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
                     .accessibilityLabel("Chapters")
                 Button { settings = true } label: { Image(systemName: "textformat.size").frame(width: 44, height: 44) }
                     .accessibilityLabel("Text and page settings")
