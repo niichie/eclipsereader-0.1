@@ -9,7 +9,7 @@ public struct LaunchQuote: Hashable, Sendable, Codable {
 }
 
 /// The series behind a quote, checked on AniList: cover, score and what it is.
-public struct SpotlightMedia: Hashable, Sendable {
+public struct SpotlightMedia: Codable, Hashable, Sendable {
     public let id: Int
     public let title: String
     public let cover: URL?
@@ -54,7 +54,7 @@ public struct SpotlightPreference: Sendable, Equatable {
 }
 
 /// The launch card: a quote, and (when it could be checked) the top-rated series it comes from.
-public struct Spotlight: Hashable, Sendable, Identifiable {
+public struct Spotlight: Codable, Hashable, Sendable, Identifiable {
     public let quote: LaunchQuote
     public let media: SpotlightMedia?
     /// A book's free download (Standard Ebooks), when there is one.

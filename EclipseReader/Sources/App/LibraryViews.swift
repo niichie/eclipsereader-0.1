@@ -217,7 +217,7 @@ struct LibraryView: View {
                         // One card: a line from a top-rated series is the recommendation.
                         if query.isEmpty, showQuote, !quoteClosed, filter == .all, categoryID == nil {
                             if let spotlight = spotlights.manga {
-                                SpotlightCard(spotlight: spotlight, width: contentWidth, owned: ownedSeries(spotlight) != nil,
+                                SpotlightCard(spotlight: spotlight, width: contentWidth, owned: ownedSeries(spotlight) != nil, shuffling: spotlights.loadingManga,
                                               read: { readSpotlight(spotlight) },
                                               next: { Task { await spotlights.nextManga(owned: ownedKeys, model: model) } },
                                               close: { withAnimation(.snappy) { quoteClosed = true } })
@@ -341,7 +341,7 @@ struct LibraryView: View {
                     settingUp = true
                 }
             }
-            .task(id: "\(showQuote)|\(categoriesRaw)|\(novelsOn)") {
+            .task(id: "\(showQuote)|\(SpotlightStore.settings(for: model))") {
                 guard showQuote, !ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
                 await spotlights.loadManga(owned: ownedKeys, model: model)
             }

@@ -1,4 +1,44 @@
 import SwiftUI
+import ImageIO
+
+enum QuoteDestination: Codable, Sendable {
+    case manga(URL, LinkInspection)
+    case novel(URL, NovelInfo)
+
+    @MainActor func open(in model: LibraryModel) -> MangaSeries? {
+        switch self {
+        case .novel(let url, let info): return model.commitNovel(info.home ?? url, info, addToShelf: false)
+        case .manga(let url, let info):
+            if case .series(let series, _) = model.commit(url, info, addToShelf: false) { return series }
+            return nil
+        }
+    }
+}
+
+struct VerifiedQuote: Codable, Sendable {
+    let item: Spotlight
+    let destination: QuoteDestination
+    var checked = Date()
+}
+
+actor QuoteCache {
+    static let shared = QuoteCache()
+    struct Snapshot: Codable {
+        let settings: String
+        let cards: [VerifiedQuote]
+    }
+    private let url: URL
+    init(url: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("verified-spotlights-v1.json")) { self.url = url }
+    func read(settings: String) -> [VerifiedQuote] {
+        guard let data = try? Data(contentsOf: url), let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
+              snapshot.settings == settings else { return [] }
+        return snapshot.cards.filter { Date().timeIntervalSince($0.checked) < 12 * 3600 }
+    }
+    func write(_ cards: [VerifiedQuote], settings: String) {
+        try? JSONEncoder().encode(Snapshot(settings: settings, cards: cards)).write(to: url, options: .atomic)
+    }
+}
 
 /// Finds the launch card: a quote from a live anime-quote database (or the built-in list), checked on
 /// AniList so it only ever recommends manga readers rate highly, with its cover and score.
@@ -9,6 +49,18 @@ final class SpotlightStore: ObservableObject {
     @Published private(set) var loadingManga = false
     private var mangaQueue: [Spotlight] = []
     private var generation = UUID()
+    private var ready: [VerifiedQuote] = []
+    private var current: VerifiedQuote?
+    private var worker: Task<Void, Never>?
+    private var cacheSettings: String?
+    private let cache: QuoteCache
+    init(cache: QuoteCache = .shared) { self.cache = cache }
+
+    static func settings(for model: LibraryModel) -> String {
+        let sources = model.sources.filter { $0.hidden == true || $0.url.host == "mangadot.net" }
+            .map { $0.id + ($0.hidden == true ? "-hidden" : "-enabled") }
+        return (Interests.categories.map(\.rawValue).sorted() + Interests.origins.sorted() + sources.sorted()).joined(separator: "|")
+    }
     private(set) var openVerified: (() -> MangaSeries?)?
 
     private static let recentKey = "spotlightRecent"
@@ -26,73 +78,151 @@ final class SpotlightStore: ObservableObject {
 
     /// Your kinds changed (the setup): start over with suggestions that fit.
     func reset() {
+        worker?.cancel()
+        worker = nil
         generation = UUID()
         loadingManga = false
         openVerified = nil
         manga = nil
+        current = nil
+        ready = []
         mangaQueue = []
+        cacheSettings = nil
     }
+
     func loadManga(owned: Set<String>, model: LibraryModel) async {
-        guard manga == nil else { return }
-        await nextManga(owned: owned, model: model)
+        let settings = Self.settings(for: model)
+        if cacheSettings != settings {
+            reset()
+            cacheSettings = settings
+            let request = generation
+            let cached = await cache.read(settings: settings)
+            guard request == generation else { return }
+            ready = cached.filter { !owned.contains(QuoteFeed.workKey($0.item.work)) }
+            if let fresh = ready.firstIndex(where: { !recent.contains(QuoteFeed.workKey($0.item.work)) }) {
+                ready.swapAt(0, fresh)
+            }
+        }
+        if manga == nil { await nextManga(owned: owned, model: model) }
     }
+
     func nextManga(owned: Set<String>, model: LibraryModel) async {
         guard !loadingManga else { return }
+        ready.removeAll { owned.contains(QuoteFeed.workKey($0.item.work)) || Date().timeIntervalSince($0.checked) >= 12 * 3600 }
+        if ready.isEmpty { loadingManga = true }
+        else { showReady(model) }
+        guard worker == nil, ready.count < 4 else { return }
         let request = generation
-        loadingManga = true
-        defer { if generation == request { loadingManga = false } }
-        if mangaQueue.isEmpty {
-            let candidates = await refillManga(owned: owned)
-            guard generation == request, !Task.isCancelled else { return }
-            mangaQueue = candidates
-        }
-        let lastKind = UserDefaults.standard.string(forKey: "spotlightLastKind")
-        let lines = UserDefaults.standard.stringArray(forKey: "spotlightRecentLines") ?? []
-        while !mangaQueue.isEmpty {
-            let index = mangaQueue.firstIndex { ($0.media?.category ?? .manga).rawValue != lastKind } ?? 0
-            let candidate = mangaQueue.remove(at: index)
-            let line = QuoteFeed.workKey(candidate.quote.text)
-            guard !lines.contains(line), !recent.contains(QuoteFeed.workKey(candidate.work)) else { continue }
-            let open = await verifiedDestination(candidate, model: model)
-            guard generation == request, !Task.isCancelled else { return }
-            guard let open else { continue }
-            openVerified = open
-            manga = candidate
-            remember(candidate.quote.work, candidate.work)
-            UserDefaults.standard.set(Array((lines + [line]).suffix(120)), forKey: "spotlightRecentLines")
-            UserDefaults.standard.set((candidate.media?.category ?? .manga).rawValue, forKey: "spotlightLastKind")
-            break
+        worker = Task(priority: .utility) {
+            defer { if generation == request { worker = nil; loadingManga = false } }
+            var skip = owned.union(recent)
+            if let current { skip.insert(QuoteFeed.workKey(current.item.work)) }
+            // On a cold launch verify two local candidates while the live feeds are fetching.
+            let bootstrap = mangaQueue.isEmpty && current == nil && Interests.categories.contains(.manga)
+                && (Interests.origins.isEmpty || Interests.origins.contains("JP"))
+            let seeds = bootstrap ? QuoteFeed.candidates(CuratedQuotes.shuffled(CuratedQuotes.manga), skipping: skip, limit: 2) : []
+            let feed = mangaQueue.isEmpty ? Task { await refillManga(owned: owned) } : nil
+            defer { feed?.cancel() }
+            mangaQueue.insert(contentsOf: seeds.map { Spotlight(quote: $0, media: nil) }, at: 0)
+            var fetched = false
+            while ready.count < 4 && !Task.isCancelled && generation == request {
+                if mangaQueue.isEmpty, !fetched, let feed {
+                    let items = await feed.value
+                    guard generation == request, !Task.isCancelled else { return }
+                    mangaQueue = items
+                    fetched = true
+                }
+                guard !mangaQueue.isEmpty else { break }
+                let batch = Array(mangaQueue.prefix(2))
+                mangaQueue.removeFirst(batch.count)
+                await withTaskGroup(of: VerifiedQuote?.self) { group in
+                    for candidate in batch {
+                        let key = QuoteFeed.workKey(candidate.work)
+                        let line = QuoteFeed.workKey(candidate.quote.text)
+                        let lines = UserDefaults.standard.stringArray(forKey: "spotlightRecentLines") ?? []
+                        guard skip.insert(key).inserted, !lines.contains(line),
+                              !ready.contains(where: { QuoteFeed.workKey($0.item.work) == key }) else { continue }
+                        group.addTask { [self] in
+                            guard let destination = await verifiedDestination(candidate, model: model) else { return nil }
+                            return VerifiedQuote(item: candidate, destination: destination)
+                        }
+                    }
+                    for await card in group {
+                        guard generation == request, !Task.isCancelled else { group.cancelAll(); return }
+                        guard let card else { continue }
+                        ready.append(card)
+                        if loadingManga { showReady(model) }
+                        if let cacheSettings { await cache.write(ready + [current].compactMap { $0 }, settings: cacheSettings) }
+                    }
+                }
+            }
         }
     }
 
-    private func verifiedDestination(_ item: Spotlight, model: LibraryModel) async -> (() -> MangaSeries?)? {
+    private func showReady(_ model: LibraryModel) {
+        let lastKind = UserDefaults.standard.string(forKey: "spotlightLastKind")
+        let fresh = ready.indices.filter { !recent.contains(QuoteFeed.workKey(ready[$0].item.work)) }
+        let index = fresh.first { (ready[$0].item.media?.category ?? .manga).rawValue != lastKind } ?? fresh.first ?? 0
+        let card = ready.remove(at: index)
+        let item = card.item
+        current = card
+        openVerified = { card.destination.open(in: model) }
+        manga = item
+        loadingManga = false
+        remember(item.quote.work, item.work)
+        let lines = UserDefaults.standard.stringArray(forKey: "spotlightRecentLines") ?? []
+        UserDefaults.standard.set(Array((lines + [QuoteFeed.workKey(item.quote.text)]).suffix(120)), forKey: "spotlightRecentLines")
+        UserDefaults.standard.set((item.media?.category ?? .manga).rawValue, forKey: "spotlightLastKind")
+    }
+
+    private func verifiedDestination(_ item: Spotlight, model: LibraryModel) async -> QuoteDestination? {
         let novel = item.media?.category == .novels
         guard !novel || Features.novelsOn else { return nil }
-        let sources = GlobalSearchModel.sources(saved: model.sources, novels: novel)
+        let sources = GlobalSearchModel.sources(saved: model.sources, novels: novel).filter { source in
+            if case .site = source.kind, source.host != "mangadot.net" { return false }
+            return !model.sources.contains { $0.hidden == true && ChapterMerge.site($0.url.host) == source.host }
+        }
+        let pipeline = model.pipeline
+        var remaining = sources[...]
+        while !remaining.isEmpty && !Task.isCancelled {
+            let batch = remaining.prefix(2)
+            remaining = remaining.dropFirst(batch.count)
+            let found: QuoteDestination? = await withTaskGroup(of: QuoteDestination?.self) { group in
+                for source in batch {
+                    group.addTask {
+                        try? await withDeadline(6) { try await Self.check(item, source: source, pipeline: pipeline) }
+                    }
+                }
+                for await result in group {
+                    if let result { group.cancelAll(); return Optional(result) }
+                }
+                return nil
+            }
+            if let found { return found }
+        }
+        return nil
+    }
+
+    nonisolated private static func check(_ item: Spotlight, source: SearchSource, pipeline: ImagePipeline) async throws -> QuoteDestination? {
+        let query = source.novels ? item.media?.native ?? item.work : item.work
         let aliases = Set([item.work, item.quote.work, item.media?.native].compactMap { $0 }.map(QuoteFeed.workKey))
-        for source in sources {
-            guard !Task.isCancelled else { return nil }
-            switch source.kind {
-            case .site where source.host != "mangadot.net": continue
-            default: break
+        let hits = try await GlobalSearch.search(source, query: query)
+        for hit in hits.prefix(10) where aliases.contains(QuoteFeed.workKey(hit.title)) {
+            try Task.checkCancellation()
+            if source.novels {
+                let novels = NovelSource()
+                guard let info = try? await novels.info(hit.url), let first = info.chapters.first,
+                      let text = try? await novels.chapter(first.url), !text.locked, !text.blocks(base: first.url).isEmpty else { continue }
+                return .novel(hit.url, info)
             }
-            if model.sources.contains(where: { $0.hidden == true && ChapterMerge.site($0.url.host) == source.host }) { continue }
-            let query = novel ? item.media?.native ?? item.work : item.work
-            guard let hits = try? await GlobalSearch.search(source, query: query) else { continue }
-            for hit in hits.prefix(10) where aliases.contains(QuoteFeed.workKey(hit.title)) {
-                if novel {
-                    guard let info = try? await model.novelInfo(hit.url), let first = info.chapters.first,
-                          let text = try? await model.novelText(first), !text.locked, !text.blocks(base: first.url).isEmpty else { continue }
-                    return { model.commitNovel(info.home ?? hit.url, info, addToShelf: false) }
-                }
-                guard let info = try? await model.inspect(hit.url), let first = info.chapters.first,
-                      let pages = try? await model.pages(for: first), let page = pages.first,
-                      let bytes = try? await model.pipeline.data(for: page, chapter: first), UIImage(data: bytes) != nil else { continue }
-                return {
-                    if case .series(let series, _) = model.commit(hit.url, info, addToShelf: false) { return series }
-                    return nil
-                }
-            }
+            let reader = LinkedSource()
+            guard let info = try? await reader.inspect(hit.url), let first = info.chapters.first,
+                  let pages = try? await reader.pages(first.url), let page = pages.first,
+                  let bytes = try? await pipeline.data(for: page, chapter: first),
+                  let image = CGImageSourceCreateWithData(bytes as CFData, nil),
+                  CGImageSourceCreateThumbnailAtIndex(image, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceThumbnailMaxPixelSize: 16] as CFDictionary) != nil else { continue }
+            return .manga(hit.url, info)
         }
         return nil
     }
@@ -101,6 +231,8 @@ final class SpotlightStore: ObservableObject {
         var skip = Set(recent).union(owned)
         for item in mangaQueue + [manga].compactMap({ $0 }) { skip.insert(QuoteFeed.workKey(item.quote.work)) }
         // Live lines (two databases at once), then the built-in list as a backup.
+        let preference = SpotlightPreference(categories: Interests.categories, origins: Interests.origins)
+        async let picksTask = QuoteFeed.picks(preference, page: Int.random(in: 1...4))
         let batchTask = Task { try? await withDeadline(6) { try await QuoteFeed.yurippe(count: 30) } }
         let chanTask: Task<LaunchQuote?, Never>? = animeChanAllowed()
             ? Task { try? await withDeadline(6) { try await QuoteFeed.animeChan() } } : nil
@@ -110,7 +242,6 @@ final class SpotlightStore: ObservableObject {
         let taken = skip.union(fresh.map { QuoteFeed.workKey($0.work) })
         let curated = QuoteFeed.candidates(CuratedQuotes.shuffled(CuratedQuotes.manga), skipping: taken, limit: 12 - fresh.count)
         // Only what you're into (the setup's kinds and countries).
-        let preference = SpotlightPreference(categories: Interests.categories, origins: Interests.origins)
         var rated = await QuoteFeed.rate(fresh + curated, curated: Set(curated), preference: preference)
         // Different quotes can lead to the same series under another name: keep the first.
         var seen = Set<Int>()
@@ -120,7 +251,7 @@ final class SpotlightStore: ObservableObject {
         // thin, also get top-rated picks of their kinds.
         let thin = rated.count < 4
         if thin || !preference.categories.isDisjoint(with: [.manhwa, .manhua, .webtoons, .novels]) {
-            let picks = await QuoteFeed.picks(preference, page: Int.random(in: 1...4)).filter { pick in
+            let picks = await picksTask.filter { pick in
                 let key = QuoteFeed.workKey(pick.work)
                 return !skip.contains(key) && !owned.contains(key) && !(pick.media.map { seen.contains($0.id) } ?? false)
             }
@@ -159,6 +290,7 @@ struct SpotlightCard: View {
     let width: CGFloat
     var owned = false
     var busy = false
+    var shuffling = false
     let read: () -> Void
     let next: () -> Void
     let close: () -> Void
@@ -208,10 +340,13 @@ struct SpotlightCard: View {
                     .buttonStyle(PressableStyle()).disabled(busy)
                     .accessibilityIdentifier("quoteRead")
                     Button(action: next) {
-                        Image(systemName: "shuffle").font(.caption.weight(.bold))
-                            .frame(width: 30, height: 30).background(Color.white.opacity(0.1), in: Circle())
+                        Group {
+                            if shuffling { ProgressView().controlSize(.mini) }
+                            else { Image(systemName: "shuffle").font(.caption.weight(.bold)) }
+                        }.frame(width: 30, height: 30).background(Color.white.opacity(0.1), in: Circle())
                     }
                     .buttonStyle(PressableStyle())
+                    .disabled(shuffling)
                     .accessibilityLabel("Another series")
                 }
                 .padding(.top, 2)

@@ -35,7 +35,7 @@ public struct LinkedChapter: Sendable {
 }
 
 /// What a pasted link turned out to be.
-public struct LinkInspection: Sendable {
+public struct LinkInspection: Codable, Sendable {
     public let title: String
     public let cover: URL?
     /// Page images, when the link itself is a readable chapter.

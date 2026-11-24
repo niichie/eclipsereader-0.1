@@ -11,6 +11,33 @@ final class ReaderChecks: XCTestCase {
         ("Pride and Prejudice (Standard Ebooks)", "https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice/downloads/jane-austen_pride-and-prejudice.epub?source=download"),
         ("Alice (Project Gutenberg mirror, pictures)", "https://gutenberg.pglaf.org/cache/epub/11/pg11-images-3.epub"),
     ]
+    func testVerifiedQuoteCacheLoadsAndShufflesWithoutWaitingForSources() async throws {
+        let model = model()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = QuoteCache(url: url)
+        let settings = SpotlightStore.settings(for: model)
+        let cards = (0..<5).map { index in
+            let title = "Fixture work \(index)"
+            let quote = LaunchQuote(text: "Fixture line \(index)", who: "Speaker", work: title)
+            let info = NovelInfo(title: title, chapters: [ReaderTestFixture.chapter])
+            return VerifiedQuote(item: Spotlight(quote: quote, media: nil), destination: .novel(url, info))
+        }
+        await cache.write(cards, settings: settings)
+        let store = SpotlightStore(cache: cache)
+        defer { store.reset() }
+        await store.loadManga(owned: [], model: model)
+        let first = try XCTUnwrap(store.manga)
+        XCTAssertFalse(store.loadingManga)
+        await store.nextManga(owned: [], model: model)
+        let second = try XCTUnwrap(store.manga)
+        XCTAssertNotEqual(first.work, second.work)
+        XCTAssertNotNil(store.openVerified)
+        XCTAssertFalse(store.loadingManga)
+        let wrongSettings = await cache.read(settings: settings + "-changed")
+        XCTAssertTrue(wrongSettings.isEmpty)
+    }
+
     func testFullResolutionMangaKeepsEnhancedImageAtZoomAndRotation() async throws {
         let window = show(Color.black, size: CGSize(width: 390, height: 844))
         let canvas = ZoomPageView(frame: window.bounds)

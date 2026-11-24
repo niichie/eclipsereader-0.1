@@ -7,7 +7,7 @@ import Foundation
 // the way Safari's Reader does: the block of the page with the most running text.
 
 /// What a novel's series page says about it.
-public struct NovelInfo: Sendable {
+public struct NovelInfo: Codable, Sendable {
     public var title: String
     public var author: String?
     public var cover: URL?
