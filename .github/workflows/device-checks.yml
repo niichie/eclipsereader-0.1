@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: Test to run (default all app checks)
+        description: Tests to run, comma-separated (default all app checks)
         default: EclipseReaderAppTests
 permissions:
   contents: read
@@ -29,8 +29,11 @@ jobs:
           set -o pipefail
           UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k in sorted(d, reverse=True) if "iOS" in k for x in d[k] if x["name"].startswith("iPhone")))')
           echo "Simulator $UDID"
+          ONLY=()
+          IFS=',' read -ra PICKED <<< "${{ inputs.only || 'EclipseReaderAppTests' }}"
+          for t in "${PICKED[@]}"; do ONLY+=("-only-testing:$t"); done
           xcodebuild test -project EclipseReader.xcodeproj -scheme EclipseReader \
-            -destination "id=$UDID" -only-testing:"${{ inputs.only || 'EclipseReaderAppTests' }}" \
+            -destination "id=$UDID" "${ONLY[@]}" \
             -resultBundlePath checks.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee checks.log | grep -E "CHECK\||error:|Test Case|XCTAssert|failed|passed|\*\* TEST" || true
           if ! grep -q "\*\* TEST SUCCEEDED \*\*" checks.log; then
             echo "----- why it failed -----"
