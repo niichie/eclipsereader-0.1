@@ -151,6 +151,7 @@ final class ReaderChecks: XCTestCase {
                 XCTAssertTrue(opened, "\(name) never showed a page at \(size) (labels: \(labels(in: window).prefix(8)))")
                 // Turn a page with the reader's own controls and make sure text follows.
                 if opened {
+                    XCTAssertTrue(series.chapters.contains { $0.id == library.state.lastChapterID }, "Opening a book must update the recommendation seed before a page turn")
                     NotificationCenter.default.post(name: PageTurnInput.notification, object: nil, userInfo: ["forward": true])
                     try? await Task.sleep(for: .seconds(1))
                     XCTAssertTrue(all(BookPageView.self, in: window).contains { $0.text.length > 0 }, "\(name): blank after turning")

@@ -52,6 +52,7 @@ final class NovelAndSourceChecks: XCTestCase {
         let opened = await wait(45) { self.all(BookPageView.self, in: window).contains { $0.text.length > 0 } }
         XCTAssertTrue(opened, "the first chapter never opened")
         guard opened else { return }
+        XCTAssertEqual(library.state.lastChapterID, series.chapters[0].id, "Opening a novel must update the recommendation seed before a page turn")
         print("CHECK|novel|opened \(series.title): \(all(BookPageView.self, in: window).first { $0.text.length > 0 }?.text.string.prefix(30) ?? "")")
         let second = series.chapters[1]
         var moved = false

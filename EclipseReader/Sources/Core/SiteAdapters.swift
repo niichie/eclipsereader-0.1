@@ -316,16 +316,17 @@ public enum Discover {
             URLQueryItem(name: "title", value: title), URLQueryItem(name: "order[relevance]", value: "desc")]
         guard let lookupURL = lookup.url else { return [] }
         let found = try parse(try await http.fetch(lookupURL, referer: nil, image: false))
-        guard let source = found.first(where: { Self.sameTitle($0.item.title, title) }) ?? found.first else { return [] }
+        guard let source = found.first(where: { Self.sameTitle($0.item.title, title) }) else { return [] }
         let tags = pickTags(source.tags)
         guard !tags.isEmpty else { return [] }
         var parts = URLComponents(string: "https://api.mangadex.org/manga")!
         parts.queryItems = base(limit: limit + 8)
+            + [URLQueryItem(name: "originalLanguage[]", value: source.language)]
             + tags.map { URLQueryItem(name: "includedTags[]", value: $0) }
             + [URLQueryItem(name: "includedTagsMode", value: "AND"),
                URLQueryItem(name: "order[rating]", value: "desc")]
         guard let url = parts.url else { return [] }
-        let list = try parse(try await http.fetch(url, referer: nil, image: false)).map(\.item)
+        let list = try parse(try await http.fetch(url, referer: nil, image: false)).filter { $0.style == source.style }.map(\.item)
         let skip = excluding.map { $0.lowercased() }
         let fresh = list.filter { item in item.id != source.item.id && !skip.contains { Self.sameTitle($0, item.title) } }
         return Array(await readable(Array(fresh.prefix(limit + 4)), http: http).prefix(limit))
@@ -354,7 +355,7 @@ public enum Discover {
         return clean(a) == clean(b)
     }
 
-    static func parse(_ data: Data) throws -> [(item: DiscoverItem, tags: Any?)] {
+    static func parse(_ data: Data) throws -> [(item: DiscoverItem, tags: Any?, language: String, style: ReadingStyle)] {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let list = object["data"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
         return list.compactMap { entry -> (item: DiscoverItem, tags: Any?)? in
@@ -365,9 +366,9 @@ public enum Discover {
             let file = (relations.first { $0["type"] as? String == "cover_art" }?["attributes"] as? [String: Any])?["fileName"] as? String
             let cover = file.flatMap { URL(string: "https://uploads.mangadex.org/covers/\(id)/\($0).256.jpg") }
             let language = (a["originalLanguage"] as? String ?? "").lowercased()
-            let kind = MangaDex.style(language: language, tags: a["tags"]).title
+            let style = MangaDex.style(language: language, tags: a["tags"])
             let year = (a["year"] as? Int).map { " · \($0)" } ?? ""
-            return (DiscoverItem(id: id, title: title, url: page, cover: cover, detail: kind + year), a["tags"])
+            return (DiscoverItem(id: id, title: title, url: page, cover: cover, detail: style.title + year), a["tags"], language, style)
         }
     }
 }

@@ -694,8 +694,15 @@ struct BookReaderView: View {
         }.value
         guard !Task.isCancelled else { return }
         let target = anchor.map { result.page(for: $0.section, offset: $0.offset) } ?? 0
+        let opening = typeset == nil
         typeset = result
         page = target
+        if opening, result.pages.indices.contains(target), let series {
+            let section = result.pages[target].section
+            if let part = series.chapters[safe: section] {
+                library.record(part, page: target - result.sectionStarts[section], count: max(1, result.pagesIn(section: section)))
+            }
+        }
         if typeset != nil, chrome {
             try? await Task.sleep(for: .seconds(2))
             if !Task.isCancelled { chrome = false }

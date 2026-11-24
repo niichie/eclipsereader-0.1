@@ -515,8 +515,12 @@ struct NovelReaderView: View {
         else { target = 0 }
         landAtEnd = false
         anchorOffset = nil
+        let opening = typeset == nil
         typeset = result
         page = target
+        if opening, result.pages.indices.contains(target), result.pages[target].section == 0 {
+            library.record(chapter, page: target, count: max(1, result.pagesIn(section: 0)))
+        }
         if result.pages.indices.contains(target), let series {
             library.setNovelPosition(NovelPosition(chapterID: chapter.id, offset: result.pages[target].range.location), for: series.id)
         }

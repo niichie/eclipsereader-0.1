@@ -47,6 +47,14 @@ final class BecauseYouReadTests: XCTestCase {
     private func manga(_ id: String, _ title: String, tags: String = "[]") -> String {
         #"{"id":"\#(id)","attributes":{"title":{"en":"\#(title)"},"originalLanguage":"ja","year":1989,"tags":\#(tags)},"relationships":[]}"#
     }
+    func testNovelSeedSelectsNovelsAndKeepsNativeSearchTitle() throws {
+        let data = Data(#"{"data":{"Media":{"title":{"english":"Story","native":"物語"},"recommendations":{"nodes":[{"rating":3,"mediaRecommendation":{"id":2,"title":{"english":"Another story","native":"別の物語"},"format":"NOVEL"}},{"rating":4,"mediaRecommendation":{"id":3,"title":{"english":"Comic adaptation"},"format":"MANGA"}}]}}}}"#.utf8)
+        let hits = try AniListAPI.novelRecommendations(data, for: "物語")
+        XCTAssertEqual(hits.map(\.id), [2])
+        XCTAssertEqual(hits.first?.nativeTitle, "別の物語")
+        XCTAssertTrue(try AniListAPI.novelRecommendations(data, for: "Unrelated").isEmpty)
+    }
+
     func testPicksDistinctiveGenresAndSkipsTheLibrary() async throws {
         let tags = #"[{"id":"g-action","attributes":{"group":"genre","name":{"en":"Action"}}},{"id":"g-dark","attributes":{"group":"genre","name":{"en":"Tragedy"}}},{"id":"g-fantasy","attributes":{"group":"genre","name":{"en":"Fantasy"}}},{"id":"t-demons","attributes":{"group":"theme","name":{"en":"Demons"}}}]"#
         XCTAssertEqual(Discover.pickTags(try JSONSerialization.jsonObject(with: Data(tags.utf8))), ["g-dark", "g-fantasy"])
@@ -60,6 +68,7 @@ final class BecauseYouReadTests: XCTestCase {
         // The genre search, then one readability check per result.
         let search = asked.map { $0.absoluteString.removingPercentEncoding ?? $0.absoluteString }.first { $0.contains("includedTags") } ?? ""
         XCTAssertTrue(search.contains("includedTags[]=g-dark"), search)
+        XCTAssertTrue(search.contains("originalLanguage[]=ja"), search)
         XCTAssertTrue(asked.contains { $0.path.hasSuffix("/feed") }, "results weren't checked for readable chapters")
     }
 }

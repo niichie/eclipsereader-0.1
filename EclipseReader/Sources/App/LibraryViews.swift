@@ -197,9 +197,9 @@ struct LibraryView: View {
         }
     }
 
-    /// The comic you read most recently, for "Because you read …".
+    /// Follow the reader’s current chapter, including unshelved titles.
     private var recentSeries: MangaSeries? {
-        guard let chapter = model.lastChapter, let series = model.series(id: model.seriesID(for: chapter)), !series.readsAsText,
+        guard let chapter = model.lastChapter, let series = model.series(id: model.seriesID(for: chapter)), (!series.isNovel || novelsOn), (!series.isPlainBook || booksOn),
               !model.isHidden(series) else { return nil }
         return series
     }
@@ -264,9 +264,16 @@ struct LibraryView: View {
                         if query.isEmpty && filter == .all && categoryID == nil && showDiscover {
                             DiscoverStrip(openSeries: $openSeries, width: contentWidth)
                         }
-                        // Recommendations from what you read last (manga, manhwa and comics; MangaDex genres).
-                        if query.isEmpty && categoryID == nil && filter != .books && showBecause, let recent = recentSeries {
-                            DiscoverStrip(openSeries: $openSeries, width: contentWidth, similarTo: recent.title)
+                        // Recreate the shelf when the reader switches works, including identically titled adaptations.
+                        if query.isEmpty && categoryID == nil && showBecause, let recent = recentSeries,
+                           filter == .all || matches(recent, filter) {
+                            if recent.readsAsText {
+                                TextRecommendationStrip(series: recent, width: contentWidth, openSeries: $openSeries)
+                                    .id(recent.id)
+                            } else {
+                                DiscoverStrip(openSeries: $openSeries, width: contentWidth, similarTo: recent.title)
+                                    .id(recent.id)
+                            }
                         }
                         if visible.isEmpty && query.isEmpty {
                             ContentUnavailableView {
@@ -647,7 +654,9 @@ struct DiscoverStrip: View {
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
             #endif
             if let similarTo {
-                items = (try? await Discover.similar(to: similarTo, excluding: Set(model.libraryMembers.map(\.title)))) ?? []
+                let results = (try? await Discover.similar(to: similarTo, excluding: Set(model.libraryMembers.map(\.title)))) ?? []
+                guard !Task.isCancelled else { return }
+                items = results
             } else if items.isEmpty {
                 items = (try? await Discover.mangaDex(limit: 24)) ?? []
             }
@@ -661,6 +670,69 @@ struct DiscoverStrip: View {
                 if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title, addToShelf: add), !add { openSeries = series }
             } catch { self.error = "Couldn’t load \(item.title)." }
         }
+    }
+}
+
+private struct TextRecommendationStrip: View {
+    @EnvironmentObject private var model: LibraryModel
+    let series: MangaSeries
+    let width: CGFloat
+    @Binding var openSeries: MangaSeries?
+    @State private var novels: [AniListMedia] = []
+    @State private var books: [FreeBook] = []
+    @State private var search: LibraryView.QuoteSearch?
+
+    var body: some View {
+        let owned = Set((model.libraryMembers.map(\.title) + [series.title]).map(QuoteFeed.workKey))
+        let suggestions = novels.filter { !owned.contains(QuoteFeed.workKey($0.title)) }
+        let classics = books.filter { !owned.contains(QuoteFeed.workKey($0.title)) }
+        VStack(alignment: .leading, spacing: 0) {
+            if !suggestions.isEmpty || !classics.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("\(Text("Because you read ").foregroundStyle(.secondary))\(series.title)")
+                        .font(.title3.weight(.bold)).lineLimit(1)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 12) {
+                            ForEach(suggestions) { item in
+                                card(item.title, cover: item.cover, detail: "Novel") {
+                                    search = LibraryView.QuoteSearch(query: item.title, novels: true, native: item.nativeTitle)
+                                }
+                            }
+                            ForEach(classics) { book in
+                                card(book.title, cover: book.cover, detail: book.author ?? book.source) {
+                                    if let page = book.page, let download = book.download {
+                                        openSeries = model.previewBook(book, page: page, download: download)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }.padding(.top, 8)
+            }
+        }
+        .sheet(item: $search) { item in GlobalSearchSheet(query: item.query, novels: true, nativeQuery: item.native) }
+        .task(id: series.title) {
+            if series.isNovel {
+                guard let data = try? await AniList.post(AniListAPI.similarNovelsQuery, variables: ["search": series.title], auth: false),
+                      !Task.isCancelled else { return }
+                novels = (try? AniListAPI.novelRecommendations(data, for: series.title)) ?? []
+            } else if let author = series.author, !author.isEmpty {
+                let results = (try? await FreeBooks.standardEbooks(query: author)) ?? []
+                guard !Task.isCancelled else { return }
+                books = results.filter { $0.author == author && $0.page != nil && $0.download != nil }
+            }
+        }
+    }
+
+    private func card(_ title: String, cover: URL?, detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 5) {
+                CoverView(url: cover, referer: nil).aspectRatio(0.7, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                Text(title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                Text(detail).font(.caption2).foregroundStyle(.secondary)
+            }.frame(width: min(150, max(104, width / 3.6)))
+        }.buttonStyle(PressableStyle())
     }
 }
 

@@ -9,6 +9,7 @@ public struct AniListMedia: Identifiable, Hashable, Sendable {
     public let format: String?
     public let year: Int?
     /// AniList readers' average score (0–100).
+    public var nativeTitle: String? = nil
     public var score: Int? = nil
     /// Manga, Manhwa or Manhua.
     public var kind: String? = nil
@@ -69,6 +70,19 @@ public enum AniListAPI {
       recommendations(sort: RATING_DESC, perPage: 18) { nodes { rating mediaRecommendation {
         id title { english romaji } coverImage { large } averageScore format countryOfOrigin isAdult startDate { year } } } } } }
     """
+    public static let similarNovelsQuery = """
+    query ($search: String) { Media(search: $search, type: MANGA, format: NOVEL, isAdult: false, sort: SEARCH_MATCH) {
+      title { english romaji native } synonyms
+      recommendations(sort: RATING_DESC, perPage: 25) { nodes { rating mediaRecommendation {
+        id title { english romaji native } coverImage { large } averageScore format countryOfOrigin isAdult startDate { year } } } } } }
+    """
+    public static func novelRecommendations(_ data: Data, for title: String) throws -> [AniListMedia] {
+        let seed = try dataObject(data)["Media"] as? [String: Any]
+        let names = (seed?["title"] as? [String: Any])?.values.compactMap { $0 as? String } ?? []
+        guard (names + (seed?["synonyms"] as? [String] ?? [])).contains(where: { Discover.sameTitle($0, title) }) else { return [] }
+        return try parseSimilar(data).items.filter { $0.format == "NOVEL" }
+    }
+
     /// The recommended series (adult titles left out), and the title AniList matched.
     public static func parseSimilar(_ data: Data) throws -> (matched: String?, items: [AniListMedia]) {
         let media = try dataObject(data)["Media"] as? [String: Any]
@@ -87,8 +101,10 @@ public enum AniListAPI {
             case "CN", "TW": "Manhua"
             default: "Manga"
             }
-            return AniListMedia(id: id, title: title, cover: cover, chapters: nil, format: item["format"] as? String,
+            var media = AniListMedia(id: id, title: title, cover: cover, chapters: nil, format: item["format"] as? String,
                                 year: (item["startDate"] as? [String: Any])?["year"] as? Int, score: item["averageScore"] as? Int, kind: kind)
+            media.nativeTitle = titles?["native"] as? String
+            return media
         }
         return (matched, items)
     }
