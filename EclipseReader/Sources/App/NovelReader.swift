@@ -131,10 +131,6 @@ extension LibraryModel {
         state.novelPositions = map
         // Saved with the next progress record (every page turn), so no save here.
     }
-    func previous(before chapter: Chapter) -> Chapter? {
-        guard let series = series(containing: chapter), let i = series.chapters.firstIndex(where: { $0.id == chapter.id }), i > 0 else { return nil }
-        return series.chapters[i - 1]
-    }
 }
 
 extension OfflineStore {

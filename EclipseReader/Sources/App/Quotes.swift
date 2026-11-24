@@ -234,9 +234,11 @@ struct HomeSetupSheet: View {
                     option($showBecause, "Because you read…", "Series like the one you read last.", "sparkles")
                 } header: { Text("Your library home") }
                 Section {
-                    Label("Have an account on a site? Sign in on the site in Browse. In Browse › Manage sources, a source can read with your sign-in, which stays in the browser.", systemImage: "person.crop.circle.badge.checkmark")
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .listRowBackground(Color.clear)
+                    NavigationLink { GuideView() } label: {
+                        Label("Take the one-minute guide", systemImage: "questionmark.circle")
+                    }
+                } footer: {
+                    Text("What every button and setting does. It's always in Settings › Guide.")
                 }
             }
             .scrollContentBackground(.hidden).background(Eclipse.surface)

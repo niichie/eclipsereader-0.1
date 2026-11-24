@@ -852,6 +852,11 @@ struct SettingsView: View {
             List {
                 Section { SettingsHero().listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
                 Section {
+                    NavigationLink { GuideView() } label: {
+                        SettingsRow(title: "Guide", detail: "What every button and setting does", symbol: "questionmark.circle.fill", tint: .pink)
+                    }
+                }
+                Section {
                     NavigationLink { ReaderSettingsPage() } label: {
                         SettingsRow(title: "Reader", detail: "Page turns, direction, webtoons, translation", symbol: "book.pages.fill", tint: Eclipse.accent)
                     }

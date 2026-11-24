@@ -204,6 +204,9 @@ struct ReaderView: View {
                             } footer: {
                                 Text("Now: \(library.style(for: library.seriesID(for: chapter)).title) · \(library.style(for: library.seriesID(for: chapter)).detail). The settings below are your manga defaults.")
                             }
+                            Section {
+                                NavigationLink { GuideView() } label: { Label("What do these do?", systemImage: "questionmark.circle") }
+                            }
                             ReaderPreferencesForm(preferences: Binding(get: { library.preferences }, set: { library.preferences = $0 }))
                             Section {
                                 LabeledSlider(title: "Dim artwork", symbol: "sun.min", value: $dimming, range: 0...0.7)
