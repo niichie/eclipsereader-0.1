@@ -96,7 +96,7 @@ struct LibraryView: View {
     @State private var searchingEverywhere = false
     @State private var categoryID: String?
     @State private var bookPickBusy = false
-    @AppStorage("libraryShowBecause") private var showBecause = true
+    @AppStorage("libraryShowBecause") private var showBecause = false
     @State private var selecting = false
     @State private var selection = Set<String>()
     @State private var confirmRemove = false
@@ -104,12 +104,12 @@ struct LibraryView: View {
     @State private var newCategoryName = ""
     /// Closed with × for this launch (turn it off for good in sort & display options).
     @State private var quoteClosed = false
-    @State private var pickClosed = false
     @State private var bookQuoteClosed = false
-    @State private var bookPickClosed = false
+    @AppStorage("libraryShowDiscover") private var showDiscover = false
+    @AppStorage("homeSetupDone") private var setupDone = false
+    @State private var settingUp = false
     @State private var bookSearch: QuoteSearch?
-    @AppStorage("libraryShowPick") private var showPick = true
-    @ObservedObject private var picks = PickStore.shared
+    @ObservedObject private var spotlights = SpotlightStore.shared
     @State private var quoteSearch: QuoteSearch?
     struct QuoteSearch: Identifiable { let query: String; var id: String { query } }
     @Namespace private var zoom
@@ -169,28 +169,24 @@ struct LibraryView: View {
                 let contentWidth = min(geometry.size.width, 1280) - 28
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        // One card: a line from a top-rated series is the recommendation.
                         if query.isEmpty, showQuote, !quoteClosed, filter == .all, categoryID == nil {
-                            QuoteCard(compact: geometry.size.width < 420, read: { readQuote($0) }, close: {
-                                withAnimation(.snappy) { quoteClosed = true }
-                            })
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-                        if query.isEmpty, showPick, !pickClosed, filter == .all, categoryID == nil, let pick = picks.manga {
-                            PickCard(pick: pick, read: { readPick(pick) }, next: { withAnimation(.snappy) { picks.shuffle(book: false) } },
-                                     close: { withAnimation(.snappy) { pickClosed = true } })
-                                .transition(.opacity)
-                        }
-                        // Books get their own quote and pick, once there are books in the library.
-                        if query.isEmpty, model.hasBooks, categoryID == nil, filter == .all || filter == .books {
-                            if showQuote && !bookQuoteClosed {
-                                QuoteCard(books: true, compact: geometry.size.width < 420, read: { readBook($0.work) }, close: {
-                                    withAnimation(.snappy) { bookQuoteClosed = true }
-                                })
+                            if let spotlight = spotlights.manga {
+                                SpotlightCard(spotlight: spotlight, width: contentWidth, owned: ownedSeries(spotlight) != nil,
+                                              read: { readSpotlight(spotlight) },
+                                              next: { Task { await spotlights.nextManga(owned: ownedKeys) } },
+                                              close: { withAnimation(.snappy) { quoteClosed = true } })
+                            } else if spotlights.loadingManga {
+                                SpotlightPlaceholder(width: contentWidth)
                             }
-                            if showPick && !bookPickClosed, let pick = picks.book {
-                                PickCard(pick: pick, busy: bookPickBusy, read: { readBookPick(pick) }, next: { withAnimation(.snappy) { picks.shuffle(book: true) } },
-                                         close: { withAnimation(.snappy) { bookPickClosed = true } })
-                            }
+                        }
+                        // Books get one card too, once there are books in the library.
+                        if query.isEmpty, showQuote, !bookQuoteClosed, model.hasBooks, categoryID == nil, filter == .all || filter == .books,
+                           let spotlight = spotlights.book {
+                            SpotlightCard(spotlight: spotlight, isBook: true, width: contentWidth, owned: ownedBook(spotlight) != nil,
+                                          busy: bookPickBusy, read: { readBookSpotlight(spotlight) },
+                                          next: { Task { await spotlights.nextBook(owned: ownedKeys) } },
+                                          close: { withAnimation(.snappy) { bookQuoteClosed = true } })
                         }
                         if query.isEmpty, showContinue, filter == .all, categoryID == nil, let chapter = model.lastChapter {
                             ContinueBar(chapter: chapter, resume: { reader = chapter },
@@ -231,7 +227,7 @@ struct LibraryView: View {
                                 .buttonStyle(PressableStyle())
                             }
                         }
-                        if query.isEmpty && filter == .all && categoryID == nil && model.librarySeries.count < 12 {
+                        if query.isEmpty && filter == .all && categoryID == nil && showDiscover {
                             DiscoverStrip(openSeries: $openSeries, width: contentWidth)
                         }
                         // Recommendations from what you read last (manga, manhwa and comics; MangaDex genres).
@@ -297,9 +293,21 @@ struct LibraryView: View {
             .sheet(item: $quoteSearch) { item in GlobalSearchSheet(query: item.query).environmentObject(model) }
             .sheet(item: $bookSearch) { item in BookSearchSheet(query: item.query).environmentObject(model) }
             .task {
-                let owned = Set(model.allSeries.map { $0.title.lowercased() })
-                if showPick { await picks.loadManga(excluding: owned) }
-                if showPick && model.hasBooks { await picks.loadBooks(excluding: owned) }
+                if !setupDone && !ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+                    try? await Task.sleep(for: .seconds(0.6))
+                    settingUp = true
+                }
+            }
+            .task(id: showQuote) {
+                guard showQuote, !ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
+                await spotlights.loadManga(owned: ownedKeys)
+            }
+            .task(id: showQuote && model.hasBooks) {
+                guard showQuote, model.hasBooks, !ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
+                await spotlights.loadBook(owned: ownedKeys)
+            }
+            .sheet(isPresented: $settingUp, onDismiss: { setupDone = true }) {
+                HomeSetupSheet().presentationDetents([.medium, .large])
             }
             .navigationDestination(item: $openSeries) { series in
                 SeriesView(seriesID: series.id, reader: $reader).zoomDestination(series.id, in: zoom)
@@ -320,31 +328,29 @@ struct LibraryView: View {
     }
 
     /// The quote's series: straight to it when it's in your library, otherwise every site is searched for it.
-    private func readQuote(_ quote: MangaQuote) {
-        let work = quote.work.lowercased()
-        if let owned = model.librarySeries.first(where: { $0.title.lowercased() == work })
-            ?? model.librarySeries.first(where: { $0.title.lowercased().contains(work) || ($0.title.count >= 4 && work.contains($0.title.lowercased())) }) {
-            openSeries = owned
-        } else {
-            quoteSearch = QuoteSearch(query: quote.work)
-        }
+    /// Series and books already in the library, the way the launch card recognises them.
+    private var ownedKeys: Set<String> { Set(model.allSeries.map { QuoteFeed.workKey($0.title) }) }
+    private func ownedSeries(_ spotlight: Spotlight) -> MangaSeries? {
+        let keys = [spotlight.work, spotlight.quote.work].map(QuoteFeed.workKey)
+        return model.librarySeries.first { $0.kind != .book && keys.contains(QuoteFeed.workKey($0.title)) }
     }
-
-    /// A recommended manga: open it if it's yours, otherwise search every site for it.
-    private func readPick(_ pick: Recommendation) {
-        let title = pick.title.lowercased()
-        if let owned = model.librarySeries.first(where: { $0.title.lowercased() == title }) { openSeries = owned }
-        else { quoteSearch = QuoteSearch(query: pick.title) }
+    private func ownedBook(_ spotlight: Spotlight) -> MangaSeries? {
+        let keys = [spotlight.work, spotlight.quote.work].map(QuoteFeed.workKey)
+        return model.librarySeries.first { $0.kind == .book && keys.contains(QuoteFeed.workKey($0.title)) }
     }
-    /// The book of the launch: open your copy, or download it (every pick is free to keep).
-    private func readBookPick(_ pick: Recommendation) {
-        let lower = pick.title.lowercased()
-        if let owned = model.librarySeries.first(where: { $0.kind == .book && $0.title.lowercased() == lower }) { openSeries = owned; return }
-        guard let link = pick.link else { readBook(pick.title); return }
+    /// The launch card's series: open it if it's yours, otherwise search every site for it.
+    private func readSpotlight(_ spotlight: Spotlight) {
+        if let owned = ownedSeries(spotlight) { openSeries = owned }
+        else { quoteSearch = QuoteSearch(query: spotlight.work) }
+    }
+    /// The launch card's book: open your copy, download it when it's free, or look for it.
+    private func readBookSpotlight(_ spotlight: Spotlight) {
+        if let owned = ownedBook(spotlight) { openSeries = owned; return }
+        guard let link = spotlight.download else { readBook(spotlight.work); return }
         bookPickBusy = true
         Task {
             defer { bookPickBusy = false }
-            do { openSeries = try await model.downloadBook(link) } catch { bookSearch = QuoteSearch(query: pick.title) }
+            do { openSeries = try await model.downloadBook(link) } catch { bookSearch = QuoteSearch(query: spotlight.work) }
         }
     }
     /// A book from a quote or pick: open your copy, or look for it in the free libraries.
@@ -521,7 +527,8 @@ struct LibraryOptionsSheet: View {
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
-    @AppStorage("libraryShowPick") private var showPick = true
+    @AppStorage("libraryShowDiscover") private var showDiscover = false
+    @AppStorage("libraryShowBecause") private var showBecause = false
     var body: some View {
         NavigationStack {
             Form {
@@ -537,7 +544,8 @@ struct LibraryOptionsSheet: View {
                     Toggle("Titles on covers", isOn: $titlesOnCovers)
                     Toggle("Continue reading bar", isOn: $showContinue)
                     Toggle("Quote of the launch", isOn: $showQuote)
-                    Toggle("Pick of the launch", isOn: $showPick)
+                    Toggle("Popular on MangaDex", isOn: $showDiscover)
+                    Toggle("Because you read…", isOn: $showBecause)
                 }
             }
             .scrollContentBackground(.hidden).background(Eclipse.surface)
@@ -642,8 +650,16 @@ struct ContinueBar: View {
                         Text("CONTINUE READING").font(.caption2.weight(.heavy)).tracking(1.2).foregroundStyle(Eclipse.highlight)
                         Text(series?.title ?? chapter.title).font(.subheadline.weight(.bold)).lineLimit(1)
                         HStack(spacing: 6) {
-                            Text(ChapterText.split(chapter.title).name).lineLimit(1)
-                            if let progress { Text("· \(progress.page + 1)/\(progress.pageCount)").monospacedDigit() }
+                            if let series, series.kind == .book {
+                                // A book: how far through it you are, not a page count within one part.
+                                let parts = max(1, series.chapters.count)
+                                let index = series.chapters.firstIndex { $0.id == chapter.id } ?? 0
+                                let within = progress.map { Double($0.page + 1) / Double(max(1, $0.pageCount)) } ?? 0
+                                Text("\(min(100, Int((Double(index) + within) / Double(parts) * 100)))% read").monospacedDigit()
+                            } else {
+                                Text(ChapterText.split(chapter.title).name).lineLimit(1)
+                                if let progress { Text("· \(progress.page + 1)/\(progress.pageCount)").monospacedDigit() }
+                            }
                         }.font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 4)
@@ -1010,8 +1026,9 @@ struct LibrarySettingsPage: View {
     @AppStorage("libraryDensity") private var density = LibraryDensity.comfortable.rawValue
     @AppStorage("libraryShowContinue") private var showContinue = true
     @AppStorage("libraryShowQuote") private var showQuote = true
-    @AppStorage("libraryShowPick") private var showPick = true
-    @AppStorage("libraryShowBecause") private var showBecause = true
+    @AppStorage("libraryShowDiscover") private var showDiscover = false
+    @AppStorage("libraryShowBecause") private var showBecause = false
+    @AppStorage("homeSetupDone") private var setupDone = false
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     @State private var alertMessage: String?
     var body: some View {
@@ -1022,9 +1039,16 @@ struct LibrarySettingsPage: View {
                 }.pickerStyle(.segmented)
                 Toggle("Titles on covers", isOn: $titlesOnCovers)
                 Toggle("Continue reading bar", isOn: $showContinue)
-                Toggle("Quote of the launch", isOn: $showQuote)
-                Toggle("Pick of the launch (MyAnimeList & Open Library)", isOn: $showPick)
+                Toggle(isOn: $showQuote) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Quote of the launch")
+                        Text("A line from a top-rated manga (live from AnimeChan and Yurippe, checked on AniList), with a button to read it")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Toggle("Popular on MangaDex", isOn: $showDiscover)
                 Toggle("“Because you read…” recommendations", isOn: $showBecause)
+                Button("Show the home setup again") { setupDone = false }
             }
             Section {
                 NavigationLink { CategoriesPage() } label: {
