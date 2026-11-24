@@ -22,20 +22,30 @@
 
 ### Library
 - Mihon-style home that scales with the screen: a cover grid in three sizes, unread / **NEW** / downloaded badges and progress bars.
-- Tabs with counts: All, your own **categories**, Reading, New, Downloaded, Manga, Manhwa, Manhua, Webtoons, Comics, On device (and Books, if you turn books on).
+- Tabs with counts: All, **Favourites**, your own **categories**, Reading, New, Downloaded, Manga, Manhwa, Manhua, Webtoons, Comics, On device (plus Light novels and Books when you turn those on). The kinds you chose in the setup come first.
 - **Select several series** to mark read, download, file into a category, hide or remove in one go.
-- **One launch card that doubles as a recommendation:** a manga quote pulled live from two anime quote databases (Yurippe and AnimeChan) plus a hand-picked list, kept only when AniList readers rate the work 77% or higher. It shows the cover, score and year; *Read* finds it on every site, and shuffle shows another. It never repeats a recent quote or suggests something already in your library, and it shrinks on small screens.
-- A **first-launch setup** lets you choose what the home shows (quote, Continue reading, Popular on MangaDex, Because you read…) and whether to read books too. Discover and Because you read are off by default. Change any of it in Settings › Library.
+- **One launch card that doubles as a recommendation:** a quote pulled live from two anime quote databases (Yurippe and AnimeChan) plus a hand-picked list, kept only when AniList readers rate the work 77% or higher and it's a kind you chose (manga, manhwa, manhua, light novels) from a country you chose. Top-rated picks of your kinds fill in where quotes are thin. It shows the cover, score and year; *Read* finds it on every site (light novels on the novel sites), and shuffle shows another. It never repeats a recent one or suggests something already in your library, and it shrinks on small screens.
+- A **first-launch setup** asks what you're into (manga, manhwa, manhua, webtoons, comics; light novels and books as options), where from (Japan, Korea, China, Taiwan; raws too), and what the home shows. Change any of it in Settings › Library.
+- **Bookmarks** in every reader (Library ⋯ › Bookmarks) and **favourite series**.
+- A plain-language **Guide** to every button and setting (Settings › Guide, the end of the setup, and the reader's settings).
 - **Full cover control:** Photos, Files, an image link, any page of the series, or the automatic cover. Covers tint the series page.
 - Hidden series behind Face ID, an app lock, reading stats with streaks, and Spotlight search for your library.
 
 ### Manga, manhwa, manhua, webtoons and comics
 - **Manga:** right to left with paper-curl page turns. **Manhwa, manhua and webtoons:** one seamless vertical strip. **Comics:** left to right.
 - Two-page spreads in landscape, or **split spreads** into two pages in portrait.
-- **Guided view:** finds the panels on a page and moves panel by panel (right to left for manga).
+- **Panels (guided view):** finds the panels on a page; edge taps zoom panel by panel (right to left for manga), then turn the page.
+- Blank white or black scan borders are trimmed automatically.
 - Keyboard and game controller page turns on iPad, auto-scroll for strips, haptics, and a warm night filter.
 - On-device **translation of raw chapters** (Vision text recognition and Apple Translation): bubbles are remembered, and a pinned raw series translates every chapter automatically.
 - Optional enhancement for low-resolution scans; image quality matched to the screen, memory and Low Power Mode.
+
+### Light novels and web novels (optional)
+Off unless you turn it on in the setup or Settings › Library; eclipsereader is a comics reader first.
+- Built in: **Syosetu** and **Kakuyomu** (where most Japanese light novels start; raw Japanese) and **Wuxiaworld** (official translations; free chapters read in full, paid ones say they're locked). Any other novel site works through reader-mode extraction: open a novel or one of its chapters in the browser and tap Add.
+- Set like a printed book (the same typefaces, themes and page curl as books), and a chapter carries straight on into the next when you turn past its last page.
+- **On-device translation** of raw chapters, paragraph by paragraph (Apple Translation), kept for next time; "always translate" per novel.
+- Offline downloads, bookmarks, progress and updates, like any series. Light novel EPUBs can be shelved with novels instead of books.
 
 ### Books (optional)
 Off unless you turn it on in the setup or Settings › Library (adding a book file turns it on). With books off, the Books tab and book search are hidden. There are no book quotes or book recommendations either way.
@@ -45,10 +55,11 @@ Off unless you turn it on in the setup or Settings › Library (adding a book fi
 - Search and download public-domain books from **Standard Ebooks** and **Project Gutenberg** in the app (Gutenberg downloads fall back to its mirror when gutenberg.org is down).
 - In the browser, a book's page (Standard Ebooks, Gutenberg, Wikisource or any page linking an EPUB) shows **Add book**; any EPUB, Kindle or FB2 download goes straight into the library.
 
-### Browse
-- **Native connections:** MangaDex (official API), WeebCentral and WEBTOON. **Global search** across them, Asura Scans, MangaDot and your saved sites.
-- More sites that add and read in the app: Asura Scans, MangaDot and Tapas. Every listed source is checked against the live site by the **Probe sources** workflow.
-- Built-in browser for any other site, with ads, trackers and "get the app" banners blocked.
+### Browse and sources
+- **Native connections:** MangaDex (official API), WeebCentral and WEBTOON. **Global search** across them and your other sources.
+- **Sources** come from one editable file, `EclipseReader/Resources/DefaultSources.json` (format documented in the file): they appear in Browse after install, grouped by what they offer, and open in the in-app browser. Browse › Manage sources edits, hides, removes, reorders and favourites them, adds your own, or adds a whole list (pasted, from a file, or a link you **subscribe** to, re-read at every launch).
+- **Sign in on any site** inside the in-app browser; sessions persist. A source set to "Read with my browser sign-in" loads its pages through that same session, so what your account can see opens in the reader too. Credentials and cookies never leave WebKit. Sign out of one site from its settings.
+- Built-in browser for any other site, with ads, trackers and "get the app" banners blocked. The connected sources are checked against the live sites by the **Probe sources** workflow.
 - The **Add** button only appears where a series can be read; elsewhere a guide explains why, with *Try anyway*.
 - **Fill missing chapters** (from Neko): when a site lacks some chapters (licensed MangaDex series, say), the series page can fill the gaps from the same series on another site. Only the missing numbers are added, they're refreshed on every update, and they give way once the main site posts them.
 - **Similar series** (from Neko): AniList readers' recommendations for any series, with scores. Tap one to find it on every site.
@@ -59,7 +70,7 @@ Off unless you turn it on in the setup or Settings › Library (adding a book fi
 - **Updates** with new-chapter notifications and an app badge. **History** grouped by day.
 - **AniList tracking:** link a series and finished chapters update your AniList list. Bring your own AniList client ID (Settings › Tracking).
 - **Siri and Shortcuts** ("Continue reading", "Check for new chapters") and **Handoff** between your devices.
-- **Files:** import CBZ, ZIP (including ZIP64), PDF, images, folders and every book format above.
+- **Files:** import CBZ, ZIP (including ZIP64), **CBR** (RAR 4 and 5 with pages stored uncompressed, the usual for comics; compressed RARs explain how to convert), PDF, images, folders and every book format above.
 - Backup and restore (automatic backups too), incognito mode. No analytics or tracking.
 
 ## Install (sideload)
