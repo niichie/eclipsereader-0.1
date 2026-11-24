@@ -17,7 +17,18 @@ final class BookSearchModel: ObservableObject {
             tasks.append(Task { [weak self] in
                 let phase: Phase
                 do { phase = .done(try await withDeadline(14) { try await catalog.search(term) }) }
-                catch { phase = .failed(Self.explain(error, site: catalog.rawValue)) }
+                catch {
+                    let siteError = error
+                    switch catalog {
+                    case .anna, .zlibrary, .mobilism, .unglue:
+                        let page = catalog.searchURL(term)
+                        do {
+                            let html = try await PageRenderer.searchHTML(for: page)
+                            phase = .done(try catalog.results(html, page: page, query: term))
+                        } catch { phase = .failed(Self.explain(siteError, site: catalog.rawValue)) }
+                    default: phase = .failed(Self.explain(siteError, site: catalog.rawValue))
+                    }
+                }
                 guard !Task.isCancelled, self?.query == term else { return }
                 self?.phases[catalog] = phase
             })

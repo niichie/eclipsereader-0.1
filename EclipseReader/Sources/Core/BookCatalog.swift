@@ -72,13 +72,14 @@ public enum BookCatalog: String, CaseIterable, Sendable {
     }
 
     func results(_ html: String, page: URL, query: String) throws -> [FreeBook] {
-        let pattern: String = switch self {
-        case .libgen: #"(?is)href=["'](edition\.php\?id=\d+)["'][^>]*>(.*?)</a>"#
-        case .anna: #"(?is)<a\b[^>]*href=["'](/md5/[a-f0-9]{32})["'][^>]*>(.*?)</a>"#
-        case .unglue: #"(?is)<a\b[^>]*href=["'](/work/\d+/)["'][^>]*>(.*?)</a>"#
-        case .zlibrary: #"(?is)<a\b[^>]*href=["'](/book/[^"']+)["'][^>]*>(.*?)</a>"#
-        case .mobilism: #"(?is)<a\b[^>]*href=["']([^"']*viewtopic\.php\?[^"']+)["'][^>]*>(.*?)</a>"#
-        case .wikisource: #"(?is)<div class="mw-search-result-heading">\s*<a href="([^"]+)"[^>]*>(.*?)</a>"#
+        let pattern: String
+        switch self {
+        case .libgen: pattern = #"(?is)href=["'](edition\.php\?id=\d+)["'][^>]*>(.*?)</a>"#
+        case .anna: pattern = #"(?is)<a\b[^>]*href=["'](/md5/[a-f0-9]{32})["'][^>]*>(.*?)</a>"#
+        case .unglue: pattern = #"(?is)<a\b[^>]*href=["'](/work/\d+/)["'][^>]*>(.*?)</a>"#
+        case .zlibrary: pattern = #"(?is)<a\b[^>]*href=["'](/book/[^"']+)["'][^>]*>(.*?)</a>"#
+        case .mobilism: pattern = #"(?is)<a\b[^>]*href=["']([^"']*viewtopic\.php\?[^"']+)["'][^>]*>(.*?)</a>"#
+        case .wikisource: pattern = #"(?is)<div class="mw-search-result-heading">\s*<a href="([^"]+)"[^>]*>(.*?)</a>"#
         default: return []
         }
         var seen = Set<URL>()

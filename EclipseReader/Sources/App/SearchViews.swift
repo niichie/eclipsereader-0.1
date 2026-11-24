@@ -60,7 +60,7 @@ final class GlobalSearchModel: ObservableObject {
     }
     private static func rendered(_ source: SearchSource, query: String) async -> [DiscoverItem] {
         guard case .site(let root) = source.kind, let url = GlobalSearch.searchURLs(root: root, query: query).last,
-              let html = try? await PageRenderer.html(for: url, timeout: 15) else { return [] }
+              let html = try? await PageRenderer.searchHTML(for: url) else { return [] }
         return GlobalSearch.relevant(GlobalSearch.results(in: html, base: url), to: query)
     }
     func cancel() {

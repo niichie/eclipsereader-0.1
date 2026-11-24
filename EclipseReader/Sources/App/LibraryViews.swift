@@ -240,7 +240,7 @@ struct LibraryView: View {
                                     Image(systemName: "globe").foregroundStyle(Eclipse.highlight)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("Search every site for “\(query)”").font(.subheadline.weight(.semibold))
-                                        Text("MangaDex, WeebCentral, WEBTOON and your sites").font(.caption).foregroundStyle(.secondary)
+                                        Text("Search your enabled sources").font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer()
                                     Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
@@ -255,7 +255,7 @@ struct LibraryView: View {
                                         Image(systemName: "text.book.closed").foregroundStyle(Eclipse.highlight)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text("Find the book “\(query)”").font(.subheadline.weight(.semibold))
-                                            Text("Standard Ebooks and Project Gutenberg").font(.caption).foregroundStyle(.secondary)
+                                            Text("Search all \(BookCatalog.allCases.count) book catalogs").font(.caption).foregroundStyle(.secondary)
                                         }
                                         Spacer()
                                         Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)

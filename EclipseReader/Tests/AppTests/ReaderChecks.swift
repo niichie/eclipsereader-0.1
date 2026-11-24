@@ -24,6 +24,8 @@ final class ReaderChecks: XCTestCase {
         let card = VerifiedQuote(item: item, destination: .manga(page.url, info), thumbnail: try XCTUnwrap(art.pngData()))
         for width: CGFloat in [300, 650] {
             let view = SpotlightCard(card: card, width: width, read: {}, next: {}, close: {}).frame(width: width)
+            let fitting = UIHostingController(rootView: view).sizeThatFits(in: CGSize(width: width, height: 360))
+            XCTAssertLessThan(fitting.height, width < 520 ? 120 : 145, "Short quotes should fit the artwork and controls")
             let window = show(view, size: CGSize(width: width, height: 360))
             let visible = await wait(5) {
                 let shot = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in

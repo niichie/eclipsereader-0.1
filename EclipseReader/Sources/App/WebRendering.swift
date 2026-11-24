@@ -62,6 +62,16 @@ final class PageRenderer: NSObject, WKNavigationDelegate {
         webView.navigationDelegate = self
     }
 
+    private static var activeSearches = 0
+
+    static func searchHTML(for url: URL) async throws -> String {
+        while activeSearches >= 3 { try await Task.sleep(for: .milliseconds(150)) }
+        try Task.checkCancellation()
+        activeSearches += 1
+        defer { activeSearches -= 1 }
+        return try await html(for: url, timeout: 10)
+    }
+
     static func html(for url: URL, timeout: TimeInterval = 25) async throws -> String {
         guard WebLink.publicHTTPS(url) else { throw SourceError.insecureURL }
         let renderer = PageRenderer()
