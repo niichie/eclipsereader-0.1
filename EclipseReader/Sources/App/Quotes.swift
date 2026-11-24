@@ -8,6 +8,8 @@ final class SpotlightStore: ObservableObject {
     @Published private(set) var manga: Spotlight?
     @Published private(set) var loadingManga = false
     private var mangaQueue: [Spotlight] = []
+    private var generation = UUID()
+    private(set) var openVerified: (() -> MangaSeries?)?
 
     private static let recentKey = "spotlightRecent"
     private static let animeChanKey = "animeChanCalls"
@@ -24,27 +26,78 @@ final class SpotlightStore: ObservableObject {
 
     /// Your kinds changed (the setup): start over with suggestions that fit.
     func reset() {
+        generation = UUID()
+        loadingManga = false
+        openVerified = nil
         manga = nil
         mangaQueue = []
     }
-    func loadManga(owned: Set<String>) async {
-        guard manga == nil, !loadingManga else { return }
-        await refillManga(owned: owned)
-        showNextManga()
+    func loadManga(owned: Set<String>, model: LibraryModel) async {
+        guard manga == nil else { return }
+        await nextManga(owned: owned, model: model)
     }
-    func nextManga(owned: Set<String>) async {
-        if mangaQueue.isEmpty { await refillManga(owned: owned) }
-        showNextManga()
-    }
-    private func showNextManga() {
-        guard !mangaQueue.isEmpty else { return }
-        let next = mangaQueue.removeFirst()
-        manga = next
-        remember(next.quote.work, next.work)
-    }
-    private func refillManga(owned: Set<String>) async {
+    func nextManga(owned: Set<String>, model: LibraryModel) async {
+        guard !loadingManga else { return }
+        let request = generation
         loadingManga = true
-        defer { loadingManga = false }
+        defer { if generation == request { loadingManga = false } }
+        if mangaQueue.isEmpty {
+            let candidates = await refillManga(owned: owned)
+            guard generation == request, !Task.isCancelled else { return }
+            mangaQueue = candidates
+        }
+        let lastKind = UserDefaults.standard.string(forKey: "spotlightLastKind")
+        let lines = UserDefaults.standard.stringArray(forKey: "spotlightRecentLines") ?? []
+        while !mangaQueue.isEmpty {
+            let index = mangaQueue.firstIndex { ($0.media?.category ?? .manga).rawValue != lastKind } ?? 0
+            let candidate = mangaQueue.remove(at: index)
+            let line = QuoteFeed.workKey(candidate.quote.text)
+            guard !lines.contains(line), !recent.contains(QuoteFeed.workKey(candidate.work)) else { continue }
+            let open = await verifiedDestination(candidate, model: model)
+            guard generation == request, !Task.isCancelled else { return }
+            guard let open else { continue }
+            openVerified = open
+            manga = candidate
+            remember(candidate.quote.work, candidate.work)
+            UserDefaults.standard.set(Array((lines + [line]).suffix(120)), forKey: "spotlightRecentLines")
+            UserDefaults.standard.set((candidate.media?.category ?? .manga).rawValue, forKey: "spotlightLastKind")
+            break
+        }
+    }
+
+    private func verifiedDestination(_ item: Spotlight, model: LibraryModel) async -> (() -> MangaSeries?)? {
+        let novel = item.media?.category == .novels
+        guard !novel || Features.novelsOn else { return nil }
+        let sources = GlobalSearchModel.sources(saved: model.sources, novels: novel)
+        let aliases = Set([item.work, item.quote.work, item.media?.native].compactMap { $0 }.map(QuoteFeed.workKey))
+        for source in sources {
+            guard !Task.isCancelled else { return nil }
+            switch source.kind {
+            case .site where source.host != "mangadot.net": continue
+            default: break
+            }
+            if model.sources.contains(where: { $0.hidden == true && ChapterMerge.site($0.url.host) == source.host }) { continue }
+            let query = novel ? item.media?.native ?? item.work : item.work
+            guard let hits = try? await GlobalSearch.search(source, query: query) else { continue }
+            for hit in hits.prefix(10) where aliases.contains(QuoteFeed.workKey(hit.title)) {
+                if novel {
+                    guard let info = try? await model.novelInfo(hit.url), let first = info.chapters.first,
+                          let text = try? await model.novelText(first), !text.locked, !text.blocks(base: first.url).isEmpty else { continue }
+                    return { model.commitNovel(info.home ?? hit.url, info, addToShelf: false) }
+                }
+                guard let info = try? await model.inspect(hit.url), let first = info.chapters.first,
+                      let pages = try? await model.pages(for: first), let page = pages.first,
+                      let bytes = try? await model.pipeline.data(for: page, chapter: first), UIImage(data: bytes) != nil else { continue }
+                return {
+                    if case .series(let series, _) = model.commit(hit.url, info, addToShelf: false) { return series }
+                    return nil
+                }
+            }
+        }
+        return nil
+    }
+
+    private func refillManga(owned: Set<String>) async -> [Spotlight] {
         var skip = Set(recent).union(owned)
         for item in mangaQueue + [manga].compactMap({ $0 }) { skip.insert(QuoteFeed.workKey(item.quote.work)) }
         // Live lines (two databases at once), then the built-in list as a backup.
@@ -75,10 +128,9 @@ final class SpotlightStore: ObservableObject {
         }
         if rated.isEmpty && preference.categories.contains(.manga) {
             // Everything shown lately: start the cycle over rather than show nothing.
-            recent = []
-            rated = CuratedQuotes.shuffled(CuratedQuotes.manga).filter(QuoteFeed.usable).prefix(6).map { Spotlight(quote: $0, media: nil) }
+            rated = CuratedQuotes.shuffled(CuratedQuotes.manga).filter { QuoteFeed.usable($0) && !skip.contains(QuoteFeed.workKey($0.work)) }.prefix(6).map { Spotlight(quote: $0, media: nil) }
         }
-        mangaQueue += rated
+        return rated
     }
     /// A pick after every `every` quotes, the rest at the end.
     static func interleave(_ quotes: [Spotlight], _ picks: [Spotlight], every: Int) -> [Spotlight] {

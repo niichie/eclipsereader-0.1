@@ -58,6 +58,13 @@ final class LibraryModel: ObservableObject {
                 recoveryMessage = "Saved progress could not be read or backed up. Check available device storage."
             }
         }
+        if restored.showsBerserk == nil {
+            restored.showsBerserk = restored.favorites?.contains(Self.berserkID) == true || restored.categories?.contains(where: { $0.seriesIDs.contains(Self.berserkID) }) == true || restored.chapters.contains { chapter in
+                restored.progress[chapter.id] != nil || restored.lastChapterID == chapter.id
+                    || restored.bookmarks?.contains(where: { mark in mark.chapterID == chapter.id }) == true
+            }
+            restored.sites?.removeAll { $0.bundledID == "readberserk" && $0.url == ReadBerserkParser.home && $0.name == "ReadBerserk" }
+        }
         // Links added by an earlier build were single chapters; keep them as one-chapter series.
         if let shelf = restored.shelf, !shelf.isEmpty {
             let migrated = shelf.map { MangaSeries(id: "web-" + $0.id, url: $0.url, title: $0.title, kind: .web, chapters: [$0]) }
@@ -142,6 +149,7 @@ final class LibraryModel: ObservableObject {
 
     @discardableResult
     func addToLibrary(_ series: MangaSeries) -> MangaSeries {
+        if series.id == Self.berserkID { state.showsBerserk = true; save(); return berserk }
         guard var records = state.series, let i = records.firstIndex(where: { $0.id == series.id }),
               !records[i].isLibraryMember else { return self.series(id: series.id) ?? series }
         records[i].inLibrary = true
@@ -160,7 +168,7 @@ final class LibraryModel: ObservableObject {
     }
     /// Berserk first, then everything the user added.
     var librarySeries: [MangaSeries] {
-        let all = [berserk] + libraryMembers
+        let all = (state.showsBerserk == true ? [berserk] : []) + libraryMembers
         guard !showHidden, let hidden = state.hiddenSeries, !hidden.isEmpty else { return all }
         return all.filter { !hidden.contains($0.id) }
     }
@@ -611,7 +619,7 @@ final class LibraryModel: ObservableObject {
         return series
     }
     func remove(_ series: MangaSeries) {
-        guard series.id != Self.berserkID else { return }
+        if series.id == Self.berserkID { state.showsBerserk = false; save(); return }
         state.series = allSeries.filter { $0.id != series.id }
         state.styleOverrides?[series.id] = nil
         state.detectedStyles?[series.id] = nil
@@ -683,7 +691,7 @@ final class LibraryModel: ObservableObject {
         if !force, let last = state.lastUpdateCheck, Date().timeIntervalSince(last) < 6 * 3600 { return }
         checking = true; defer { checking = false }
         foundThisCheck = [:]
-        await refresh()
+        if state.showsBerserk == true { await refresh() }
         // Series you're reading first, so a short background window covers what matters most.
         let order = libraryMembers.filter { $0.isOnline && ($0.kind != .novel || Features.novelsOn) }
             .sorted { (lastRead($0) ?? .distantPast) > (lastRead($1) ?? .distantPast) }

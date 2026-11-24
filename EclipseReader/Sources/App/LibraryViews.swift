@@ -137,7 +137,6 @@ struct LibraryView: View {
     @State private var showingBookmarks = false
     @State private var bookSearch: QuoteSearch?
     @ObservedObject private var spotlights = SpotlightStore.shared
-    @State private var quoteSearch: QuoteSearch?
     struct QuoteSearch: Identifiable {
         let query: String
         var novels = false
@@ -220,7 +219,7 @@ struct LibraryView: View {
                             if let spotlight = spotlights.manga {
                                 SpotlightCard(spotlight: spotlight, width: contentWidth, owned: ownedSeries(spotlight) != nil,
                                               read: { readSpotlight(spotlight) },
-                                              next: { Task { await spotlights.nextManga(owned: ownedKeys) } },
+                                              next: { Task { await spotlights.nextManga(owned: ownedKeys, model: model) } },
                                               close: { withAnimation(.snappy) { quoteClosed = true } })
                             } else if spotlights.loadingManga {
                                 SpotlightPlaceholder(width: contentWidth)
@@ -304,7 +303,7 @@ struct LibraryView: View {
             }
             .confirmationDialog("Remove \(selection.count) series from the library?", isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) {
-                    for series in model.librarySeries where selection.contains(series.id) && series.id != LibraryModel.berserkID {
+                    for series in model.librarySeries where selection.contains(series.id) {
                         model.remove(series)
                     }
                     endSelection()
@@ -335,9 +334,6 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $options) { LibraryOptionsSheet().environmentObject(model).presentationDetents([.medium, .large]) }
             .sheet(isPresented: $searchingEverywhere) { GlobalSearchSheet(query: query).environmentObject(model) }
-            .sheet(item: $quoteSearch) { item in
-                GlobalSearchSheet(query: item.query, novels: item.novels, nativeQuery: item.native).environmentObject(model)
-            }
             .sheet(item: $bookSearch) { item in BookSearchSheet(query: item.query).environmentObject(model) }
             .task {
                 if !setupDone && !ProcessInfo.processInfo.arguments.contains("--ui-testing") {
@@ -347,7 +343,7 @@ struct LibraryView: View {
             }
             .task(id: "\(showQuote)|\(categoriesRaw)|\(novelsOn)") {
                 guard showQuote, !ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
-                await spotlights.loadManga(owned: ownedKeys)
+                await spotlights.loadManga(owned: ownedKeys, model: model)
             }
             .sheet(isPresented: $showingBookmarks) {
                 BookmarksSheet { chapter in showingBookmarks = false; reader = chapter }.environmentObject(model)
@@ -359,7 +355,7 @@ struct LibraryView: View {
                 SeriesView(seriesID: series.id, reader: $reader).zoomDestination(series.id, in: zoom)
             }
             .task {
-                if model.state.chapters.isEmpty && !ProcessInfo.processInfo.arguments.contains("--ui-testing") { await model.refresh() }
+                if model.state.showsBerserk == true && model.state.chapters.isEmpty && !ProcessInfo.processInfo.arguments.contains("--ui-testing") { await model.refresh() }
                 await model.ensureCovers()
                 await model.checkForUpdates()
             }
@@ -383,9 +379,7 @@ struct LibraryView: View {
     /// The launch card's series: open it if it's yours, otherwise search every site for it.
     private func readSpotlight(_ spotlight: Spotlight) {
         if let owned = ownedSeries(spotlight) { openSeries = owned }
-        else if spotlight.media?.category == .novels {
-            quoteSearch = QuoteSearch(query: spotlight.work, novels: true, native: spotlight.media?.native)
-        } else { quoteSearch = QuoteSearch(query: spotlight.work) }
+        else { openSeries = spotlights.openVerified?() }
     }
     /// A book from a quote or pick: open your copy, or look for it in the free libraries.
     private func readBook(_ title: String) {
@@ -863,9 +857,7 @@ struct LibraryGrid: View {
                         Button { model.setHidden(!model.isHidden(item), item) } label: {
                             Label(model.isHidden(item) ? "Unhide" : "Hide", systemImage: model.isHidden(item) ? "eye" : "eye.slash")
                         }
-                        if item.id != LibraryModel.berserkID {
-                            Button(role: .destructive) { model.remove(item) } label: { Label("Remove from library", systemImage: "trash") }
-                        }
+                        Button(role: .destructive) { model.remove(item) } label: { Label("Remove from library", systemImage: "trash") }
                     }
             }
         }

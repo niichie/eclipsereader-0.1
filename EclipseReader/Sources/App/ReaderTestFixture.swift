@@ -124,6 +124,7 @@ struct ReaderTestFixture: MangaSource, HTTPTransport {
 
     @MainActor static func demoState() -> LibraryState {
         var state = LibraryState()
+        state.showsBerserk = true
         state.defaultsVersion = 4
         state.chapters = (1...42).map { Chapter(url: URL(string: "https://example.invalid/berserk/\($0)")!, title: "Episode \($0)", number: "\($0)",
                                                 published: "Mar \($0 % 28 + 1), 2024") }

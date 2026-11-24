@@ -80,11 +80,15 @@ public enum GlobalSearch {
     /// Keeps results whose title shares a word with the query. Sites without a real search page
     /// answer `?s=` with their home page; this stops those covers showing up as matches.
     public static func relevant(_ items: [DiscoverItem], to query: String) -> [DiscoverItem] {
-        let words = query.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 2 }
+        func tokens(_ text: String) -> [String] {
+            text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+                .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        }
+        let words = tokens(query)
         guard !words.isEmpty else { return items }
         return items.filter { item in
-            let title = item.title.lowercased()
-            return words.contains { title.contains($0) }
+            let title = tokens(item.title)
+            return words.allSatisfy { word in title.contains { $0.hasPrefix(word) } }
         }
     }
 

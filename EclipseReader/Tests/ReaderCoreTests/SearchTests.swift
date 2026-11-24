@@ -40,5 +40,8 @@ final class SearchTests: XCTestCase {
                      DiscoverItem(id: "b", title: "Omniscient Reader", url: URL(string: "https://x.example.com/manga/b")!, cover: nil, detail: nil)]
         XCTAssertEqual(GlobalSearch.relevant(items, to: "solo").map(\.id), ["a"])
         XCTAssertEqual(GlobalSearch.relevant(items, to: "  ").count, 2)
+        let titles = ["Guidebook", "Cover of Kakegurui", "Xiao Gǔ Niang"]
+        let results = titles.map { DiscoverItem(id: $0, title: $0, url: items[0].url, cover: nil, detail: nil) }
+        XCTAssertEqual(GlobalSearch.relevant(results, to: "Xiao Gu Niang").map(\.title), ["Xiao Gǔ Niang"])
     }
 }

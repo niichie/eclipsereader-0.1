@@ -45,7 +45,7 @@ final class LibraryUITests: XCTestCase {
     @MainActor
     func testLibraryAndSettingsSurviveRotation() {
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing"] // Disables automatic network refresh, never changes source data.
+        app.launchArguments = ["--ui-testing", "--demo-library"] // Disables automatic network refresh, never changes source data.
         app.launch()
         XCTAssertTrue(app.buttons["chapterBrowser"].waitForExistence(timeout: 10))
         app.buttons["Settings"].firstMatch.tap()

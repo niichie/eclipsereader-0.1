@@ -45,7 +45,7 @@ final class GlobalSearchModel: ObservableObject {
         return list
     }
     /// Destinations with no search page the app can read (their search runs inside their own app pages).
-    static let searchless: Set<String> = ["shueisha.co.jp", "j-novel.club", "royalroad.com", "comicbookplus.com", "digitalcomicmuseum.com", "tapas.io"]
+    static let searchless: Set<String> = ["readberserk.com", "shueisha.co.jp", "j-novel.club", "royalroad.com", "comicbookplus.com", "digitalcomicmuseum.com", "tapas.io"]
 
     /// `queries`: a different search text for some sources (by id), like a Japanese title for Syosetu.
     func run(_ text: String, sources: [SearchSource], queries: [String: String] = [:]) {

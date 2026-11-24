@@ -101,7 +101,6 @@
     { "id": "getcomics", "name": "GetComics", "url": "https://getcomics.org/", "category": "comics" },
     { "id": "lightnovelpub", "name": "LightNovelPub", "url": "https://lightnovelpub.com/", "category": "novels" },
     { "id": "wuxiaworld-site", "name": "WuxiaWorld.site", "url": "https://wuxiaworld.site/", "category": "novels" },
-    { "id": "justlightnovels", "name": "JustLightNovels", "url": "https://justlightnovels.com/", "category": "novels" },
-    { "id": "readberserk", "name": "ReadBerserk", "url": "https://readberserk.com/", "category": "manga" }
+    { "id": "justlightnovels", "name": "JustLightNovels", "url": "https://justlightnovels.com/", "category": "novels" }
   ]
 }

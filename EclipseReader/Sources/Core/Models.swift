@@ -279,6 +279,7 @@ public struct LibraryState: Codable, Sendable {
     public var chapters: [Chapter] = []
     public var progress: [String: ChapterProgress] = [:]
     public var lastChapterID: String?
+    public var showsBerserk: Bool?
     public var catalogUpdated: Date?
     // Manga added from web links. Optional so older saved libraries still decode.
     public var shelf: [Chapter]?
