@@ -240,8 +240,19 @@ enum PageEnhancer {
         return (scale, -ink * scale)
     }
 
+    /// Edge settings. `smoothing` is a blur (in source pixels) after enlarging that rounds off JPEG
+    /// blocks before the curve firms the edge up again; without it 3-4x enlargements look ragged.
+    struct Tuning: Sendable {
+        var denoise = 0.03
+        var smoothing = 0.45
+        var curve = 0.07
+        var sharpenRadius = 0.6
+        var sharpenAmount = 0.55
+        static let standard = Tuning()
+    }
+
     /// Returns nil when the page doesn't need to change (already clean and large enough).
-    static func enhance(_ image: CGImage, targetLongSide: Double) -> CGImage? {
+    static func enhance(_ image: CGImage, targetLongSide: Double, tuning: Tuning = .standard) -> CGImage? {
         let long = Double(max(image.width, image.height))
         guard long > 0, let analysis = analyse(image) else { return nil }
         let area = Double(image.width) * Double(image.height)
@@ -268,14 +279,17 @@ enum PageEnhancer {
         // Edge pixels repeat outward so the filters below don't darken the page border.
         page = page.clampedToExtent()
         // JPEG blocking and speckle, at the source size where it is one or two pixels wide.
-        page = page.applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.02, "inputSharpness": 0.4])
+        page = page.applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": tuning.denoise, "inputSharpness": 0.4])
         let extent = CIImage(cgImage: image).extent
         if upscaling {
             page = page.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0])
         }
         let output = extent.applying(CGAffineTransform(scaleX: upscaling ? scale : 1, y: upscaling ? scale : 1)).integral
+        if upscaling, tuning.smoothing > 0 {
+            page = page.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: tuning.smoothing * scale])
+        }
         // Solid ink and clean edges: black-and-white pages get a firmer curve than colour art.
-        let curve: [CGFloat] = analysis.grayscale ? [0.05, 0.95] : [0.21, 0.79]
+        let curve: [CGFloat] = analysis.grayscale ? [CGFloat(tuning.curve), 1 - CGFloat(tuning.curve)] : [0.21, 0.79]
         page = page.applyingFilter("CIToneCurve", parameters: [
             "inputPoint0": CIVector(x: 0, y: 0),
             "inputPoint1": CIVector(x: 0.18, y: curve[0]),
@@ -284,8 +298,8 @@ enum PageEnhancer {
             "inputPoint4": CIVector(x: 1, y: 1),
         ])
         page = page.applyingFilter("CIUnsharpMask", parameters: [
-            kCIInputRadiusKey: max(0.8, 0.8 * scale),
-            kCIInputIntensityKey: analysis.grayscale ? 0.8 : 0.5,
+            kCIInputRadiusKey: max(0.8, tuning.sharpenRadius * scale),
+            kCIInputIntensityKey: analysis.grayscale ? tuning.sharpenAmount : min(0.5, tuning.sharpenAmount),
         ]).cropped(to: output)
         if analysis.grayscale {
             return context.createCGImage(page, from: output, format: .L8, colorSpace: CGColorSpaceCreateDeviceGray())

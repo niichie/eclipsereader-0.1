@@ -223,6 +223,22 @@ final class ReaderChecks: XCTestCase {
         XCTAssertGreaterThan(paper(after), 245, "grey paper should come out white")
         XCTAssertLessThan(ink(after), 20, "washed-out ink should come out black")
         XCTAssertGreaterThan(sharpness(after, width: w, height: h), sharpness(before, width: w, height: h) * 1.3)
+        // Variants of the edge settings, side by side in the log, for tuning by eye.
+        let variants: [(String, PageEnhancer.Tuning)] = [
+            ("v-old", .init(denoise: 0.02, smoothing: 0, curve: 0.05, sharpenRadius: 0.8, sharpenAmount: 0.8)),
+            ("v-soft", .init(denoise: 0.03, smoothing: 0.35, curve: 0.07, sharpenRadius: 0.6, sharpenAmount: 0.55)),
+            ("v-std", .standard),
+            ("v-smooth", .init(denoise: 0.04, smoothing: 0.6, curve: 0.04, sharpenRadius: 0.5, sharpenAmount: 0.45)),
+        ]
+        for (name, tuning) in variants {
+            let image = try XCTUnwrap(PageEnhancer.enhance(scan, targetLongSide: 1800, tuning: tuning))
+            let g = try grey(image, width: w, height: h)
+            let ctx = try XCTUnwrap(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                              space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+            g.withUnsafeBytes { ctx.data?.copyMemory(from: $0.baseAddress!, byteCount: w * h) }
+            let cropped = try XCTUnwrap(ctx.makeImage()?.cropping(to: CGRect(x: 300, y: 150, width: 640, height: 420)))
+            print("CHECK|image|\(name)|" + (try XCTUnwrap(UIImage(cgImage: cropped).pngData())).base64EncodedString())
+        }
         // A before/after crop of the lettering, for checking by eye in the log.
         let crop = CGRect(x: 300, y: 150, width: 640, height: 420)
         for (name, image) in [("before", before), ("after", after)] {
