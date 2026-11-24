@@ -13,39 +13,24 @@ final class GlobalSearchModel: ObservableObject {
     @Published private(set) var query = ""
     private var tasks: [Task<Void, Never>] = []
 
-    /// Pictures: MangaDex, WeebCentral and WEBTOON, then your other picture sources. Novels (when `novels`): Syosetu,
-    /// Kakuyomu and your novel sources. Hidden sources, categories you didn't choose, and sites that only read in their
-    /// own browser pages (no search page) are left out.
+    /// Use the installed catalog for membership; native adapters only choose how a site is searched.
     static func sources(saved: [SavedSite], novels: Bool = false) -> [SearchSource] {
-        let chosen = Interests.categories
-        let visible = saved.filter { $0.hidden != true && ($0.category.map(chosen.contains) ?? true) }
-        if novels {
-            var list: [SearchSource] = []
-            if chosen.contains(.novels) {
-                list = [SearchSource(name: "Syosetu", kind: .syosetu), SearchSource(name: "Kakuyomu", kind: .kakuyomu)]
+        var seen = Set<String>()
+        return saved.compactMap { site in
+            guard site.hidden != true, (site.category == .novels) == novels,
+                  site.category.map(Interests.categories.contains) ?? true else { return nil }
+            let kind: SearchSource.Kind = switch site.url.host?.lowercased().replacingOccurrences(of: "www.", with: "") {
+            case "mangadex.org": .mangaDex
+            case "weebcentral.com": .weebCentral
+            case "webtoons.com": .webtoons
+            case "ncode.syosetu.com", "syosetu.com": .syosetu
+            case "kakuyomu.jp": .kakuyomu
+            default: .site(site.url)
             }
-            var hosts = Set(list.map(\.host))
-            for site in visible where site.category == .novels && site.native != true && !searchless.contains(ChapterMerge.site(site.url.host)) {
-                let source = SearchSource(name: site.name, kind: .site(site.url), novels: true)
-                if !source.host.isEmpty, hosts.insert(source.host).inserted { list.append(source) }
-            }
-            return list
+            let source = SearchSource(name: site.name, kind: kind, novels: novels)
+            return seen.insert(source.id).inserted ? source : nil
         }
-        var list: [SearchSource] = [
-            SearchSource(name: "MangaDex", kind: .mangaDex),
-            SearchSource(name: "WeebCentral", kind: .weebCentral),
-            SearchSource(name: "WEBTOON", kind: .webtoons),
-        ]
-        var hosts = Set(list.map(\.host))
-        for site in visible where site.category != .novels && site.native != true && !searchless.contains(ChapterMerge.site(site.url.host)) {
-            let source = SearchSource(name: site.name, kind: .site(site.url))
-            guard !source.host.isEmpty, !source.host.hasSuffix("webtoons.com"), hosts.insert(source.host).inserted else { continue }
-            list.append(source)
-        }
-        return list
     }
-    /// Destinations with no search page the app can read (their search runs inside their own app pages).
-    static let searchless: Set<String> = ["readberserk.com", "shueisha.co.jp", "j-novel.club", "royalroad.com", "comicbookplus.com", "digitalcomicmuseum.com", "tapas.io"]
 
     /// `queries`: a different search text for some sources (by id), like a Japanese title for Syosetu.
     func run(_ text: String, sources: [SearchSource], queries: [String: String] = [:]) {
@@ -91,6 +76,7 @@ struct GlobalSearchResults: View {
     @ObservedObject var search: GlobalSearchModel
     /// Shows a busy overlay on the item being added or opened.
     var busyID: String?
+    @State private var browser: BrowseTarget?
     var showLibrary = true
     let pick: (DiscoverItem) -> Void
     var body: some View {
@@ -131,6 +117,13 @@ struct GlobalSearchResults: View {
             }
             let empty = search.sections.filter { if case .done(let items) = $0.phase { return items.isEmpty } else { return false } }
             let failed = search.sections.filter { $0.phase == .failed }
+            ForEach(failed) { section in
+                if case .site(let root) = section.source.kind {
+                    Button("Search \(section.source.name) in browser") {
+                        browser = BrowseTarget(url: GlobalSearch.searchURLs(root: root, query: search.query).first ?? root)
+                    }
+                }
+            }
             if !failed.isEmpty && search.finished {
                 Text("Couldn’t search " + failed.map(\.source.name).joined(separator: ", ") + " (the site didn’t answer).")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -140,6 +133,7 @@ struct GlobalSearchResults: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
+        .fullScreenCover(item: $browser) { target in MangaBrowserView(start: target.url).environmentObject(library) }
     }
     private func row<Content: View>(title: String, host: String?, count: Int?, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -364,6 +358,8 @@ struct GlobalSearchSheet: View {
     /// Search the novel sources instead (with the title in its own language for Japanese sites).
     let novels: Bool
     let nativeQuery: String?
+    @State private var browsing: BrowseTarget?
+    @AppStorage(Features.booksKey) private var booksOn = false
     init(query: String, novels: Bool = false, nativeQuery: String? = nil) {
         _query = State(initialValue: query); self.novels = novels; self.nativeQuery = nativeQuery
     }
@@ -378,6 +374,9 @@ struct GlobalSearchSheet: View {
                     }
                     .padding(.horizontal, 14).frame(height: 50).eclipseCard(cornerRadius: 14)
                     if let error { Text(error).font(.footnote).foregroundStyle(.orange) }
+                    if !novels, booksOn, !search.query.isEmpty {
+                        BooksBrowseSection(browsing: $browsing, opened: $opened, externalQuery: search.query)
+                    }
                     GlobalSearchResults(search: search, busyID: busyID) { item in open(item) }
                 }
                 .padding(20).frame(maxWidth: 900).frame(maxWidth: .infinity)
@@ -386,6 +385,7 @@ struct GlobalSearchSheet: View {
             .navigationTitle("Search everywhere").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { search.cancel(); dismiss() }.fontWeight(.semibold) }
             .task { if search.sections.isEmpty { run() } }
+            .fullScreenCover(item: $browsing) { target in MangaBrowserView(start: target.url).environmentObject(model) }
             .sheet(item: $opened) { series in SeriesSheet(series: series).environmentObject(model) }
         }
         .preferredColorScheme(.dark)
@@ -397,7 +397,7 @@ struct GlobalSearchSheet: View {
             if let native = nativeQuery { for id in ["syosetu", "kakuyomu"] { queries[id] = QuoteFeed.searchable(native: native) } }
             search.run(query, sources: GlobalSearchModel.sources(saved: model.state.sites ?? [], novels: true), queries: queries)
         } else {
-            search.run(query, sources: GlobalSearchModel.sources(saved: model.state.sites ?? []))
+            search.run(query, sources: GlobalSearchModel.sources(saved: model.sources) + (Features.novelsOn ? GlobalSearchModel.sources(saved: model.sources, novels: true) : []))
         }
     }
     private func open(_ item: DiscoverItem) {

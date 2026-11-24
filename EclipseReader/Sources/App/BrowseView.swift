@@ -60,6 +60,7 @@ struct BrowseView: View {
                                 Button("Clear") { withAnimation { self.searchingText = nil; search.cancel(); address = "" } }
                                     .font(.subheadline.weight(.semibold))
                             }
+                            if booksOn { BooksBrowseSection(browsing: $browsing, opened: $opened, externalQuery: searchingText) }
                             GlobalSearchResults(search: search, busyID: addingID) { item in add(item) }
                             Button { webSearch(searchingText) } label: {
                                 Label("Search the web for “\(searchingText)”", systemImage: "safari")
@@ -107,7 +108,7 @@ struct BrowseView: View {
                             }.buttonStyle(.plain)
                         }
                     }
-                    if booksOn { BooksBrowseSection(browsing: $browsing, opened: $opened) }
+                    if booksOn && searchingText == nil { BooksBrowseSection(browsing: $browsing, opened: $opened) }
                 }
                 .padding(20)
                 .frame(maxWidth: 900)
@@ -141,7 +142,7 @@ struct BrowseView: View {
     }
     private func webSearch(_ text: String) {
         var parts = URLComponents(string: "https://duckduckgo.com/")!
-        parts.queryItems = [URLQueryItem(name: "q", value: text + " manga")]
+        parts.queryItems = [URLQueryItem(name: "q", value: text)]
         if let url = parts.url { browsing = BrowseTarget(url: url) }
     }
     private func discoverCard(_ item: DiscoverItem) -> some View {
@@ -417,9 +418,9 @@ struct MangaBrowserView: View {
     }
     /// Book libraries (Gutenberg, Standard Ebooks, Wikisource): the guide talks about books, not series.
     private var onBookSite: Bool {
-        if BooksBrowseSection.libraries.contains(where: { $0.url.host == start.host }) { return true }
+        if BooksBrowseSection.libraries.contains(where: { $0.home.host == start.host }) { return true }
         guard let host = browser.currentURL?.host?.lowercased() else { return false }
-        return BooksBrowseSection.libraries.contains { $0.url.host == host }
+        return BooksBrowseSection.libraries.contains { $0.home.host == host }
             || BookLinks.libraryHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
     /// Downloads the page's book through the browser itself (so any site check it passed still counts);

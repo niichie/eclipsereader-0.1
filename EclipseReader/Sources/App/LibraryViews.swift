@@ -1815,7 +1815,9 @@ struct SeriesView: View {
             }
             List {
                 Section {
-                    SeriesHeader(series: series, reader: $reader, website: $website, checking: series.isOnline && !checked)
+                    SeriesHeader(series: series, reader: $reader, website: $website, checking: series.isOnline && !checked, downloading: updating, downloadBook: {
+                        if let url = series.bookDownloadURL { downloadBook(url) }
+                    })
                         .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
                     if !builtIn {
                         Button { model.addToLibrary(series) } label: {
@@ -1845,14 +1847,7 @@ struct SeriesView: View {
                     }
                     if series.chapters.isEmpty {
                         if series.isCatalogBookPreview, let download = series.bookDownloadURL {
-                            Button {
-                                updating = true
-                                Task {
-                                    defer { updating = false }
-                                    do { _ = try await model.downloadBook(download) }
-                                    catch { message = error.localizedDescription }
-                                }
-                            } label: {
+                            Button { downloadBook(download) } label: {
                                 Label(updating ? "Downloading…" : "Download book", systemImage: "arrow.down.circle")
                             }.disabled(updating)
                         } else if builtIn || (series.isOnline && (!checked || updating)) {
@@ -2036,6 +2031,15 @@ struct SeriesView: View {
         }
     }
     /// Neko-style merge: the same series on another site fills in the chapters this one lacks.
+    private func downloadBook(_ url: URL) {
+        guard !updating else { return }
+        updating = true
+        Task {
+            defer { updating = false }
+            do { _ = try await model.downloadBook(url) }
+            catch { message = error.localizedDescription }
+        }
+    }
     private func fillMissing(_ series: MangaSeries) {
         updating = true
         message = "Looking for the missing chapters on other sites…"
@@ -2098,6 +2102,8 @@ struct SeriesHeader: View {
     @Binding var website: Bool
     /// The chapter list is still being fetched.
     var checking = false
+    let downloading: Bool
+    let downloadBook: () -> Void
     /// Colour from the cover; the page glows with it.
     @State private var tint: Color = Eclipse.accent
     /// Pale cover colours (cream, sand, pastel) need dark lettering on the button.
@@ -2131,7 +2137,7 @@ struct SeriesHeader: View {
                         else { chip(style.title, symbol: style.symbol) }
                         if model.downloadedCount(series) > 0 { chip("\(model.downloadedCount(series))", symbol: "arrow.down.circle.fill") }
                     }
-                    Text(series.chapters.isEmpty ? (series.isCatalogBookPreview ? "Available online" : checking ? "Loading chapters…" : "No chapters to read")
+                    Text(series.chapters.isEmpty ? (series.isCatalogBookPreview ? "Must download to read" : checking ? "Loading chapters…" : "No chapters to read")
                          : series.kind == .book ? (read == 0 ? "Not started" : read >= series.chapters.count ? "Finished" : "\(Int(Double(read) / Double(series.chapters.count) * 100))% read")
                          : "\(read) of \(series.chapters.count) read")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -2141,13 +2147,13 @@ struct SeriesHeader: View {
             if let summary = series.summary, !summary.isEmpty { SynopsisText(text: BookText.richText(summary)) }
             HStack(spacing: 10) {
                 Button {
-                    if series.isCatalogBookPreview { website = true }
+                    if series.isCatalogBookPreview { downloadBook() }
                     else if let resume { reader = resume }
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: "play.fill")
+                        Image(systemName: series.isCatalogBookPreview ? "arrow.down.circle" : "play.fill")
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(series.isCatalogBookPreview ? "Open book online" : resume == nil ? "No chapters yet" : started ? "Continue" : "Start reading").font(.headline)
+                            Text(series.isCatalogBookPreview ? (downloading ? "Downloading…" : "Download book") : resume == nil ? "No chapters yet" : started ? "Continue" : "Start reading").font(.headline)
                             if let resume {
                                 Text(ChapterText.split(resume.title).name).font(.caption).opacity(0.8).lineLimit(1)
                             }
@@ -2161,7 +2167,7 @@ struct SeriesHeader: View {
                     .overlay(RoundedRectangle(cornerRadius: 16).fill(.black.opacity(lightTint ? 0 : 0.18)))
                     .shadow(color: tint.opacity(0.45), radius: 14, y: 6)
                 }
-                .buttonStyle(PressableStyle()).disabled(resume == nil && !series.isCatalogBookPreview)
+                .buttonStyle(PressableStyle()).disabled(series.isCatalogBookPreview ? downloading : resume == nil)
                 .accessibilityIdentifier("seriesContinue")
                 if series.kind != .book {
                     Menu {

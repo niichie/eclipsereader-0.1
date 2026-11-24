@@ -1,48 +1,38 @@
 import SwiftUI
 
-/// Searches the free libraries whose books download straight into the library:
-/// Standard Ebooks and Project Gutenberg.
 @MainActor
 final class BookSearchModel: ObservableObject {
     enum Phase: Equatable { case idle, loading, done([FreeBook]), failed(String) }
-    @Published private(set) var standard: Phase = .idle
-    @Published private(set) var gutenberg: Phase = .idle
+    @Published private(set) var phases: [BookCatalog: Phase] = [:]
     @Published private(set) var query = ""
     private var tasks: [Task<Void, Never>] = []
     func run(_ text: String) {
-        tasks.forEach { $0.cancel() }
-        query = text
-        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { standard = .idle; gutenberg = .idle; return }
-        standard = .loading; gutenberg = .loading
-        tasks = [
-            Task { [weak self] in
-                let result: Phase
-                do { result = .done(try await FreeBooks.standardEbooks(query: text)) }
-                catch { result = .failed(Self.explain(error, site: "Standard Ebooks")) }
-                guard let self, self.query == text, !Task.isCancelled else { return }
-                self.standard = result
-            },
-            Task { [weak self] in
-                let result: Phase
-                do { result = .done(try await FreeBooks.gutenberg(query: text)) }
-                catch { result = .failed(Self.explain(error, site: "Project Gutenberg")) }
-                guard let self, self.query == text, !Task.isCancelled else { return }
-                self.gutenberg = result
-            },
-        ]
-    }
-    func cancel() { tasks.forEach { $0.cancel() } }
-    /// Nothing found anywhere (and nothing still loading).
-    var nothingFound: Bool {
-        [standard, gutenberg].allSatisfy { phase in
-            switch phase { case .done(let books): books.isEmpty; case .failed: true; default: false }
+        cancel()
+        let term = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        query = term
+        phases = [:]
+        guard !term.isEmpty else { return }
+        for catalog in BookCatalog.allCases {
+            phases[catalog] = .loading
+            tasks.append(Task { [weak self] in
+                let phase: Phase
+                do { phase = .done(try await withDeadline(14) { try await catalog.search(term) }) }
+                catch { phase = .failed(Self.explain(error, site: catalog.rawValue)) }
+                guard !Task.isCancelled, self?.query == term else { return }
+                self?.phases[catalog] = phase
+            })
         }
+    }
+    func cancel() {
+        tasks.forEach { $0.cancel() }
+        tasks.removeAll()
     }
     static func explain(_ error: Error, site: String) -> String {
         switch error as? SourceError {
         case .unavailable(503): "\(site) is down for maintenance right now. Try again later."
+        case .unsupportedStructure, .restricted: "Open \(site) in the browser to continue this search."
         case .timeout: "\(site) is taking too long to answer. Try again in a minute."
-        case .unavailable, .restricted: "\(site) isn’t answering right now. Try again later."
+        case .unavailable: "\(site) isn’t answering right now. Try again later."
         default: "\(site) couldn’t be searched just now. Check your connection."
         }
     }
@@ -90,41 +80,35 @@ struct BooksBrowseSection: View {
     @EnvironmentObject private var model: LibraryModel
     @Binding var browsing: BrowseTarget?
     @Binding var opened: MangaSeries?
+    var externalQuery: String? = nil
     @StateObject private var search = BookSearchModel()
     @State private var text = ""
     @State private var popular: [FreeBook] = []
     @State private var busyID: String?
     @State private var message: String?
-    /// Catalogs open in the book browser so sign-in and file downloads share the site's session.
-    static let libraries: [CatalogSite] = [
-        SiteCatalog.site("Standard Ebooks", "https://standardebooks.org/ebooks", "Beautifully made free classics", "text.book.closed"),
-        SiteCatalog.site("Project Gutenberg", "https://www.gutenberg.org/", "70,000+ free public-domain books", "books.vertical"),
-        SiteCatalog.site("Wikisource", "https://en.wikisource.org/", "Public-domain texts · EPUB downloads", "doc.text"),
-        SiteCatalog.site("Library Genesis", "https://libgen.li/", "Search titles, authors, or ISBNs", "books.vertical"),
-        SiteCatalog.site("Z-Library", "https://z-library.gy/", "Browse books and sign in on the site", "book"),
-        SiteCatalog.site("Anna’s Archive", "https://annas-archive.gl/", "Search titles, authors, or ISBNs", "archivebox"),
-        SiteCatalog.site("Mobilism", "https://forum.mobilism.org/viewforum.php?f=120", "Browse the ebook forum", "text.bubble"),
-    ]
+    static let libraries = BookCatalog.allCases
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Boring books without pictures").font(.title3.weight(.bold))
-                Text("Browse and download free books").font(.footnote).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search free books", text: $text)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
-                    .onSubmit { if !text.trimmingCharacters(in: .whitespaces).isEmpty { search.run(text) } }
-                if !search.query.isEmpty {
-                    Button { text = ""; search.cancel(); search.run("") ; search.cancel() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain)
+            if externalQuery == nil {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Boring books without pictures").font(.title3.weight(.bold))
+                    Text("Browse and download free books").font(.footnote).foregroundStyle(.secondary)
                 }
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search free books", text: $text)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
+                        .onSubmit { if !text.trimmingCharacters(in: .whitespaces).isEmpty { search.run(text) } }
+                    if !search.query.isEmpty {
+                        Button { text = ""; search.run("") } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                            .buttonStyle(.plain)
+                    }
+                }
+                .padding(12).eclipseCard(cornerRadius: 14)
             }
-            .padding(12).eclipseCard(cornerRadius: 14)
             if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
             if !search.query.isEmpty {
-                BookSearchResults(search: search, busyID: busyID, pick: open)
+                BookSearchResults(search: search, busyID: busyID, browse: { browsing = BrowseTarget(url: $0) }, pick: open)
             } else if !popular.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Popular free classics").font(.headline)
@@ -138,26 +122,29 @@ struct BooksBrowseSection: View {
                     }
                 }
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
-                ForEach(Self.libraries) { site in
-                    Button { browsing = BrowseTarget(url: catalogURL(site)) } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: site.symbol).foregroundStyle(Eclipse.highlight)
-                                .frame(width: 42, height: 42).background(Eclipse.accent.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(site.name).font(.headline).lineLimit(1)
-                                Text(site.note).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            if externalQuery == nil {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
+                    ForEach(Self.libraries, id: \.self) { site in
+                        Button { browsing = BrowseTarget(url: site.searchURL(text)) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "books.vertical").foregroundStyle(Eclipse.highlight)
+                                    .frame(width: 42, height: 42).background(Eclipse.accent.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(site.rawValue).font(.headline).lineLimit(1)
+                                    Text(site.home.host ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                }
+                                Spacer(minLength: 4)
+                                Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
                             }
-                            Spacer(minLength: 4)
-                            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+                            .padding(12).frame(maxWidth: .infinity, minHeight: 66, alignment: .leading).eclipseCard(cornerRadius: 14)
                         }
-                        .padding(12).frame(maxWidth: .infinity, minHeight: 66, alignment: .leading).eclipseCard(cornerRadius: 14)
+                        .buttonStyle(PressableStyle())
                     }
-                    .buttonStyle(PressableStyle())
                 }
             }
         }
-        .task {
+        .task(id: externalQuery) {
+            if let externalQuery { search.run(externalQuery); return }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
             #endif
@@ -167,21 +154,6 @@ struct BooksBrowseSection: View {
             }
         }
     }
-    private func catalogURL(_ site: CatalogSite) -> URL {
-        let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, var url = URLComponents(url: site.url, resolvingAgainstBaseURL: false) else { return site.url }
-        switch url.host {
-        case "libgen.li":
-            url.path = "/index.php"
-            url.queryItems = [URLQueryItem(name: "req", value: query)]
-        case "annas-archive.gl":
-            url.path = "/search"
-            url.queryItems = [URLQueryItem(name: "q", value: query)]
-        default: return site.url
-        }
-        return url.url ?? site.url
-    }
-
     private func open(_ book: FreeBook, downloadFile: Bool) {
         message = nil
         if !downloadFile, let page = book.page, let download = book.download {
@@ -199,14 +171,15 @@ struct BooksBrowseSection: View {
     }
 }
 
-/// Results from Standard Ebooks and Project Gutenberg, plus matching books already in your library.
+/// Each catalog publishes its own results as soon as it answers.
 struct BookSearchResults: View {
     @EnvironmentObject private var model: LibraryModel
     @ObservedObject var search: BookSearchModel
     var busyID: String?
+    let browse: (URL) -> Void
     let pick: (FreeBook, Bool) -> Void
     var body: some View {
-        let mine = model.librarySeries.filter { $0.kind == .book && !search.query.isEmpty && $0.title.localizedCaseInsensitiveContains(search.query) }
+        let mine = model.librarySeries.filter { $0.kind == .book && !search.query.isEmpty && ($0.title + " " + ($0.author ?? "")).localizedCaseInsensitiveContains(search.query) }
         VStack(alignment: .leading, spacing: 18) {
             if !mine.isEmpty {
                 Text("In your library").font(.headline)
@@ -214,15 +187,18 @@ struct BookSearchResults: View {
                     Text("\(series.title)\(series.author.map { " · \($0)" } ?? "")").font(.subheadline)
                 }
             }
-            row("Standard Ebooks", "Tap a cover for details", search.standard)
-            row("Project Gutenberg", "Tap a cover for details", search.gutenberg)
-            if search.nothingFound {
-                Label {
-                    Text("Free libraries only have books that are out of copyright (mostly published before 1930). For newer books, download an EPUB you own in the browser, or import it from Files.")
-                } icon: { Image(systemName: "info.circle") }
-                .font(.footnote).foregroundStyle(.secondary)
+            ForEach(BookCatalog.allCases.sorted { rank($0) < rank($1) }, id: \.self) { catalog in
+                let phase = search.phases[catalog] ?? .idle
+                row(catalog.rawValue, "Tap a cover for details", phase)
+                if case .failed = phase {
+                    Button("Search \(catalog.rawValue) in browser") { browse(catalog.searchURL(search.query)) }
+                }
             }
         }
+    }
+    private func rank(_ catalog: BookCatalog) -> Int {
+        if case .done(let books) = search.phases[catalog], !books.isEmpty { return 0 }
+        return 1
     }
     @ViewBuilder private func row(_ title: String, _ detail: String, _ phase: BookSearchModel.Phase) -> some View {
         switch phase {
@@ -273,7 +249,7 @@ struct BookSearchSheet: View {
                     }
                     .padding(.horizontal, 14).frame(height: 50).eclipseCard(cornerRadius: 14)
                     if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
-                    BookSearchResults(search: search, busyID: busyID, pick: open)
+                    BookSearchResults(search: search, busyID: busyID, browse: { browsing = BrowseTarget(url: $0) }, pick: open)
                 }
                 .padding(20).frame(maxWidth: 900).frame(maxWidth: .infinity)
             }

@@ -66,14 +66,19 @@ public enum GlobalSearch {
             return relevant(try mangaDotResults(try await http.fetch(url, referer: nil, image: false)), to: q)
         case .site(let root):
             var lastError: Error?
+            var recognized = false
             for url in searchURLs(root: root, query: q) {
+                try Task.checkCancellation()
                 do {
-                    let found = relevant(results(in: try await text(url, http: http), base: url), to: q)
+                    let html = try await text(url, http: http)
+                    let items = results(in: html, base: url)
+                    recognized = recognized || !items.isEmpty || ["no results", "no matches", "nothing found"].contains(where: { html.localizedCaseInsensitiveContains($0) })
+                    let found = relevant(items, to: q)
                     if !found.isEmpty { return found }
                 } catch { lastError = error }
             }
-            if let lastError { throw lastError }
-            return []
+            if recognized { return [] }
+            throw lastError ?? SourceError.unsupportedStructure
         }
     }
 
@@ -95,6 +100,10 @@ public enum GlobalSearch {
     /// Sites whose search lives somewhere other than WordPress's `?s=` (checked against the live sites).
     static let searchPaths: [String: (path: String, parameter: String)] = [
         "asurascans.com": ("/browse", "search"),
+        "royalroad.com": ("/fictions/search", "title"),
+        "tapas.io": ("/search", "q"),
+        "wuxiaworld.com": ("/novels", "search"),
+        "j-novel.club": ("/series", "search"),
     ]
     /// The search addresses to try for a website, most specific first.
     public static func searchURLs(root: URL, query: String) -> [URL] {

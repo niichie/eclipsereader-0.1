@@ -219,14 +219,11 @@ final class SpotlightStore: ObservableObject {
     private func verifiedDestination(_ item: Spotlight, model: LibraryModel) async -> VerifiedQuote? {
         let novel = item.media?.category == .novels
         guard !novel || Features.novelsOn else { return nil }
-        let sources = GlobalSearchModel.sources(saved: model.sources, novels: novel).filter { source in
-            if case .site = source.kind, source.host != "mangadot.net" { return false }
-            return !model.sources.contains { $0.hidden == true && ChapterMerge.site($0.url.host) == source.host }
-        }
+        let sources = GlobalSearchModel.sources(saved: model.sources, novels: novel)
         let pipeline = model.pipeline
         var remaining = sources[...]
         while !remaining.isEmpty && !Task.isCancelled {
-            let batch = remaining.prefix(2)
+            let batch = remaining.prefix(6)
             remaining = remaining.dropFirst(batch.count)
             let found: VerifiedQuote? = await withTaskGroup(of: VerifiedQuote?.self) { group in
                 for source in batch {
@@ -359,12 +356,11 @@ struct SpotlightCard: View {
                     .font(spotlight.pick ? .system(compact ? .subheadline : .title3, design: .serif).weight(.semibold)
                                          : .system(compact ? .subheadline : .title3, design: .serif).italic().weight(.semibold))
                     .foregroundStyle(.white)
-                    .lineLimit(compact ? 4 : 5, reservesSpace: true)
+                    .lineLimit(compact ? 4 : 5)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(quote.who.isEmpty || quote.who == quote.work ? quote.work : "\(quote.who) · \(quote.work)")
                     .font(.caption.weight(.semibold)).foregroundStyle(Eclipse.highlight.opacity(0.9)).lineLimit(1)
-                Text(meta ?? " ").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    .accessibilityHidden(meta == nil)
+                if let meta { Text(meta).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 HStack(spacing: 8) {
                     Button(action: read) {
                         HStack(spacing: 5) {
