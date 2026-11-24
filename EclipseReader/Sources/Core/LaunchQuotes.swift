@@ -187,7 +187,7 @@ public enum QuoteFeed {
             let found = matches(hits[safe: i] ?? [], for: works[i])
             if !found.isEmpty {
                 // The series exists: it must be one of your kinds, and rated highly.
-                guard let media = choose(found, preference), let score = media.score, score >= minimumScore else { return nil }
+                guard let media = choose(found, preference, work: works[i]), let score = media.score, score >= minimumScore else { return nil }
                 return Spotlight(quote: quotes[i], media: media)
             }
             return curated.contains(quotes[i]) && preference.categories.contains(.manga) ? Spotlight(quote: quotes[i], media: nil) : nil
@@ -305,11 +305,15 @@ public enum QuoteFeed {
         }
     }
     /// Of a series' entries (its manga, its light novel…), the one to suggest: among the kinds you chose, pictures first.
-    static func choose(_ found: [Hit], _ preference: SpotlightPreference) -> SpotlightMedia? {
-        found.enumerated().filter { preference.allows($0.element.media) }
-            .min { (preference.rank($0.element.media), $0.offset) < (preference.rank($1.element.media), $1.offset) }?.element.media
+    /// A series whose own title is the quote's (not a spin-off that starts the same way) wins within its kind.
+    static func choose(_ found: [Hit], _ preference: SpotlightPreference, work: String? = nil) -> SpotlightMedia? {
+        let wanted = work.map(key)
+        func exact(_ hit: Hit) -> Int { wanted.map { w in hit.names.contains { key($0) == w } ? 0 : 1 } ?? 0 }
+        return found.enumerated().filter { preference.allows($0.element.media) }
+            .min { (preference.rank($0.element.media), exact($0.element), $0.offset) < (preference.rank($1.element.media), exact($1.element), $1.offset) }?
+            .element.media
     }
-    static func best(_ hits: [Hit], for work: String) -> SpotlightMedia? { choose(matches(hits, for: work), .everything) }
+    static func best(_ hits: [Hit], for work: String) -> SpotlightMedia? { choose(matches(hits, for: work), .everything, work: work) }
     /// A native title cut to what a site search matches ("無職転生 ～異世界行ったら本気だす～" → "無職転生").
     public static func searchable(native: String) -> String {
         let cut = native.components(separatedBy: CharacterSet(charactersIn: "～〜~　 ([（【「『:：-―")).first ?? native

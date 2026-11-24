@@ -79,6 +79,10 @@ final class SpotlightPreferenceTests: XCTestCase {
         XCTAssertEqual(novel.native, "無職転生 ～異世界行ったら本気だす～")
         XCTAssertEqual(QuoteFeed.searchable(native: novel.native!), "無職転生")
         XCTAssertNil(QuoteFeed.choose(hits, SpotlightPreference(categories: [.manhwa], origins: ["KR"])))
+        // A spin-off whose title starts the same way loses to the series itself.
+        let spin = #"{"data":{"m0":{"media":[{"id":20,"title":{"english":"Mushoku Tensei: Redundant Reincarnation"},"averageScore":80,"format":"NOVEL","countryOfOrigin":"JP"},{"id":21,"title":{"english":"Mushoku Tensei"},"averageScore":84,"format":"NOVEL","countryOfOrigin":"JP"}]}}}"#
+        let spinHits = QuoteFeed.matches(QuoteFeed.parseBatch(Data(spin.utf8), count: 1)[0], for: "Mushoku Tensei")
+        XCTAssertEqual(QuoteFeed.choose(spinHits, novelsOnly, work: "Mushoku Tensei")?.id, 21)
     }
 
     func testPicksAlternateKindsAndUseTheSynopsis() {
