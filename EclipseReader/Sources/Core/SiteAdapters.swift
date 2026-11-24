@@ -321,7 +321,7 @@ public enum Discover {
         let found = try parse(try await http.fetch(lookupURL, referer: nil, image: false))
         let wanted = style.flatMap { $0 == .automatic ? nil : $0 }
         let source = found.first { Self.sameTitle($0.item.title, title) }
-            ?? found.first { Self.looselySameTitle($0.item.title, title) && (wanted.map { w in mediumMatches($0.style, w) } ?? true) }
+            ?? found.first { entry in Self.looselySameTitle(entry.item.title, title) && (wanted.map { mediumMatches(entry.style, $0) } ?? true) }
         guard let source else { return [] }
         let medium = wanted ?? source.style
         let tags = pickTags(source.tags)
