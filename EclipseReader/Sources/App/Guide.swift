@@ -21,6 +21,8 @@ struct GuideView: View {
                 item("sun.min", "Dim artwork", "Darkens the pages for this reading session, below the phone's own brightness.")
                 item("flame", "Warm filter", "Tints pages amber for reading at night. It stays on until you turn it down, in the reader's settings or Settings › Reader.")
                 item("wand.and.stars", "Enhance scanned pages", "Reduces scan noise and enlarges small pages on this device. Uses more battery; leave it off for clean digital pages.")
+                item("hand.draw", "Compare a scan", "Hold two fingers on the art to compare the original at the same zoom. Choose scan cleanup for this series in reader options.")
+                item("slider.horizontal.3", "Find a page", "Drag the page slider for a preview. Release to jump, or use Return to go back.")
                 item("crop", "Blank borders", "Plain white or black borders around scanned pages are trimmed automatically so the art fills the screen. Switch it off in Settings › Reader if a page ever looks cut.")
                 item("rectangle.split.2x1", "Spreads", "Turn the phone sideways for two pages side by side. In portrait, a double-page spread can be split into two pages.")
                 item("arrow.down.to.line", "Auto-scroll", "In vertical strips, the bottom bar can glide the strip at the speed you pick until you touch it.")
@@ -43,6 +45,7 @@ struct GuideView: View {
             if novelsOn || booksOn {
                 Section("Novels and books") {
                     item("text.book.closed", "Set like a printed book", "Typeface, size, spacing, margins and paper colour are under the Aa button. Turn the phone sideways for two pages side by side.")
+                    item("highlighter", "Passages", "Open the contents menu to search, highlight a sentence, add a note or read aloud. Saved highlights appear in Bookmarks.")
                     if novelsOn {
                         item("arrow.right.to.line", "Chapter to chapter", "A novel carries straight on into the next chapter when you turn past the last page. The list button jumps anywhere.")
                         item("character.bubble", "Translating raws", "Japanese, Chinese and Korean novels translate paragraph by paragraph on the device with the speech-bubble button. Syosetu starts each chapter in Japanese.")

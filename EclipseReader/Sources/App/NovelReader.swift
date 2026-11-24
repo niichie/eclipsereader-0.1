@@ -321,6 +321,8 @@ struct NovelReaderView: View {
     @State private var images: [String: Data] = [:]
     @StateObject private var speaker = PassageSpeaker()
     @State private var passageTools = false
+    @State private var previousChapter: Chapter?
+    @State private var pendingPassage: String?
     @State private var beforeSearch: BookPageRef?
     @State private var typeset: TypesetBook?
     @State private var page = 0
@@ -433,6 +435,7 @@ struct NovelReaderView: View {
         .sheet(isPresented: $passageTools) {
             if let typeset {
                 PassageTools(book: typeset, page: page, sections: 1, title: { _ in chapter.title }, jump: { section, offset in
+                    previousChapter = chapter
                     beforeSearch = typeset.pages[safe: page]
                     page = typeset.page(for: section, offset: offset)
                 }, annotate: { section, offset, quote, note in
@@ -444,7 +447,25 @@ struct NovelReaderView: View {
                     library.addBookmark(mark)
                     typeset.applyHighlight(section: section, offset: offset, quote: quote)
                     pager.refreshHighlights()
-                }, speaker: speaker)
+                }, speaker: speaker, searchChapters: { query in
+                    var hits: [PassageTools.ChapterHit] = []
+                    for other in series?.chapters ?? [] where other.id != chapter.id {
+                        if Task.isCancelled || hits.count >= 100 { break }
+                        let cached = await NovelTextCache.shared.get(other.id)
+                        var available = cached
+                        if available == nil, library.isDownloaded(other), let data = await OfflineStore.shared.textData(other.id) {
+                            available = try? JSONDecoder().decode(NovelChapterText.self, from: data)
+                        }
+                        if let text = available?.blocks(base: other.url).compactMap({ NovelTranslator.text(of: $0) })
+                            .first(where: { $0.localizedCaseInsensitiveContains(query) }) {
+                            hits.append(.init(chapter: other, passage: text))
+                        }
+                    }
+                    return hits
+                }, jumpToChapter: { hit in
+                    previousChapter = chapter; beforeSearch = typeset.pages[safe: page]
+                    open(hit.chapter); pendingPassage = hit.passage
+                })
             }
         }
         .sheet(isPresented: $settings) {
@@ -455,6 +476,7 @@ struct NovelReaderView: View {
         .sheet(isPresented: $contents) {
             NovelContentsSheet(chapters: series?.chapters ?? [chapter], current: chapter.id) { picked in
                 contents = false
+                previousChapter = chapter; beforeSearch = typeset?.pages[safe: page]
                 open(picked)
             }
             .environmentObject(library)
@@ -529,10 +551,14 @@ struct NovelReaderView: View {
         }.value
         guard !Task.isCancelled else { return }
         let target: Int
-        if landAtEnd { target = max(0, result.pagesIn(section: 0) - 1) }
+        if let pendingPassage, let content = result.sections.first,
+           (content.string as NSString).range(of: pendingPassage).location != NSNotFound {
+            target = result.page(for: 0, offset: (content.string as NSString).range(of: pendingPassage).location)
+        } else if landAtEnd { target = max(0, result.pagesIn(section: 0) - 1) }
         else if let fraction { target = result.page(for: 0, offset: Int(fraction * Double(Self.length(result)))) }
         else if let anchorOffset { target = result.page(for: 0, offset: anchorOffset) }
         else { target = 0 }
+        pendingPassage = nil
         landAtEnd = false
         anchorOffset = nil
         let opening = typeset == nil
@@ -571,6 +597,7 @@ struct NovelReaderView: View {
     // MARK: Reading
 
     private func open(_ target: Chapter, atEnd: Bool = false) {
+        speaker.stop(); pendingPassage = nil
         logTime()
         anchorOffset = nil
         landAtEnd = atEnd
@@ -695,7 +722,12 @@ struct NovelReaderView: View {
                     }
                     Button("Stop reading aloud") { speaker.stop() }
                     if let from = beforeSearch, let typeset {
-                        Button("Return to previous passage") { page = typeset.page(for: from.section, offset: from.range.location); beforeSearch = nil }
+                        Button("Return to previous passage") {
+                            if let previousChapter, previousChapter.id != chapter.id {
+                                open(previousChapter); anchorOffset = from.range.location
+                            } else { page = typeset.page(for: from.section, offset: from.range.location) }
+                            beforeSearch = nil
+                        }
                     }
                 } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
                     .accessibilityLabel("Chapters")

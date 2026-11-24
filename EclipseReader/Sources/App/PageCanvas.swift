@@ -192,6 +192,26 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     private var sourceRegion = CGRect.zero
     private var needsTiles = false
     private var comparing = false
+    struct Viewport {
+        let center: CGPoint
+        let magnification: CGFloat
+    }
+    var pendingViewport: Viewport?
+    var viewport: Viewport? {
+        let size = imageView.bounds.size
+        guard size.width > 0, size.height > 0, scroll.zoomScale > baseScale * 1.05 else { return nil }
+        let point = imageView.convert(CGPoint(x: scroll.bounds.midX, y: scroll.bounds.midY), from: scroll)
+        return Viewport(center: CGPoint(x: point.x / size.width, y: point.y / size.height), magnification: scroll.zoomScale / baseScale)
+    }
+    private func restoreViewport() {
+        guard let position = pendingViewport, imageView.image != nil, bounds.width > 0, bounds.height > 0 else { return }
+        pendingViewport = nil
+        let size = imageView.bounds.size
+        let scale = min(scroll.maximumZoomScale, position.magnification * baseScale)
+        let w = bounds.width / scale, h = bounds.height / scale
+        scroll.zoom(to: CGRect(x: position.center.x * size.width - w / 2, y: position.center.y * size.height - h / 2,
+                               width: w, height: h), animated: false)
+    }
     private var lastSize = CGSize.zero
     private var baseScale: CGFloat = 1
     private var preference = ReaderPreferences()
@@ -268,7 +288,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                     message.text = duplicate ? "The source returned this image on several pages. Open the chapter in the browser to check it." : nil
                     originalData = data; sourceRegion = decoded.sourceRegion; needsTiles = decoded.needsTiles
                     spinner.stopAnimating(); imageView.image = decoded.image
-                    resetFit(); loaded(index, decoded.ratio)
+                    resetFit(); restoreViewport(); scheduleDetail(); loaded(index, decoded.ratio)
                     findPanels(rightToLeft: preferences.direction == .rightToLeft)
                 } catch is CancellationError { }
                 catch let e as URLError where e.code == .cancelled { }
@@ -367,7 +387,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                                        width: size.width, height: size.height), animated: false)
             }
         }
-        scheduleDetail()
+        restoreViewport(); scheduleDetail()
     }
     private func resetFit() {
         guard let image = imageView.image, bounds.width > 0, bounds.height > 0 else { return }
@@ -412,14 +432,16 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) { scheduleDetail() }
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { scheduleDetail() }
-    private func scheduleDetail() {
+    func scheduleDetail() {
         detailWork?.cancel()
         guard let data = originalData, scroll.zoomScale > baseScale * 1.05 || comparing || needsTiles else {
             detail.image = nil
             return
         }
         let box = imageView.bounds
+        guard let window else { return }
         let visible = imageView.convert(scroll.bounds, from: scroll).intersection(box)
+            .intersection(imageView.convert(window.bounds, from: window))
         guard !visible.isEmpty, !visible.isNull, box.width > 0, box.height > 0 else { return }
         let region = CGRect(x: sourceRegion.minX + visible.minX / box.width * sourceRegion.width,
                             y: sourceRegion.minY + visible.minY / box.height * sourceRegion.height,
@@ -476,6 +498,14 @@ final class PageCanvasController: UIViewController {
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unsupported") }
+    var restoredViewports: [String: ZoomPageView.Viewport] = [:]
+    func viewports() -> [String: ZoomPageView.Viewport] {
+        var result: [String: ZoomPageView.Viewport] = [:]
+        for canvas in canvases {
+            if let page = pages[safe: canvas.pageIndex] { result[page.id] = canvas.viewport }
+        }
+        return result
+    }
     private var ratios: [Double] = []
     override func loadView() {
         view = UIView(); view.backgroundColor = .black
@@ -484,6 +514,7 @@ final class PageCanvasController: UIViewController {
             let canvas = ZoomPageView(frame: .zero); canvas.alignment = .center
             canvas.tapped = tapped; view.addSubview(canvas); canvases.append(canvas)
             let page = pages[index]
+            canvas.pendingViewport = restoredViewports[page.id]
             if let w = page.width, let h = page.height, w > 0, h > 0 { ratios.append(w / h) } else { ratios.append(0.707) }
             canvas.configure(page: page, index: index, chapter: chapter, pipeline: pipeline, preferences: preferences) { [weak self] i, ratio in
                 guard let self else { return }

@@ -668,6 +668,7 @@ struct BookReaderView: View {
                 BookContentsSheet(titles: (0..<typeset.sectionStarts.count).map { sectionTitle($0) },
                                   starts: typeset.sectionStarts, current: typeset.pages.indices.contains(page) ? typeset.pages[page].section : 0) { section in
                     contents = false
+                    beforeSearch = typeset.pages[safe: page]
                     page = typeset.sectionStarts[section]
                 }
                 .presentationDetents([.medium, .large])

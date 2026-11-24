@@ -11,6 +11,34 @@ final class ReaderChecks: XCTestCase {
         ("Pride and Prejudice (Standard Ebooks)", "https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice/downloads/jane-austen_pride-and-prejudice.epub?source=download"),
         ("Alice (Project Gutenberg mirror, pictures)", "https://gutenberg.pglaf.org/cache/epub/11/pg11-images-3.epub"),
     ]
+    func testResumePartialOfflineChapterAndInvalidateChangedPages() async throws {
+        let store = OfflineStore()
+        let id = UUID().uuidString
+        let pages = (1...3).map { MangaPage(url: URL(string: "https://example.invalid/\($0)")!, label: "page") }
+        let first = try await store.resume(id, pages: pages)
+        XCTAssertTrue(first.isEmpty)
+        _ = try await store.write(id, index: 0, data: Data([1, 2]))
+        let reopened = OfflineStore()
+        let restored = try await reopened.resume(id, pages: pages)
+        XCTAssertEqual(restored, ["0000.page"])
+        let ids = await reopened.downloadedIDs()
+        XCTAssertFalse(ids.contains(id))
+        let changed = try await reopened.resume(id, pages: Array(pages.reversed()))
+        XCTAssertTrue(changed.isEmpty)
+        await reopened.remove(id)
+    }
+
+    func testPassageOffsetsSurvivePagination() throws {
+        let text = "Snow. 🐈 Small ink strokes. Evening."
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        let book = TypesetBook(sections: [NSAttributedString(string: text)],
+                               pages: [BookPageRef(section: 0, range: range)], sectionStarts: [0], pageSize: .zero)
+        let found = PassageTools.find("ink", in: [text], page: book.pages[0])
+        let hit = try XCTUnwrap(found.first)
+        book.applyHighlight(section: hit.section, offset: hit.offset, quote: hit.text)
+        XCTAssertNotNil(book.text(of: 0).attribute(.backgroundColor, at: hit.offset, effectiveRange: nil))
+    }
+
     func testEnhanceCleansScanNoiseAndPreservesInk() throws {
         let size = 64
         let gray = CGColorSpaceCreateDeviceGray()

@@ -13,6 +13,16 @@ final class LibraryModel: ObservableObject {
     @Published var downloads: [String: DownloadState] = [:]
     enum DownloadState: Equatable { case queued, running(Double), failed(String) }
     private var downloadQueue: [Chapter] = []
+    private let pendingDownloadsKey = "EclipseReader.pendingChapterDownloads"
+    private func pendingDownloads() -> [Chapter] {
+        guard let data = UserDefaults.standard.data(forKey: pendingDownloadsKey) else { return [] }
+        return (try? JSONDecoder().decode([Chapter].self, from: data)) ?? []
+    }
+    private func persistPending(_ chapters: [Chapter]) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(chapters), forKey: pendingDownloadsKey)
+    }
+    private func forgetPending(_ id: String) { persistPending(pendingDownloads().filter { $0.id != id }) }
+    @Published var bookmarkReturn: Bookmark?
     /// A page sent to the app (eclipsereader://open?url=…) to open in the browser.
     @Published var incoming: BrowseTarget?
     /// A note for the series page that opens next ("added from WeebCentral instead"), keyed by series.
@@ -111,7 +121,12 @@ final class LibraryModel: ObservableObject {
         pipeline = ImagePipeline(cache: DiskImageCache(directory: cache), localData: Self.readLocal)
         #endif
         Task { try? await pipeline.cache.prune() }
-        Task { downloaded = await OfflineStore.shared.downloadedIDs() }
+        Task {
+            downloaded = await OfflineStore.shared.downloadedIDs()
+            let pending = pendingDownloads().filter { !downloaded.contains($0.id) }
+            persistPending(pending)
+            download(pending)
+        }
         Self.current = self
         NetworkWatch.shared.onChange = { [weak self] in self?.startDownloads() }
     }
@@ -729,13 +744,16 @@ final class LibraryModel: ObservableObject {
     func isDownloaded(_ chapter: Chapter) -> Bool { downloaded.contains(chapter.id) }
     func canDownload(_ chapter: Chapter) -> Bool { chapter.url.scheme == "https" }
     func download(_ chapters: [Chapter]) {
+        var pending = pendingDownloads()
         for chapter in chapters where canDownload(chapter) && !downloaded.contains(chapter.id) {
             if let status = downloads[chapter.id] {
                 guard case .failed = status else { continue }
             }
+            if !pending.contains(where: { $0.id == chapter.id }) { pending.append(chapter) }
             downloadQueue.append(chapter)
             downloads[chapter.id] = .queued
         }
+        persistPending(pending)
         startDownloads()
     }
     /// Set while downloads wait for Wi-Fi (Settings › Downloads › Wi-Fi only).
@@ -756,6 +774,8 @@ final class LibraryModel: ObservableObject {
         }
     }
     func cancelDownload(_ chapter: Chapter) {
+        forgetPending(chapter.id)
+        if case .failed = downloads[chapter.id] { Task { await OfflineStore.shared.remove(chapter.id) } }
         downloadQueue.removeAll { $0.id == chapter.id }
         downloads[chapter.id] = nil
     }
@@ -765,6 +785,7 @@ final class LibraryModel: ObservableObject {
         Task { await OfflineStore.shared.remove(chapter.id) }
     }
     func removeAllDownloads() {
+        persistPending([])
         downloadQueue.removeAll()
         downloads = [:]
         downloaded = []
@@ -777,6 +798,7 @@ final class LibraryModel: ObservableObject {
             if series(containing: chapter)?.kind == .novel {
                 // A novel chapter is its text: one small file.
                 try await downloadNovelChapter(chapter)
+                forgetPending(chapter.id)
                 downloaded.insert(chapter.id)
                 downloads[chapter.id] = nil
                 return
@@ -793,6 +815,7 @@ final class LibraryModel: ObservableObject {
                 downloads[chapter.id] = .running(Double(i + 1) / Double(pages.count))
             }
             try await OfflineStore.shared.finish(chapter.id, title: chapter.title, files: files)
+            forgetPending(chapter.id)
             downloaded.insert(chapter.id)
             downloads[chapter.id] = nil
         } catch {
@@ -866,8 +889,18 @@ final class LibraryModel: ObservableObject {
         save()
     }
     /// Sets things up so opening the bookmark's chapter lands on its spot, and returns the chapter to open.
-    func prepareToOpen(_ bookmark: Bookmark) -> Chapter? {
+    func prepareToOpen(_ bookmark: Bookmark, remember: Bool = true) -> Chapter? {
         guard let series = series(id: bookmark.seriesID), let chapter = series.chapters.first(where: { $0.id == bookmark.chapterID }) else { return nil }
+        if remember {
+            bookmarkReturn = nil
+            if let last = lastChapter, let previous = self.series(id: seriesID(for: last)), let progress = state.progress[last.id] {
+                let book = previous.isPlainBook ? state.bookPositions?[previous.id] : nil
+                let novel = previous.isNovel ? state.novelPositions?[previous.id] : nil
+                bookmarkReturn = Bookmark(seriesID: previous.id, chapterID: last.id, chapterTitle: last.title,
+                                          page: progress.page, pageCount: progress.pageCount,
+                                          offset: book?.offset ?? novel?.offset, section: book?.section)
+            }
+        }
         switch series.kind {
         case .novel:
             var map = state.novelPositions ?? [:]

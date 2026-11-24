@@ -8,6 +8,8 @@ struct ReaderView: View {
     @State private var pages: [MangaPage] = []
     @State private var page = 0
     @State private var scrub: Int?
+    @State private var readerGeneration = 0
+    @State private var returnChapter: Chapter?
     @State private var returnPage: Int?
     @State private var loading = true
     @State private var failure: String?
@@ -65,6 +67,7 @@ struct ReaderView: View {
     private var prefetchKey: String { "\(chapter.id)-\(page)-\(phase == .active)-\(pages.count)" }
     var body: some View {
         // Books read as books; everything else in the page reader.
+        Group {
         if BookLink.isBook(chapter) {
             BookReaderView(chapter: chapter)
         } else if library.isNovelChapter(chapter) {
@@ -72,6 +75,21 @@ struct ReaderView: View {
         } else {
             mangaBody
         }
+        }.id(readerGeneration)
+        .safeAreaInset(edge: .bottom) {
+            if let mark = library.bookmarkReturn {
+                HStack {
+                    Button("Return to previous reading position") {
+                        library.bookmarkReturn = nil
+                        if let target = library.prepareToOpen(mark, remember: false) {
+                            chapter = target; retry += 1; readerGeneration += 1
+                        }
+                    }
+                    Button("Dismiss") { library.bookmarkReturn = nil }
+                }.font(.footnote).padding(6)
+            }
+        }
+        .onDisappear { library.bookmarkReturn = nil }
     }
     private var mangaBody: some View {
         GeometryReader { geometry in
@@ -343,6 +361,9 @@ struct ReaderView: View {
                     Button("Next bubble") { speaker.play(speaker.position + 1) }
                     Button("Stop reading aloud") { stopSpeech() }
                 }
+                if let previous = returnChapter {
+                    Button("Return to " + previous.title) { open(previous); returnChapter = nil }
+                }
                 Menu("Scan cleanup for this series") {
                     ForEach(["Use global setting", "Off", "Light", "Standard", "Strong"], id: \.self) { label in
                         Button(label) {
@@ -543,7 +564,7 @@ struct ReaderView: View {
     private func stopSpeech() { speechTask?.cancel(); speaker.stop(); spokenBubbles = [] }
     private func open(_ target: Chapter) {
         stopSpeech()
-        remember()
+        remember(); returnChapter = chapter
         scrub = nil; returnPage = nil; pages = []; loading = true; chapter = target
     }
     /// Tap the left or right edge to turn the page (direction-aware), the middle to show or hide controls.

@@ -3,8 +3,17 @@ import AVFoundation
 import NaturalLanguage
 
 @MainActor
-final class PassageSpeaker: ObservableObject {
+final class PassageSpeaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     private let synth = AVSpeechSynthesizer()
+    private var utteranceID: ObjectIdentifier?
+    override init() { super.init(); synth.delegate = self }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor [weak self] in
+            guard let self, utteranceID == id else { return }
+            play(position + 1)
+        }
+    }
     private var passages: [String] = []
     @Published private(set) var position = 0
     func start(_ strings: [String], at index: Int = 0) {
@@ -16,15 +25,17 @@ final class PassageSpeaker: ObservableObject {
         guard passages.indices.contains(index) else { return }
         synth.stopSpeaking(at: .immediate)
         position = index
-        for text in passages[index...] {
+        let text = passages[index]
+        do {
             let speech = AVSpeechUtterance(string: text)
             if let language = NLLanguageRecognizer.dominantLanguage(for: text) {
                 speech.voice = AVSpeechSynthesisVoice(language: language.rawValue)
             }
+            utteranceID = ObjectIdentifier(speech)
             synth.speak(speech)
         }
     }
-    func stop() { synth.stopSpeaking(at: .immediate); passages = []; position = 0 }
+    func stop() { utteranceID = nil; synth.stopSpeaking(at: .immediate); passages = []; position = 0 }
 }
 
 /// Uses UTF-16 offsets, matching the book typesetter and persisted bookmarks.
@@ -37,6 +48,14 @@ struct PassageTools: View {
     let jump: (Int, Int) -> Void
     let annotate: (Int, Int, String, String) -> Void
     let speaker: PassageSpeaker
+    var searchChapters: ((String) async -> [ChapterHit])? = nil
+    var jumpToChapter: ((ChapterHit) -> Void)? = nil
+    struct ChapterHit: Identifiable {
+        let chapter: Chapter
+        let passage: String
+        var id: String { chapter.id }
+    }
+    @State private var otherMatches: [ChapterHit] = []
     @State private var query = ""
     @State private var note = ""
     @State private var selected: Hit?
@@ -71,7 +90,15 @@ struct PassageTools: View {
     var body: some View {
         NavigationStack {
             List {
-                if matches.isEmpty { Text("No passages found").foregroundStyle(.secondary) }
+                if matches.isEmpty && otherMatches.isEmpty { Text("No passages found").foregroundStyle(.secondary) }
+                ForEach(otherMatches) { hit in
+                    Button { jumpToChapter?(hit); dismiss() } label: {
+                        VStack(alignment: .leading) {
+                            Text(hit.chapter.title).font(.caption)
+                            Text(hit.passage).lineLimit(3)
+                        }
+                    }
+                }
                 ForEach(matches) { hit in
                     Button { selected = hit } label: {
                         VStack(alignment: .leading) {
@@ -85,11 +112,17 @@ struct PassageTools: View {
             .searchable(text: $query, prompt: "Find in text")
             .toolbar { Button("Done") { dismiss() } }
             .task(id: query) {
+                otherMatches = []
                 guard let ref = book.pages[safe: page] else { return }
                 let strings = book.sections.prefix(sections).map(\.string)
                 let search = query
                 let result = await Task.detached(priority: .userInitiated) { Self.find(search, in: strings, page: ref) }.value
-                if !Task.isCancelled { matches = result }
+                guard !Task.isCancelled else { return }
+                matches = result
+                if !search.isEmpty, let searchChapters {
+                    let others = await searchChapters(search)
+                    if !Task.isCancelled { otherMatches = others }
+                }
             }
             .sheet(item: $selected) { hit in
                 NavigationStack {

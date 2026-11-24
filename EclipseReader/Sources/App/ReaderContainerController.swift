@@ -14,6 +14,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
     private var pager: UIPageViewController?
     private var collection: UICollectionView?
     private var current = 0
+    private var restoredViewports: [String: ZoomPageView.Viewport] = [:]
     private var configurationKey = ""
     private var ratios: [Int: Double] = [:]
     private var turning = false
@@ -44,6 +45,10 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
                 changed(target)
             }
             return
+        }
+        if configurationKey != key {
+            restoredViewports = self.chapter?.id == chapter.id
+                ? (pager?.viewControllers?.first as? PageCanvasController)?.viewports() ?? [:] : [:]
         }
         if self.chapter?.id != chapter.id { ratios.removeAll() }
         self.pages = pages; self.groups = groups; self.chapter = chapter; self.pipeline = pipeline; self.preferences = preferences
@@ -132,7 +137,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
     }
     private func canvas(_ index: Int) -> PageCanvasController {
         let chapterID = chapter?.id
-        return PageCanvasController(groupIndex: index, group: groups[index], pages: pages, chapter: chapter!, pipeline: pipeline!,
+        let result = PageCanvasController(groupIndex: index, group: groups[index], pages: pages, chapter: chapter!, pipeline: pipeline!,
             preferences: preferences, tap: { [weak self] x in self?.tapped?(x) },
             dimensions: { [weak self] index, ratio in
                 // Never mutate SwiftUI state synchronously during a representable update.
@@ -141,6 +146,9 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
                     self.dimensions?(index, ratio)
                 }
             })
+        result.restoredViewports = restoredViewports
+        for i in groups[index].indices { restoredViewports[pages[i].id] = nil }
+        return result
     }
     private func adjacent(_ viewController: UIViewController, swipeLeft: Bool) -> UIViewController? {
         guard let vc = viewController as? PageCanvasController,
@@ -210,6 +218,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !rebuilding, let collection, scrollView === collection,
               scrollView.isDragging || scrollView.isDecelerating || autoLink != nil else { return }
+        for case let cell as VerticalPageCell in collection.visibleCells { cell.canvas.scheduleDetail() }
         if collection.contentOffset.y + collection.bounds.height >= collection.contentSize.height - 1 {
             let last = max(0, pages.count - 1)
             if last != current { current = last; changed?(current) }
