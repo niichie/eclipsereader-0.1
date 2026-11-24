@@ -26,7 +26,7 @@
     { "id": "digitalcomicmuseum", "name": "Digital Comic Museum", "url": "https://digitalcomicmuseum.com/", "category": "comics", "style": "comic",
       "note": "Public-domain comics · free downloads with an account" },
     { "id": "syosetu", "name": "Syosetu", "url": "https://ncode.syosetu.com/", "category": "novels", "native": true,
-      "note": "Where most Japanese light novels start · Japanese, translates on the device" },
+      "note": "Original Japanese web novels" },
     { "id": "kakuyomu", "name": "Kakuyomu", "url": "https://kakuyomu.jp/", "category": "novels", "native": true,
       "note": "Kadokawa's web novels · Japanese, translates on the device" },
     { "id": "wuxiaworld", "name": "Wuxiaworld", "url": "https://www.wuxiaworld.com/", "category": "novels", "native": true,

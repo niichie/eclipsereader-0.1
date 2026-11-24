@@ -249,6 +249,42 @@ public enum Syosetu {
                                              URLQueryItem(name: "order", value: "hyperpoint")]), referer: nil, image: false)
         return items(try parseAPI(data))
     }
+    /// Match published novel editions to ranked web novels, keeping Syosetu's order and reading links.
+    static func illustratedPreviews(_ ranked: [DiscoverItem]) async -> [DiscoverItem] {
+        var previews: [DiscoverItem] = []
+        for start in stride(from: 0, to: ranked.count, by: 6) {
+            guard !Task.isCancelled else { return [] }
+            let batch = Array(ranked[start..<min(start + 6, ranked.count)])
+            var variables: [String: any Sendable] = [:]
+            for (index, item) in batch.enumerated() { variables["s\(index)"] = QuoteFeed.searchable(native: item.title) }
+            var request = URLRequest(url: AniListAPI.endpoint, timeoutInterval: 10)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? AniListAPI.body(QuoteFeed.batchQuery(batch.count), variables: variables)
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200 else { break }
+            previews += matchedPreviews(batch, data: data)
+        }
+        return previews
+    }
+
+    static func matchedPreviews(_ items: [DiscoverItem], data: Data) -> [DiscoverItem] {
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let groups = json?["data"] as? [String: Any]
+        return items.enumerated().compactMap { index, item in
+            let group = groups?["m\(index)"] as? [String: Any]
+            let matches = (group?["media"] as? [[String: Any]] ?? []).filter { entry in
+                guard entry["format"] as? String == "NOVEL", let titles = entry["title"] as? [String: Any],
+                      let native = titles["native"] as? String else { return false }
+                return QuoteFeed.key(native) == QuoteFeed.key(item.title)
+            }
+            guard matches.count == 1, let match = matches.first,
+                  let titles = match["title"] as? [String: Any], let english = titles["english"] as? String,
+                  !english.isEmpty, let cover = QuoteFeed.hit(match)?.media.cover else { return nil }
+            return DiscoverItem(id: item.id, title: english, url: item.url, cover: cover, detail: item.detail)
+        }
+    }
+
     /// The most-loved works of all time (Syosetu's own points ranking).
     public static func popular(http: any HTTPTransport) async throws -> [DiscoverItem] {
         let data = try await http.fetch(api([URLQueryItem(name: "lim", value: "24"), URLQueryItem(name: "order", value: "hyperpoint")]),

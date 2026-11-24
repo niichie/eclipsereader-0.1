@@ -235,7 +235,7 @@ struct HomeSetupSheet: View {
                     Text("Your picks come first in the library tabs and in Browse, and the launch card only suggests these.")
                 }
                 Section {
-                    option($novels, "Light novels & web novels", "Novels too: Syosetu, Kakuyomu, Wuxiaworld or any novel site, set like a printed book. Raws translate on the device.", "text.book.closed")
+                    option($novels, "Light novels & web novels", "Novels too: Syosetu, Kakuyomu, Wuxiaworld or any novel site, set like a printed book.", "text.book.closed")
                     option($books, "Books", "Normal books (EPUB, Kindle, FB2, TXT…), set like a printed book. Adds a Books tab and free classics in Browse.", "books.vertical")
                 } header: { Text("Reading beyond comics") } footer: {
                     Text("Both are optional; eclipsereader is a comics reader first.")
@@ -249,7 +249,7 @@ struct HomeSetupSheet: View {
                     Toggle(isOn: $raws) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Raws too")
-                            Text("Untranslated works, read with on-device translation.").font(.caption).foregroundStyle(.secondary)
+                            Text("Include novels in their original language.").font(.caption).foregroundStyle(.secondary)
                         }
                     }.tint(Eclipse.accent)
                 } header: { Text("Where from") } footer: {

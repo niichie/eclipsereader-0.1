@@ -69,6 +69,18 @@ final class NovelTests: XCTestCase {
         XCTAssertNil(Syosetu.ncode(URL(string: "https://syosetu.com/")!))
     }
 
+    func testSyosetuPreviewKeepsOriginalLinkAndRequiresMatchingNovelEdition() throws {
+        let url = try XCTUnwrap(URL(string: "https://ncode.syosetu.com/n1234ab/"))
+        let item = DiscoverItem(id: "work", title: "物語", url: url, cover: nil, detail: "Japanese")
+        let data = Data(#"{"data":{"m0":{"media":[{"id":1,"format":"MANGA","title":{"native":"物語","english":"Comic"}},{"id":2,"format":"NOVEL","title":{"native":"物語","english":"The Story"},"coverImage":{"large":"https://example.org/cover.jpg"}}]}}}"#.utf8)
+        let preview = try XCTUnwrap(Syosetu.matchedPreviews([item], data: data).first)
+        XCTAssertEqual(preview.title, "The Story")
+        XCTAssertEqual(preview.cover?.lastPathComponent, "cover.jpg")
+        XCTAssertEqual(preview.url, url)
+        let other = DiscoverItem(id: "other", title: "別の物語", url: url, cover: nil, detail: nil)
+        XCTAssertTrue(Syosetu.matchedPreviews([other], data: data).isEmpty)
+    }
+
     func testSyosetuAPI() throws {
         let json = #"[{"allcount":41},{"title":"無職転生","ncode":"N9669BK","writer":"理不尽な孫の手","story":"34歳…","noveltype":1,"end":0,"general_all_no":286},{"title":"短編","ncode":"N1111AA","noveltype":2,"general_all_no":1}]"#
         let entries = try Syosetu.parseAPI(Data(json.utf8))

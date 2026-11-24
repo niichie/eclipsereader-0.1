@@ -45,7 +45,7 @@ struct GuideView: View {
                     item("text.book.closed", "Set like a printed book", "Typeface, size, spacing, margins and paper colour are under the Aa button. Turn the phone sideways for two pages side by side.")
                     if novelsOn {
                         item("arrow.right.to.line", "Chapter to chapter", "A novel carries straight on into the next chapter when you turn past the last page. The list button jumps anywhere.")
-                        item("character.bubble", "Translating raws", "Japanese, Chinese and Korean novels translate paragraph by paragraph on the device with the speech-bubble button. Long-press it to always translate that novel.")
+                        item("character.bubble", "Translating raws", "Japanese, Chinese and Korean novels translate paragraph by paragraph on the device with the speech-bubble button. Syosetu starts each chapter in Japanese.")
                     }
                 }
             }

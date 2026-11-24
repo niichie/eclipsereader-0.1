@@ -22,6 +22,7 @@ struct BrowseView: View {
     @AppStorage(Features.booksKey) private var booksOn = false
     /// Redraws Browse when novels are turned on or off.
     @AppStorage(Features.novelsKey) private var novelsOn = false
+    @AppStorage(Interests.rawsKey) private var showRaws = true
     @AppStorage(Interests.categoriesKey) private var categoriesRaw = ""
     @EnvironmentObject private var model: LibraryModel
     @State private var address = ""
@@ -81,7 +82,7 @@ struct BrowseView: View {
                     }
                     if let discoverError { Text(discoverError).font(.footnote).foregroundStyle(.orange) }
 
-                    if novelsOn { NovelBrowseSection(browsing: $browsing, opened: $opened) }
+                    if novelsOn && showRaws { NovelBrowseSection(opened: $opened) }
                     let favorites = model.sources.filter { $0.favorite == true && $0.hidden != true }
                     if !favorites.isEmpty {
                         section("Favourite sources", detail: nil) { siteGrid(favorites) }

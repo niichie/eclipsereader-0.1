@@ -419,7 +419,7 @@ struct NovelReaderView: View {
                 if forward, let next = nextChapter { open(next) }
                 else if !forward, let previous = library.previous(before: chapter) { open(previous, atEnd: true) }
             }
-            if let id = series?.id, NovelTranslator.isAlways(id) { translator.active = true }
+            if !Syosetu.handles(chapter.url), let id = series?.id, NovelTranslator.isAlways(id) { translator.active = true }
         }
         .onDisappear { logTime(); UIApplication.shared.isIdleTimerDisabled = false; pager.beyondEnd = nil }
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: page) { _, _ in haptics }
@@ -546,6 +546,7 @@ struct NovelReaderView: View {
         landAtEnd = atEnd
         typeset = nil
         page = 0
+        if Syosetu.handles(target.url) { translator.active = false }
         chapter = target
     }
     private func tapped(at x: CGFloat) {
@@ -634,7 +635,7 @@ struct NovelReaderView: View {
                     }
                     .accessibilityLabel(translator.active ? "Show the original" : "Translate")
                     .contextMenu {
-                        if let id = series?.id {
+                        if !Syosetu.handles(chapter.url), let id = series?.id {
                             Button(NovelTranslator.isAlways(id) ? "Stop translating this novel" : "Always translate this novel") {
                                 let on = !NovelTranslator.isAlways(id)
                                 NovelTranslator.setAlways(on, id)
@@ -716,29 +717,28 @@ struct NovelContentsSheet: View {
 /// Popular Japanese web novels from Syosetu, when you read raws (translated on the device).
 struct NovelBrowseSection: View {
     @EnvironmentObject private var model: LibraryModel
-    @Binding var browsing: BrowseTarget?
     @Binding var opened: MangaSeries?
     @State private var popular: [DiscoverItem] = []
     @State private var adding: String?
     @State private var failure: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if Interests.raws && !popular.isEmpty {
+            if !popular.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Popular on Syosetu").font(.title3.weight(.bold))
-                    Text("Japanese web novels · translate on the device in the reader").font(.footnote).foregroundStyle(.secondary)
+                    Text("English edition titles · chapters in Japanese").font(.footnote).foregroundStyle(.secondary)
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 12) {
                         ForEach(popular) { item in
                             Button { add(item) } label: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    ZStack {
-                                        RoundedRectangle(cornerRadius: 10).fill(Eclipse.accent.opacity(0.25))
-                                        Text(item.title).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(6).padding(8)
-                                        if adding == item.id { ProgressView() }
-                                    }
-                                    .frame(width: 112, height: 160)
+                                    CoverView(url: item.cover, referer: nil)
+                                        .frame(width: 112, height: 160)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                        .overlay { if adding == item.id { ProgressView() } }
+                                    Text(item.title).font(.caption.weight(.semibold)).lineLimit(2)
+                                        .multilineTextAlignment(.leading)
                                     if let detail = item.detail { Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                                 }
                                 .frame(width: 112)
@@ -751,8 +751,8 @@ struct NovelBrowseSection: View {
             }
         }
         .task {
-            guard Interests.raws, popular.isEmpty else { return }
-            popular = (try? await Syosetu.popular(http: WebsiteHTTPClient())) ?? []
+            guard popular.isEmpty, let ranked = try? await Syosetu.popular(http: WebsiteHTTPClient()), !Task.isCancelled else { return }
+            popular = await Syosetu.illustratedPreviews(ranked)
         }
     }
     private func add(_ item: DiscoverItem) {
