@@ -176,18 +176,25 @@ struct CoverTint: Sendable, Equatable {
     }
 }
 
-/// Upscale and clean low-resolution scans (Core Image: Lanczos, light noise reduction, luminance sharpening).
+/// Clean low-contrast noise at source resolution so enlargement does not amplify it.
 enum PageEnhancer {
     nonisolated(unsafe) private static let context = CIContext(options: [.cacheIntermediates: false])
+
     static func enhance(_ image: CGImage, targetLongSide: Double) -> CGImage? {
-        let long = Double(max(image.width, image.height))
-        guard long > 0, long < targetLongSide * 0.8 else { return nil }
-        let scale = min(2.0, targetLongSide / long)
+        let width = Double(image.width)
+        let height = Double(image.height)
+        let long = max(width, height)
+        let pixels = width * height
+        // Bound the extra decoded surface, including long strips held by the scroll reader.
+        guard pixels <= 8_000_000, long <= 16_384 else { return nil }
+        let scale = min(2, max(1, targetLongSide / long), sqrt(8_000_000 / pixels), 16_384 / long)
         let input = CIImage(cgImage: image)
-        let scaled = input.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0])
-        let clean = scaled
-            .applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.012, "inputSharpness": 0.5])
-            .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.5, kCIInputRadiusKey: 1.5])
-        return context.createCGImage(clean, from: scaled.extent.integral)
+        let clean = input.clampedToExtent()
+            .applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.035, "inputSharpness": 0.0])
+        let output = scale > 1 ? clean.applyingFilter("CILanczosScaleTransform", parameters: [
+            kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0
+        ]) : clean
+        let bounds = CGRect(x: 0, y: 0, width: floor(width * scale), height: floor(height * scale))
+        return context.createCGImage(output, from: bounds)
     }
 }

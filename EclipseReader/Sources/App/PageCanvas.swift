@@ -56,11 +56,11 @@ private enum PageDecoder {
             base = cg.cropping(to: rect) ?? cg
         }
         var final = trim ? (cropMargins(base) ?? base) : base
-        // Low-resolution scans: upscale toward the screen's size and clean them up.
-        // Tall webtoon strips are only enhanced when they're narrow.
-        if enhance, final.height <= final.width * 3 || final.width < 720,
-           let better = PageEnhancer.enhance(final, targetLongSide: final.height > final.width * 3 ? 1440 * Double(final.height) / Double(max(1, final.width)) : limit * 0.66) {
-            final = better
+        if enhance {
+            let target = final.height > final.width * 3
+                ? 1440 * Double(final.height) / Double(final.width)
+                : limit * 0.66
+            final = PageEnhancer.enhance(final, targetLongSide: target) ?? final
         }
         return DecodedImage(image: UIImage(cgImage: final), ratio: Double(final.width) / Double(final.height))
     }

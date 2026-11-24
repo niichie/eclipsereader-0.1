@@ -11,6 +11,38 @@ final class ReaderChecks: XCTestCase {
         ("Pride and Prejudice (Standard Ebooks)", "https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice/downloads/jane-austen_pride-and-prejudice.epub?source=download"),
         ("Alice (Project Gutenberg mirror, pictures)", "https://gutenberg.pglaf.org/cache/epub/11/pg11-images-3.epub"),
     ]
+    func testEnhanceCleansScanNoiseAndPreservesInk() throws {
+        let size = 64
+        let gray = CGColorSpaceCreateDeviceGray()
+        func bitmap() throws -> CGContext {
+            try XCTUnwrap(CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
+                                    bytesPerRow: size, space: gray, bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        }
+        let source = try bitmap()
+        let samples = try XCTUnwrap(source.data).assumingMemoryBound(to: UInt8.self)
+        for y in 0..<size {
+            for x in 0..<size {
+                samples[y * size + x] = x == 32 ? 12 : ((x + y).isMultiple(of: 2) ? 244 : 248)
+            }
+        }
+        let page = UIImage(cgImage: try XCTUnwrap(source.makeImage()))
+        for (index, data) in [try XCTUnwrap(page.pngData()), try XCTUnwrap(page.jpegData(compressionQuality: 0.8))].enumerated() {
+            let decoded = try XCTUnwrap(UIImage(data: data)?.cgImage)
+            let native = try XCTUnwrap(PageEnhancer.enhance(decoded, targetLongSide: 64))
+            XCTAssertEqual(native.width, size)
+            let enlarged = try XCTUnwrap(PageEnhancer.enhance(decoded, targetLongSide: 256))
+            XCTAssertEqual(enlarged.width, size * 2)
+            let output = try bitmap()
+            output.draw(native, in: CGRect(x: 0, y: 0, width: size, height: size))
+            let values = try XCTUnwrap(output.data).assumingMemoryBound(to: UInt8.self)
+            XCTAssertLessThan(values[32 * size + 32], 70)
+            XCTAssertGreaterThan(values[32 * size + 31], 210)
+            if index == 0 {
+                XCTAssertLessThan(abs(Int(values[16]) - Int(values[17])), 4)
+            }
+        }
+    }
+
     private var windows: [UIWindow] = []
 
     override func tearDown() async throws {
