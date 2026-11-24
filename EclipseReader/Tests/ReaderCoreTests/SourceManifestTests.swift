@@ -17,6 +17,20 @@ final class SourceManifestTests: XCTestCase {
         }
     }
 
+    func testBundledReadBerserkSearch() async throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/DefaultSources.json")
+        let sites = try SourceManifest.decode(Data(contentsOf: file))
+        let site = try XCTUnwrap(sites.first { $0.bundledID == "readberserk" })
+        XCTAssertEqual(site.category, .manga)
+        XCTAssertEqual(site.native, true)
+        let source = SearchSource(name: site.name, kind: .site(site.url))
+        let hits = try await GlobalSearch.search(source, query: "Berserk")
+        XCTAssertEqual(hits.map(\.url), [ReadBerserkParser.home])
+        let unrelated = try await GlobalSearch.search(source, query: "Xiao Gu Niang")
+        XCTAssertTrue(unrelated.isEmpty)
+    }
+
     func testPastedListsKeepNames() {
         let text = """
         # my sources

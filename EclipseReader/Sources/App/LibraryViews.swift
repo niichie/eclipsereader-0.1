@@ -1819,7 +1819,7 @@ struct SeriesView: View {
                         if let url = series.bookDownloadURL { downloadBook(url) }
                     })
                         .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
-                    if !builtIn {
+                    if !builtIn || !series.isLibraryMember {
                         Button { model.addToLibrary(series) } label: {
                             Label(series.isLibraryMember ? "In Library" : "Add to Library",
                                   systemImage: series.isLibraryMember ? "checkmark.circle" : "plus.circle")

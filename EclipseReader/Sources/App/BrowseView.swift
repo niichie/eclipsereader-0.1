@@ -201,7 +201,8 @@ struct BrowseView: View {
             ForEach(sites) { site in
                 SiteRow(name: site.name, host: site.url.host ?? "", note: site.note, symbol: site.category?.symbol ?? "bookmark.fill",
                         native: site.native == true) {
-                    browsing = BrowseTarget(url: site.url)
+                    if site.url == ReadBerserkParser.home { opened = model.berserk }
+                    else { browsing = BrowseTarget(url: site.url) }
                 }
                 .contextMenu {
                     Button { var s = site; s.favorite = !(site.favorite ?? false); model.updateSource(s) } label: {

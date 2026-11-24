@@ -58,6 +58,10 @@ public enum GlobalSearch {
             parts.queryItems = [URLQueryItem(name: "keyword", value: q)]
             guard let url = parts.url else { return [] }
             return strictCanvas(relevant(webtoonsResults(in: try await text(url, http: http), base: url), to: q), query: q)
+        case .site(let root) where ReadBerserkParser.normalize(root.absoluteString, relativeTo: ReadBerserkParser.home) != nil:
+            let item = DiscoverItem(id: "berserk", title: "Berserk", url: ReadBerserkParser.home, cover: nil, detail: source.name)
+            if ["readberserk", "ベルセルク"].contains(q.lowercased()) { return [item] }
+            return relevant([item], to: q).filter { _ in q.contains(where: { $0.isLetter }) }
         case .site(let root) where (root.host ?? "").lowercased().hasSuffix("mangadot.net"):
             // MangaDot builds its search page with scripts; its own search API answers directly.
             var parts = URLComponents(string: "https://mangadot.net/api/search")!

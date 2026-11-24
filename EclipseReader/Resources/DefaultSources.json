@@ -7,6 +7,8 @@
     "manga | manhwa | manhua | webtoon | comic). Everything else on a site works through the generic browser and reader."
   ],
   "sources": [
+    { "id": "readberserk", "name": "ReadBerserk", "url": "https://readberserk.com/", "category": "manga", "native": true,
+      "note": "Berserk chapters" },
     { "id": "mangadex", "name": "MangaDex", "url": "https://mangadex.org/", "category": "manga", "native": true,
       "note": "Huge community library, every language" },
     { "id": "weebcentral", "name": "WeebCentral", "url": "https://weebcentral.com/", "category": "manga", "native": true,

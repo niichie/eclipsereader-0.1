@@ -63,7 +63,6 @@ final class LibraryModel: ObservableObject {
                 restored.progress[chapter.id] != nil || restored.lastChapterID == chapter.id
                     || restored.bookmarks?.contains(where: { mark in mark.chapterID == chapter.id }) == true
             }
-            restored.sites?.removeAll { $0.bundledID == "readberserk" && $0.url == ReadBerserkParser.home && $0.name == "ReadBerserk" }
         }
         // Links added by an earlier build were single chapters; keep them as one-chapter series.
         if let shelf = restored.shelf, !shelf.isEmpty {
@@ -163,8 +162,10 @@ final class LibraryModel: ObservableObject {
     static let berserkID = "berserk"
     /// The built-in ReadBerserk source, shown in the library like any other series.
     var berserk: MangaSeries {
-        MangaSeries(id: Self.berserkID, url: ReadBerserkParser.home, title: "Berserk",
+        var series = MangaSeries(id: Self.berserkID, url: ReadBerserkParser.home, title: "Berserk",
                     cover: state.covers?[Self.berserkID], kind: .web, chapters: state.chapters, added: .distantPast)
+        series.inLibrary = state.showsBerserk == true
+        return series
     }
     /// Berserk first, then everything the user added.
     var librarySeries: [MangaSeries] {
