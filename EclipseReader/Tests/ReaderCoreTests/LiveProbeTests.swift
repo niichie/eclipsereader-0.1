@@ -381,6 +381,40 @@ final class LiveProbeTests: XCTestCase {
         dump("syosetu popular", "\(pa) " + String(popular.prefix(500)))
     }
 
+    /// The novel sources through the app's own code (the same client the app uses).
+    func testNovelSources() async {
+        let source = NovelSource(http: http)
+        _ = await timed("Syosetu search", { try await Syosetu.search("無職転生", http: http) }) { ($0.count > 0, "\($0.count): " + $0.prefix(3).map(\.title).joined(separator: ", ")) }
+        _ = await timed("Syosetu popular", { try await Syosetu.popular(http: http) }) { ($0.count > 5, "\($0.count): " + $0.prefix(3).map(\.title).joined(separator: ", ")) }
+        let syosetu = await timed("Syosetu series", { try await source.info(URL(string: "https://ncode.syosetu.com/n9669bk/")!) }) {
+            ($0.chapters.count > 250, "\($0.title) · \($0.chapters.count) chapters · \($0.author ?? "-") · last: \($0.chapters.last?.title ?? "-")")
+        }
+        if let first = syosetu?.chapters.first {
+            _ = await timed("Syosetu chapter", { try await source.chapter(first.url) }) { ($0.blocks(base: first.url).count > 20, "\($0.title ?? "-") · \($0.blocks(base: first.url).count) paragraphs") }
+        }
+        _ = await timed("Kakuyomu search", { try await Kakuyomu.search("転生", http: http) }) { ($0.count > 3, "\($0.count): " + $0.prefix(3).map(\.title).joined(separator: ", ")) }
+        if let work = try? await Kakuyomu.search("転生", http: http).first {
+            let info = await timed("Kakuyomu series", { try await source.info(work.url) }) { ($0.chapters.count > 0, "\($0.title) · \($0.chapters.count) chapters · first: \($0.chapters.first?.title ?? "-")") }
+            if let first = info?.chapters.first {
+                _ = await timed("Kakuyomu chapter", { try await source.chapter(first.url) }) { ($0.blocks(base: first.url).count > 5, "\($0.title ?? "-") · \($0.blocks(base: first.url).count) paragraphs") }
+            }
+        }
+        let ww = await timed("Wuxiaworld series", { try await source.info(URL(string: "https://www.wuxiaworld.com/novel/martial-world")!) }) {
+            ($0.chapters.count > 2000, "\($0.title) · \($0.chapters.count) chapters · \($0.chapters.first?.url.lastPathComponent ?? "-")…\($0.chapters.last?.url.lastPathComponent ?? "-")")
+        }
+        if let chapters = ww?.chapters, chapters.count > 30 {
+            for chapter in [chapters[1], chapters[30], chapters[chapters.count - 1]] {
+                _ = await timed("Wuxiaworld \(chapter.url.lastPathComponent)", { try await source.chapter(chapter.url) }) {
+                    ($0.blocks(base: chapter.url).count > 5, "\($0.title ?? "-") · \($0.blocks(base: chapter.url).count) paragraphs · locked \($0.locked)")
+                }
+            }
+        }
+        for (name, address) in [("Comic Book Plus", "https://comicbookplus.com/"), ("Digital Comic Museum", "https://digitalcomicmuseum.com/"),
+                                ("J-Novel Club", "https://j-novel.club/"), ("Royal Road", "https://www.royalroad.com/home")] {
+            await raw(name, address)
+        }
+    }
+
     func testDiagnostics() async {
         for (label, ua) in [("iphone", "iphone"), ("app", "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"), ("none", nil)] as [(String, String?)] {
             let (status, type, text) = await body("https://api.mangadex.org/manga?limit=1&title=chainsaw", ua: ua, accept: "application/json")

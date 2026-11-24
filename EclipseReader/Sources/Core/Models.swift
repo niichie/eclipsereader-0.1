@@ -71,13 +71,108 @@ public enum ImageQuality: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// A website the user saved in the Browse tab.
+/// What a source offers, which decides where it appears and how what you add from it reads.
+public enum SourceCategory: String, Codable, CaseIterable, Identifiable, Sendable {
+    case manga, manhwa, manhua, webtoons, comics, novels
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .manga: "Manga"
+        case .manhwa: "Manhwa"
+        case .manhua: "Manhua"
+        case .webtoons: "Webtoons"
+        case .comics: "Comics"
+        case .novels: "Light novels & web novels"
+        }
+    }
+    public var short: String { self == .novels ? "Novels" : title }
+    public var symbol: String {
+        switch self {
+        case .manga: "book.pages"
+        case .manhwa: "rectangle.portrait"
+        case .manhua: "scroll"
+        case .webtoons: "iphone.gen3"
+        case .comics: "bubble.left.and.bubble.right"
+        case .novels: "text.book.closed"
+        }
+    }
+    /// The reading style series from this kind of source start with (novels read as text).
+    public var style: ReadingStyle? {
+        switch self {
+        case .manga: .manga
+        case .manhwa: .manhwa
+        case .manhua: .manhua
+        case .webtoons: .webtoon
+        case .comics: .comic
+        case .novels: nil
+        }
+    }
+}
+
+/// A website source: one you saved, or one of the app's bundled destinations. Everything but the name and
+/// address is optional, so older saved libraries still decode.
 public struct SavedSite: Codable, Hashable, Identifiable, Sendable {
     public var name: String
     public var url: URL
     public var id: String { url.absoluteString }
-    public init(name: String, url: URL) { self.name = name; self.url = url }
+    /// Where it appears (manga, comics, novels…); nil means work it out from what gets added.
+    public var category: SourceCategory?
+    /// Reading style for series added from this source (nil: detect it).
+    public var style: ReadingStyle?
+    /// Read this source's pages through the in-app browser's session (for sites you signed in to there).
+    public var browserSession: Bool?
+    /// Hidden from Browse (bundled destinations can be hidden rather than removed).
+    public var hidden: Bool?
+    public var favorite: Bool?
+    /// A short description shown under the name.
+    public var note: String?
+    /// The bundled manifest entry this came from.
+    public var bundledID: String?
+    /// Reads through a dedicated connection (MangaDex, WeebCentral, WEBTOON, Syosetu…).
+    public var native: Bool?
+    public init(name: String, url: URL, category: SourceCategory? = nil, style: ReadingStyle? = nil, note: String? = nil,
+                bundledID: String? = nil, native: Bool? = nil) {
+        self.name = name; self.url = url; self.category = category; self.style = style; self.note = note
+        self.bundledID = bundledID; self.native = native
+    }
+    /// The host without "www.".
+    public var host: String { url.host?.lowercased().replacingOccurrences(of: "www.", with: "") ?? "" }
+    /// Whether an address belongs to this source (same site, any subdomain).
+    public func owns(_ address: URL) -> Bool {
+        !host.isEmpty && ChapterMerge.site(address.host) == ChapterMerge.site(url.host)
+    }
 }
+
+/// A place you marked inside a chapter.
+public struct Bookmark: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var seriesID: String
+    public var chapterID: String
+    public var chapterTitle: String
+    /// Page number for pictures; for text, the page at the time (the offset is what counts).
+    public var page: Int
+    public var pageCount: Int
+    /// Character offset into the text (books and novels), so it survives font changes.
+    public var offset: Int?
+    /// For books: the part of the book.
+    public var section: Int?
+    public var note: String?
+    public var created: Date
+    public init(id: String = UUID().uuidString, seriesID: String, chapterID: String, chapterTitle: String, page: Int, pageCount: Int,
+                offset: Int? = nil, section: Int? = nil, note: String? = nil, created: Date = Date()) {
+        self.id = id; self.seriesID = seriesID; self.chapterID = chapterID; self.chapterTitle = chapterTitle
+        self.page = page; self.pageCount = pageCount; self.offset = offset; self.section = section; self.note = note; self.created = created
+    }
+}
+
+/// Where you are in a novel: the chapter and a character offset into its text (survives font changes).
+public struct NovelPosition: Codable, Hashable, Sendable {
+    public var chapterID: String
+    public var offset: Int
+    public var updated: Date
+    public init(chapterID: String, offset: Int, updated: Date = Date()) { self.chapterID = chapterID; self.offset = offset; self.updated = updated }
+}
+
 
 /// What a series is, which decides how it reads. Automatic resolves to a detected style, else manga.
 /// Manhwa (Korean), manhua (Chinese) and webtoons (vertical webcomics from anywhere) all scroll;
@@ -230,6 +325,16 @@ public struct LibraryState: Codable, Sendable {
     public var downloadAhead: Bool?
     /// Sites saved in the Browse tab.
     public var sites: [SavedSite]?
+    /// Bundled destinations you removed (so updates don't add them back).
+    public var removedBundled: [String]?
+    /// Bundled source categories already added (onboarding and updates add each category's sources once).
+    public var bundledCategories: [String]?
+    /// Favourite series (a library tab).
+    public var favorites: [String]?
+    /// Places you marked inside chapters.
+    public var bookmarks: [Bookmark]?
+    /// Where you are in each novel, by series id.
+    public var novelPositions: [String: NovelPosition]?
     public init() {}
     public mutating func record(_ chapter: Chapter, page: Int, count: Int, completed: Bool = false) {
         lastChapterID = chapter.id
@@ -303,7 +408,8 @@ public struct LibraryCategory: Codable, Hashable, Identifiable, Sendable {
 
 /// A whole manga/manhwa added by the user, from a website or from Files.
 public struct MangaSeries: Codable, Hashable, Identifiable, Sendable {
-    public enum Kind: String, Codable, Sendable { case web, local, book }
+    /// web: pictures from a website · local: pictures from Files · book: a book file · novel: text chapters from a website.
+    public enum Kind: String, Codable, Sendable { case web, local, book, novel }
     public let id: String
     public var url: URL
     public var title: String
@@ -318,11 +424,23 @@ public struct MangaSeries: Codable, Hashable, Identifiable, Sendable {
     public var author: String?
     /// A second site that fills in chapters this one is missing (Neko's "merge"), checked on every update.
     public var merged: URL?
+    /// A book file that is a light novel volume: it shelves with novels, not with books.
+    public var lightNovel: Bool?
+    /// The language the text is written in ("ja", "zh", "ko", "en"), when known (novels).
+    public var language: String?
     public init(id: String, url: URL, title: String, cover: URL? = nil, kind: Kind, chapters: [Chapter], added: Date = Date(),
-                summary: String? = nil, author: String? = nil, merged: URL? = nil) {
+                summary: String? = nil, author: String? = nil, merged: URL? = nil, lightNovel: Bool? = nil, language: String? = nil) {
         self.id = id; self.url = url; self.title = title; self.cover = cover; self.kind = kind; self.chapters = chapters; self.added = added
-        self.summary = summary; self.author = author; self.merged = merged
+        self.summary = summary; self.author = author; self.merged = merged; self.lightNovel = lightNovel; self.language = language
     }
+    /// Light novels and web novels: web text chapters, or a book file marked as a light novel.
+    public var isNovel: Bool { kind == .novel || (kind == .book && lightNovel == true) }
+    /// A normal book (shown only when books are turned on).
+    public var isPlainBook: Bool { kind == .book && lightNovel != true }
+    /// Read as text rather than pictures.
+    public var readsAsText: Bool { kind == .book || kind == .novel }
+    /// Comes from a website and can be checked for new chapters.
+    public var isOnline: Bool { kind == .web || kind == .novel }
 }
 
 /// Fills the gaps in one site's chapter list with another's (Neko-style merging).

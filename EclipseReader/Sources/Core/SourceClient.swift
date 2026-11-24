@@ -33,6 +33,8 @@ public actor WebsiteHTTPClient: HTTPTransport {
     public static let appAgent = "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"
     /// Hosts that serve apps, not browsers (besides any api.* host).
     static let appAgentHosts: Set<String> = ["uploads.mangadex.org"]
+    /// Sites whose phone pages are built differently (or with scripts): their desktop pages are read instead.
+    static let desktopSites = ["webtoons.com", "syosetu.com", "kakuyomu.jp", "wuxiaworld.com"]
     private let session: URLSession
     public init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -49,7 +51,7 @@ public actor WebsiteHTTPClient: HTTPTransport {
         else { throw SourceError.insecureURL }
         var request = URLRequest(url: url)
         // Webtoons sends phones a script-built mobile viewer; its desktop pages list every image.
-        let desktop = !image && (url.host?.lowercased().hasSuffix("webtoons.com") ?? false)
+        let desktop = !image && Self.desktopSites.contains { url.host?.lowercased().hasSuffix($0) ?? false }
         let host = url.host?.lowercased() ?? ""
         let api = host.hasPrefix("api.")
         // APIs want to know which app is asking: MangaDex answers a browser with its website instead of
