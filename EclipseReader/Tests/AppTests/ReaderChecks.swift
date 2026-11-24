@@ -211,8 +211,9 @@ final class ReaderChecks: XCTestCase {
         let first = BookTypesetter.typeset(document, images: [:], style: style, pageSize: size)
         let second = BookTypesetter.typeset(document, images: [:], style: style, pageSize: CGSize(width: 330, height: 660))
         let pager = BookPagerController()
-        var reported: [Int] = []
-        pager.changed = { reported.append($0) }
+        let reported = Counter()
+        pager.changed = { _ in reported.count += 1 }
+        defer { pager.changed = nil }
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
         window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
@@ -237,4 +238,40 @@ final class ReaderChecks: XCTestCase {
         XCTAssertGreaterThan(pager.current, 3, "pages didn't advance")
         XCTAssertTrue(all(BookPageView.self, in: window).contains { $0.text.length > 0 }, "blank page after turning")
     }
+
+    /// The whole reader on screen, turning pages while the safe area changes under it, the way hiding
+    /// the status bar does. This re-laid out the book mid-turn and crashed a few pages in.
+    func testBookReaderTurnsWhileTheStatusBarHides() async throws {
+        let library = model()
+        let file = try await WebsiteHTTPClient().downloadFile(URL(string: Self.books[1].1)!)
+        let series = try await library.importBook(file)
+        let host = UIHostingController(rootView: AnyView(BookReaderView(chapter: series.chapters[0]).environmentObject(library)))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        window.rootViewController = host
+        window.windowLevel = .alert + 1
+        window.makeKeyAndVisible()
+        windows.append(window)
+        let opened = await wait(40) { self.all(BookPageView.self, in: window).contains { $0.text.length > 0 } }
+        XCTAssertTrue(opened, "the book never opened")
+        guard opened else { return }
+        let start = Date()
+        for round in 0..<24 {
+            NotificationCenter.default.post(name: PageTurnInput.notification, object: nil, userInfo: ["forward": true])
+            // Status bar hiding and showing: the top safe area shrinks and grows mid-turn.
+            host.additionalSafeAreaInsets.top = round % 3 == 0 ? 0 : 20
+            try? await Task.sleep(for: .milliseconds(round % 2 == 0 ? 120 : 500))
+        }
+        try? await Task.sleep(for: .seconds(2))
+        let pages = all(BookPageView.self, in: window)
+        let folio = pages.first { $0.text.length > 0 }?.folio ?? "?"
+        print("CHECK|reader|24 turns with the safe area changing in \(String(format: "%.1fs", Date().timeIntervalSince(start))), now on page \(folio)")
+        XCTAssertTrue(pages.contains { $0.text.length > 0 }, "blank after turning")
+        XCTAssertGreaterThan(Int(folio) ?? 0, 6, "pages didn't advance")
+        attachScreenshot(window, "after turning")
+    }
 }
+
+/// A reference counter for closures that outlive a test's own frame.
+final class Counter { var count = 0 }
