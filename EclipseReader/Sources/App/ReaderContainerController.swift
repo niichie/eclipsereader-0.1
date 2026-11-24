@@ -110,11 +110,12 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
             let controller = UIPageViewController(transitionStyle: style, navigationOrientation: .horizontal, options: options)
             controller.view.semanticContentAttribute = .forceLeftToRight
             controller.isDoubleSided = false; controller.dataSource = self; controller.delegate = self
+            // The first page goes in before the pager is on screen (a page curl with no pages throws).
+            let index = groups.firstIndex(where: { $0.indices.contains(current) }) ?? 0
+            controller.setViewControllers([canvas(index)], direction: .forward, animated: false)
             addChild(controller); controller.view.frame = view.bounds
             controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(controller.view); controller.didMove(toParent: self); pager = controller
-            let index = groups.firstIndex(where: { $0.indices.contains(current) }) ?? 0
-            controller.setViewControllers([canvas(index)], direction: .forward, animated: false)
         }
     }
     override func viewDidLayoutSubviews() {

@@ -407,13 +407,15 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
         controller.dataSource = self; controller.delegate = self
         // Taps are ours (edges turn, middle shows controls); the curl's own tap-to-turn would double up.
         for recognizer in controller.gestureRecognizers where recognizer is UITapGestureRecognizer { recognizer.isEnabled = false }
+        // Pages go in before the pager is on screen: UIKit can ask for the spine location as soon as it's added,
+        // and a page curl with no pages at that moment throws.
+        controller.setViewControllers(visible(for: current), direction: .forward, animated: false)
         addChild(controller)
         controller.view.frame = view.bounds
         controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(controller.view)
         controller.didMove(toParent: self)
         pager = controller
-        controller.setViewControllers(visible(for: current), direction: .forward, animated: false)
     }
     /// The page (or the left/right pair) that shows `index`.
     private func visible(for index: Int) -> [UIViewController] {
@@ -484,7 +486,11 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
     func pageViewController(_ pageViewController: UIPageViewController, spineLocationFor orientation: UIInterfaceOrientation) -> UIPageViewController.SpineLocation {
         guard curl else { return .none }
         pageViewController.isDoubleSided = twoUp
-        if twoUp && !animating { pageViewController.setViewControllers(visible(for: current), direction: .forward, animated: false) }
+        // The spine returned here needs exactly one page (or two for a spread) already set, or UIKit throws.
+        let have = pageViewController.viewControllers?.count ?? 0
+        if !animating && (twoUp || have != 1) {
+            pageViewController.setViewControllers(visible(for: current), direction: .forward, animated: false)
+        }
         return twoUp ? .mid : .min
     }
 }
