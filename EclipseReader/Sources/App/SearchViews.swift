@@ -376,7 +376,7 @@ struct GlobalSearchSheet: View {
         Task {
             defer { busyID = nil }
             do {
-                if case .series(let series, _) = try await model.addLink(item.url.absoluteString) { opened = series }
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title) { opened = series }
             } catch { self.error = "Couldn’t add \(item.title): \(error.localizedDescription)" }
         }
     }

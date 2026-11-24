@@ -184,7 +184,7 @@ struct BrowseView: View {
         Task {
             defer { addingID = nil }
             do {
-                if case .series(let series, _) = try await model.addLink(item.url.absoluteString) { opened = series }
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title) { opened = series }
             } catch {
                 discoverError = "Couldn’t add \(item.title): \(error.localizedDescription)"
             }

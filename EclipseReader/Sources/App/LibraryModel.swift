@@ -338,10 +338,15 @@ final class LibraryModel: ObservableObject {
         let opened = found.pages.isEmpty ? nil : series.chapters.first { LinkedSource.key($0.url) == here }
         return .series(series, open: opened)
     }
-    func addLink(_ text: String, html: String? = nil) async throws -> LinkResult {
+    /// `title`: the name a search result showed, cleaner than many series pages' headings.
+    func addLink(_ text: String, html: String? = nil, title: String? = nil) async throws -> LinkResult {
         switch try await preview(text, html: html) {
         case .existing(let result): return result
-        case .fresh(let url, let found):
+        case .fresh(let url, var found):
+            if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty, title != found.title {
+                found = LinkInspection(title: title, cover: found.cover, pages: found.pages, chapters: found.chapters,
+                                       style: found.style, summary: found.summary)
+            }
             guard found.chapters.isEmpty && found.pages.isEmpty else { return commit(url, found) }
             // Nothing to read here (MangaDex only links licensed series to the publisher's app):
             // add the same series from a site that has its chapters.

@@ -609,7 +609,7 @@ struct DiscoverStrip: View {
             if let similarTo {
                 items = (try? await Discover.similar(to: similarTo, excluding: Set(model.allSeries.map(\.title)))) ?? []
             } else if items.isEmpty {
-                items = (try? await Discover.mangaDex(limit: 16)) ?? []
+                items = (try? await Discover.mangaDex(limit: 24)) ?? []
             }
         }
     }
@@ -618,7 +618,7 @@ struct DiscoverStrip: View {
         Task {
             defer { adding = nil }
             do {
-                if case .series(let series, _) = try await model.addLink(item.url.absoluteString) { openSeries = series }
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title) { openSeries = series }
             } catch { self.error = "Couldn’t add \(item.title)." }
         }
     }
