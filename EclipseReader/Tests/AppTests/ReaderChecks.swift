@@ -198,4 +198,43 @@ final class ReaderChecks: XCTestCase {
             try? await Task.sleep(for: .milliseconds(250))
         }
     }
+
+    /// Rapid page turns, a re-layout in the middle of a turn, and a jump: what crashed a few pages into a book.
+    func testBookPagerSurvivesTurnsDuringRelayout() async throws {
+        let library = model()
+        let file = try await WebsiteHTTPClient().downloadFile(URL(string: Self.books[0].1)!)
+        let series = try await library.importBook(file)
+        guard let stored = BookLink.file(of: series.url) else { return XCTFail("no file") }
+        let document = try await BookStore.shared.document(stored)
+        let style = BookStyle(font: .newYork, size: 19, spacing: 1.4, margin: 1, justify: true, theme: .night)
+        let size = CGSize(width: 330, height: 700)
+        let first = BookTypesetter.typeset(document, images: [:], style: style, pageSize: size)
+        let second = BookTypesetter.typeset(document, images: [:], style: style, pageSize: CGSize(width: 330, height: 660))
+        let pager = BookPagerController()
+        var reported: [Int] = []
+        pager.changed = { reported.append($0) }
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        window.rootViewController = pager
+        window.makeKeyAndVisible()
+        windows.append(window)
+        let insets = UIEdgeInsets(top: 60, left: 30, bottom: 84, right: 30)
+        pager.configure(book: first, style: style, insets: insets, twoUp: false, curl: true, title: "Frankenstein", page: 0)
+        for round in 0..<12 {
+            pager.turn(forward: true)
+            if round % 3 == 1 {
+                // A re-layout arriving mid-turn (the status bar hiding used to do this).
+                pager.configure(book: round % 2 == 0 ? first : second, style: style,
+                                insets: UIEdgeInsets(top: round % 2 == 0 ? 60 : 40, left: 30, bottom: 84, right: 30),
+                                twoUp: false, curl: true, title: "Frankenstein", page: pager.current)
+            }
+            if round % 4 == 2 { pager.jump(to: pager.current + 3, animated: true) }
+            try? await Task.sleep(for: .milliseconds(round % 2 == 0 ? 60 : 450))
+        }
+        try? await Task.sleep(for: .seconds(1.5))
+        print("CHECK|pager|turns reported \(reported.count), now on page \(pager.current + 1)")
+        XCTAssertGreaterThan(pager.current, 3, "pages didn't advance")
+        XCTAssertTrue(all(BookPageView.self, in: window).contains { $0.text.length > 0 }, "blank page after turning")
+    }
 }

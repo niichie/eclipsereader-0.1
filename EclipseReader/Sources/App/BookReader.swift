@@ -368,8 +368,16 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
     var tapped: ((CGFloat) -> Void)?
     var sectionTitle: ((Int) -> String)?
     private var layoutKey = ""
+    /// A page turn is animating (a tap, a key, or a finger mid-curl). UIPageViewController crashes if its
+    /// pages are replaced during one, so changes wait until it ends.
+    private var animating = false
+    private var pending: (() -> Void)?
 
     func configure(book: TypesetBook, style: BookStyle, insets: UIEdgeInsets, twoUp: Bool, curl: Bool, title: String, page: Int) {
+        guard !animating else {
+            pending = { [weak self] in self?.configure(book: book, style: style, insets: insets, twoUp: twoUp, curl: curl, title: title, page: page) }
+            return
+        }
         loadViewIfNeeded()
         let key = "\(ObjectIdentifier(book))|\(style.key)|\(insets)|\(twoUp)|\(curl)"
         self.book = book; self.style = style; self.insets = insets; self.title_ = title
@@ -383,7 +391,12 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
             jump(to: target)
         }
     }
+    private func settled() {
+        animating = false
+        if let next = pending { pending = nil; next() }
+    }
     private func rebuild() {
+        animating = false
         if let pager { pager.willMove(toParent: nil); pager.view.removeFromSuperview(); pager.removeFromParent() }
         let options: [UIPageViewController.OptionsKey: Any]? = curl
             ? [.spineLocation: NSNumber(value: (twoUp ? UIPageViewController.SpineLocation.mid : .min).rawValue)] : [.interPageSpacing: 0]
@@ -417,24 +430,30 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
         view.spine = twoUp && curl ? (index % 2 == 0 ? -1 : 1) : 0
         view.tapped = { [weak self] x in self?.tapped?(x) }
         if let book, book.pages.indices.contains(index) {
-            view.text = book.text(of: index)
+            let text = book.text(of: index)
+            view.text = text
             let section = book.pages[index].section
             let chapterTitle = sectionTitle?(section) ?? ""
             view.head = index % 2 == 0 && twoUp ? title_ : chapterTitle
             view.folio = "\(index + 1)"
-            view.accessibilityLabel = book.text(of: index).string
+            view.accessibilityLabel = text.string
         }
         return controller
     }
     func jump(to index: Int, animated: Bool = false) {
         guard let pager, let book, book.pages.indices.contains(index) else { return }
+        guard !animating else { pending = { [weak self] in self?.jump(to: index) }; return }
         let forward = index > current
         current = index
-        pager.setViewControllers(visible(for: index), direction: forward ? .forward : .reverse, animated: animated && !UIAccessibility.isReduceMotionEnabled)
+        let animate = animated && !UIAccessibility.isReduceMotionEnabled
+        if animate { animating = true }
+        pager.setViewControllers(visible(for: index), direction: forward ? .forward : .reverse, animated: animate) { [weak self] _ in
+            if animate { self?.settled() }
+        }
     }
-    /// Turn one page (or one spread) with the usual animation.
+    /// Turn one page (or one spread) with the usual animation. Taps during a turn are ignored.
     func turn(forward: Bool) {
-        guard let book else { return }
+        guard let book, !animating else { return }
         let step = twoUp && curl ? 2 : 1
         let target = forward ? current - current % step + step : current - current % step - step
         guard target >= 0, target < book.pages.count else { return }
@@ -452,8 +471,12 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
         guard index + 1 < limit else { return nil }
         return page(index + 1)
     }
+    func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
+        animating = true
+    }
     func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool,
                             previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+        defer { settled() }
         guard completed, let index = (pageViewController.viewControllers?.first as? BookPageController)?.index else { return }
         current = min(index, max(0, (book?.pages.count ?? 1) - 1))
         changed?(current)
@@ -461,7 +484,7 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
     func pageViewController(_ pageViewController: UIPageViewController, spineLocationFor orientation: UIInterfaceOrientation) -> UIPageViewController.SpineLocation {
         guard curl else { return .none }
         pageViewController.isDoubleSided = twoUp
-        if twoUp { pageViewController.setViewControllers(visible(for: current), direction: .forward, animated: false) }
+        if twoUp && !animating { pageViewController.setViewControllers(visible(for: current), direction: .forward, animated: false) }
         return twoUp ? .mid : .min
     }
 }
@@ -516,6 +539,9 @@ struct BookReaderView: View {
     @State private var lastActivity = Date()
     /// Where to land once the book is set: from the library, or the current spot after a re-layout.
     @State private var anchor: BookPosition?
+    /// The largest safe area seen for each screen shape. Hiding the controls hides the status bar, which
+    /// shrinks the safe area; laying the book out again then (and swapping pages mid-turn) crashed the reader.
+    @State private var steadySafe: [String: EdgeInsets] = [:]
 
     private var style: BookStyle {
         BookStyle(font: BookFont(rawValue: fontRaw) ?? .newYork, size: size, spacing: spacing, margin: margin,
@@ -528,8 +554,10 @@ struct BookReaderView: View {
         GeometryReader { geometry in
             let full = CGSize(width: geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing,
                               height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
+            let shape = "\(Int(full.width))x\(Int(full.height))"
+            let safe = Self.merge(steadySafe[shape], geometry.safeAreaInsets)
             let twoUp = curl && full.width > full.height * 1.2 && full.width > 700
-            let insets = Self.insets(for: full, twoUp: twoUp, margin: margin, safe: geometry.safeAreaInsets)
+            let insets = Self.insets(for: full, twoUp: twoUp, margin: margin, safe: safe)
             let pageSize = CGSize(width: (twoUp ? full.width / 2 : full.width) - insets.left - insets.right,
                                   height: full.height - insets.top - insets.bottom)
             ZStack {
@@ -557,6 +585,10 @@ struct BookReaderView: View {
             // and whenever the page size or type settings change.
             .task(id: "\(document == nil ? "loading" : "ready")|\(Int(pageSize.width))x\(Int(pageSize.height))|\(style.key)|\(twoUp)") {
                 await layout(pageSize: pageSize)
+            }
+            .onChange(of: geometry.safeAreaInsets, initial: true) { _, now in
+                let merged = Self.merge(steadySafe[shape], now)
+                if steadySafe[shape] != merged { steadySafe[shape] = merged }
             }
         }
         .statusBarHidden(!chrome)
@@ -600,6 +632,12 @@ struct BookReaderView: View {
     }
 
     // MARK: Layout
+
+    static func merge(_ a: EdgeInsets?, _ b: EdgeInsets) -> EdgeInsets {
+        guard let a else { return b }
+        return EdgeInsets(top: max(a.top, b.top), leading: max(a.leading, b.leading),
+                          bottom: max(a.bottom, b.bottom), trailing: max(a.trailing, b.trailing))
+    }
 
     /// Generous margins that keep lines to a comfortable measure, plus room for the running head and folio.
     static func insets(for size: CGSize, twoUp: Bool, margin: Int, safe: EdgeInsets) -> UIEdgeInsets {

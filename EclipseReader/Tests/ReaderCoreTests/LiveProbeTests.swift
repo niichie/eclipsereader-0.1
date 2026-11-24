@@ -409,4 +409,16 @@ final class LiveProbeTests: XCTestCase {
             }
         }
     }
+
+    func testQuoteSources2() async {
+        let (st, type, all) = await body("https://yurippe.vercel.app/api/quotes", ua: WebsiteHTTPClient.appAgent, accept: "application/json")
+        let shows = Set(LinkedSource.matches(#""show":"([^"]+)""#, all).map { $0[0] })
+        dump("yurippe all", "\(st) \(type) \(all.count)B quotes≈\(LinkedSource.matches(#""quote":"#, all).count) shows=\(shows.count) sample: \(Array(shows).sorted().prefix(80).joined(separator: ", "))")
+        for q in ["?show=naruto", "?show=Fullmetal%20Alchemist&random=1", "?random=5", "?character=levi"] {
+            let (s2, _, t) = await body("https://yurippe.vercel.app/api/quotes\(q)", ua: WebsiteHTTPClient.appAgent, accept: "application/json")
+            dump("yurippe \(q)", "\(s2) count≈\(LinkedSource.matches(#""quote":"#, t).count) :: \(t.prefix(240))")
+        }
+        let (_, _, anime) = await body("https://api.animechan.io/v1/anime/Naruto", ua: WebsiteHTTPClient.appAgent, accept: "application/json")
+        dump("animechan anime", String(anime.prefix(300)))
+    }
 }
