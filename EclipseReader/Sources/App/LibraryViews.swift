@@ -1282,6 +1282,9 @@ struct DownloadSettingsPage: View {
                                     }
                                 }
                                 Spacer(minLength: 4)
+                                if case .failed = state {
+                                    Button("Resume") { model.download([chapter]) }.buttonStyle(.borderless)
+                                }
                                 Button { model.cancelDownload(chapter) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                                     .buttonStyle(.borderless).accessibilityLabel("Cancel download")
                             }

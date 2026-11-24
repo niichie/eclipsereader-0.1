@@ -26,14 +26,12 @@ final class PassageSpeaker: NSObject, ObservableObject, AVSpeechSynthesizerDeleg
         synth.stopSpeaking(at: .immediate)
         position = index
         let text = passages[index]
-        do {
-            let speech = AVSpeechUtterance(string: text)
-            if let language = NLLanguageRecognizer.dominantLanguage(for: text) {
-                speech.voice = AVSpeechSynthesisVoice(language: language.rawValue)
-            }
-            utteranceID = ObjectIdentifier(speech)
-            synth.speak(speech)
+        let speech = AVSpeechUtterance(string: text)
+        if let language = NLLanguageRecognizer.dominantLanguage(for: text) {
+            speech.voice = AVSpeechSynthesisVoice(language: language.rawValue)
         }
+        utteranceID = ObjectIdentifier(speech)
+        synth.speak(speech)
     }
     func stop() { utteranceID = nil; synth.stopSpeaking(at: .immediate); passages = []; position = 0 }
 }

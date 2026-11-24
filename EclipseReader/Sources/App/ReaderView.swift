@@ -349,7 +349,7 @@ struct ReaderView: View {
                     stopSpeech()
                     guard let image = handle.snapshot() else { return }
                     speechTask = Task {
-                        let blocks = await TextRecognizer.blocks(in: image, size: image.size)
+                        let blocks = await TextRecognizer.blocks(in: image, size: image.size, rightToLeft: effective.direction == .rightToLeft)
                         guard !Task.isCancelled else { return }
                         spokenBubbles = blocks.map { $0.original }
                         if spokenBubbles.isEmpty { flash("No readable text found") }
@@ -377,9 +377,10 @@ struct ReaderView: View {
                 }
                 Button("Copy reader report", systemImage: "doc.on.doc") {
                     let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+                    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
                     let source = chapter.url.scheme == "https" ? chapter.url.host ?? "Website" : "Local"
                     let dimensions = pages[safe: page].map { "\(Int($0.width ?? 0)) × \(Int($0.height ?? 0))" } ?? "unknown"
-                    UIPasteboard.general.string = "EclipseReader \(version)\nSource: \(source)\nPage: \(page + 1)/\(pages.count)\nPublished dimensions: \(dimensions)\n\(handle.diagnostics(page: page))\nMode: \(effective.mode)\nEnhance: \(effective.enhance == true)\nChapter load failed: \(failure != nil)"
+                    UIPasteboard.general.string = "EclipseReader \(version) (\(build))\nSource: \(source)\nPage: \(page + 1)/\(pages.count)\nPublished dimensions: \(dimensions)\n\(handle.diagnostics(page: page))\nMode: \(effective.mode)\nEnhance: \(effective.enhance == true)\nChapter load failed: \(failure != nil)"
                     flash("Reader report copied")
                 }
                 if library.isDownloaded(chapter), let index = origin[safe: page] ?? (pages.indices.contains(page) ? page : nil) {
@@ -437,7 +438,7 @@ struct ReaderView: View {
             HStack(spacing: 10) {
                 chapterButton("backward.end.fill", "Previous chapter", enabled: previous != nil) { if let previous { open(previous) } }
                 HStack(spacing: 10) {
-                    Text("\(page + 1)").monospacedDigit().font(.footnote.weight(.semibold)).frame(minWidth: 22)
+                    Text("\((scrub ?? page) + 1)").monospacedDigit().font(.footnote.weight(.semibold)).frame(minWidth: 22)
                         .accessibilityLabel("Page \(page + 1) of \(pages.count)").accessibilityIdentifier("logicalPage")
                     Slider(value: Binding(get: { Double(scrub ?? page) }, set: { value in
                         if scrub == nil { returnPage = page }
@@ -447,7 +448,11 @@ struct ReaderView: View {
                         else if let target = scrub { page = target; scrub = nil }
                     })
                         .tint(Eclipse.accent)
-                        .disabled(pages.count == 1).accessibilityLabel("Page position")
+                        .disabled(pages.count <= 1).accessibilityLabel("Page position")
+                        .accessibilityAdjustableAction { direction in
+                            returnPage = page; scrub = nil
+                            page = min(max(0, pages.count - 1), max(0, page + (direction == .increment ? 1 : -1)))
+                        }
                     Text("\(pages.count)").monospacedDigit().font(.footnote).foregroundStyle(.secondary).frame(minWidth: 22)
                 }
                 .padding(.horizontal, 14).frame(height: 44)

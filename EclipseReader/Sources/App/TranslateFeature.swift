@@ -46,7 +46,7 @@ private struct ImageBox: @unchecked Sendable { let image: CGImage }
 enum TextRecognizer {
     /// Recognizes text in an image and groups nearby lines into bubbles.
     /// Coordinates are returned in `size` space (the reader view's points).
-    static func blocks(in image: UIImage, size: CGSize, crop: CGRect? = nil) async -> [TextBlock] {
+    static func blocks(in image: UIImage, size: CGSize, crop: CGRect? = nil, rightToLeft: Bool = true) async -> [TextBlock] {
         guard let cg = image.cgImage else { return [] }
         let cgImage: CGImage
         let area = crop ?? CGRect(origin: .zero, size: size)
@@ -86,7 +86,11 @@ enum TextRecognizer {
             let rect = group.reduce(CGRect.null) { $0.union($1.rect) }
             return TextBlock(id: UUID().uuidString, rect: rect, original: join(group), translated: nil,
                              confidence: group.map(\.confidence).min() ?? 0)
-        }.sorted { a, b in abs(a.rect.minY - b.rect.minY) > 30 ? a.rect.minY < b.rect.minY : a.rect.maxX > b.rect.maxX }
+        }.sorted { a, b in
+            let rowA = Int(a.rect.midY / 30), rowB = Int(b.rect.midY / 30)
+            if rowA != rowB { return rowA < rowB }
+            return rightToLeft ? a.rect.maxX > b.rect.maxX : a.rect.minX < b.rect.minX
+        }
     }
 
     /// Lines whose slightly enlarged boxes touch belong to the same bubble.

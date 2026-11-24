@@ -10,6 +10,7 @@ actor OfflineStore {
         var chapterID: String
         var title: String
         var files: [String]
+        var pageKeys: [String]?
         var bytes: Int64
         var date: Date
     }
@@ -56,6 +57,7 @@ actor OfflineStore {
     }
 
     func begin(_ chapterID: String) throws {
+        loadIfNeeded()
         let dir = root.appendingPathComponent(Self.key(chapterID), isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -89,15 +91,27 @@ actor OfflineStore {
         try data.write(to: root.appendingPathComponent(Self.key(chapterID)).appendingPathComponent(name), options: .atomic)
         return name
     }
-    func finish(_ chapterID: String, title: String, files: [String]) throws {
+    func finish(_ chapterID: String, title: String, files: [String], pages: [MangaPage]? = nil) throws {
         loadIfNeeded()
         let dir = root.appendingPathComponent(Self.key(chapterID), isDirectory: true)
         let bytes = files.reduce(Int64(0)) { sum, name in
             sum + Int64((try? dir.appendingPathComponent(name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         }
-        let manifest = Manifest(chapterID: chapterID, title: title, files: files, bytes: bytes, date: Date())
+        let manifest = Manifest(chapterID: chapterID, title: title, files: files, pageKeys: pages?.map { Self.key($0.url.absoluteString) }, bytes: bytes, date: Date())
         try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("chapter.json"), options: .atomic)
         try? FileManager.default.removeItem(at: dir.appendingPathComponent("partial.json"))
+        manifests[chapterID] = manifest
+    }
+    func repair(_ chapterID: String, index: Int, page: MangaPage, data: Data) throws {
+        loadIfNeeded()
+        guard var manifest = manifests[chapterID], manifest.files.indices.contains(index) else { throw SourceError.missingChapter }
+        if let keys = manifest.pageKeys, keys[safe: index] != Self.key(page.url.absoluteString) { throw SourceError.unsupportedStructure }
+        let dir = root.appendingPathComponent(Self.key(chapterID))
+        try data.write(to: dir.appendingPathComponent(manifest.files[index]), options: .atomic)
+        manifest.bytes = manifest.files.reduce(0) { total, name in
+            total + Int64((try? dir.appendingPathComponent(name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("chapter.json"), options: .atomic)
         manifests[chapterID] = manifest
     }
     func remove(_ chapterID: String) {

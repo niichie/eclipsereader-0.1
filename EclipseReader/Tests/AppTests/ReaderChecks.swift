@@ -11,6 +11,32 @@ final class ReaderChecks: XCTestCase {
         ("Pride and Prejudice (Standard Ebooks)", "https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice/downloads/jane-austen_pride-and-prejudice.epub?source=download"),
         ("Alice (Project Gutenberg mirror, pictures)", "https://gutenberg.pglaf.org/cache/epub/11/pg11-images-3.epub"),
     ]
+    func testZoomTileAndRotationOnMangaCanvas() async throws {
+        let window = show(Color.black, size: CGSize(width: 390, height: 844))
+        let canvas = ZoomPageView(frame: window.bounds)
+        window.addSubview(canvas)
+        let chapter = ReaderTestFixture.chapter
+        let image = MangaPage(url: chapter.url.appendingPathComponent("0"), label: "Page 1")
+        let cache = DiskImageCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let pipeline = ImagePipeline(cache: cache, http: ReaderTestFixture())
+        var prefs = ReaderPreferences()
+        prefs.enhance = true
+        var ready = false
+        canvas.configure(page: image, index: 0, chapter: chapter, pipeline: pipeline, preferences: prefs) { _, _ in ready = true }
+        let loaded = await wait(12) { ready }
+        XCTAssertTrue(loaded)
+        canvas.layoutIfNeeded()
+        canvas.scroll.setZoomScale(canvas.scroll.minimumZoomScale * 2, animated: false)
+        canvas.scheduleDetail()
+        let sharper = await wait(8) { self.all(UIImageView.self, in: canvas).filter { $0.image != nil }.count >= 2 }
+        XCTAssertTrue(sharper)
+        canvas.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
+        canvas.layoutIfNeeded()
+        XCTAssertEqual(canvas.scroll.zoomScale / canvas.scroll.minimumZoomScale, 2, accuracy: 0.1)
+        canvas.cancel()
+        XCTAssertNil(canvas.decodedSize)
+    }
+
     func testResumePartialOfflineChapterAndInvalidateChangedPages() async throws {
         let store = OfflineStore()
         let id = UUID().uuidString

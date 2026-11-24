@@ -298,7 +298,7 @@ final class LibraryModel: ObservableObject {
         guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
               CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
                   kCGImageSourceThumbnailMaxPixelSize: 32] as CFDictionary) != nil else { throw SourceError.invalidImage }
-        _ = try await OfflineStore.shared.write(chapter.id, index: index, data: bytes)
+        try await OfflineStore.shared.repair(chapter.id, index: index, page: page, data: bytes)
         await pipeline.cache.remove(offline[index].url)
     }
     private func networkPages(for chapter: Chapter) async throws -> [MangaPage] {
@@ -814,7 +814,7 @@ final class LibraryModel: ObservableObject {
                 files.append(name)
                 downloads[chapter.id] = .running(Double(i + 1) / Double(pages.count))
             }
-            try await OfflineStore.shared.finish(chapter.id, title: chapter.title, files: files)
+            try await OfflineStore.shared.finish(chapter.id, title: chapter.title, files: files, pages: pages)
             forgetPending(chapter.id)
             downloaded.insert(chapter.id)
             downloads[chapter.id] = nil
