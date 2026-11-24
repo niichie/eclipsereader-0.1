@@ -385,4 +385,16 @@ final class LiveProbeTests: XCTestCase {
             dump("mangadot try \(q)", "\(st) \(type) \(html.count)B manga links \(found.count) solo? \(html.lowercased().contains("solo leveling")) :: \(html.prefix(160))")
         }
     }
+
+    func testDiagnostics6() async {
+        for param in ["query", "title", "search", "keyword", "term", "name", "s", "q"] {
+            let (st, _, text) = await body("https://mangadot.net/api/search?\(param)=solo%20leveling", accept: "application/json")
+            let first = LinkedSource.matches(#""title":"([^"]+)""#, text).prefix(3).map { $0[0] }
+            dump("mangadot api \(param)", "\(st) \(text.count)B solo? \(text.lowercased().contains("solo leveling")) first: \(first)")
+        }
+        let (_, _, sample) = await body("https://mangadot.net/api/search?q=solo", accept: "application/json")
+        dump("mangadot api keys", String(sample.prefix(900)) + " … " + String(sample.suffix(300)))
+        let (_, _, page) = await body("https://mangadot.net/search?q=solo")
+        dump("mangadot search page api", around(page, #"/api/[a-z/]+"#, before: 200, after: 300))
+    }
 }
