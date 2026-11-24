@@ -55,3 +55,40 @@ final class LaunchQuoteTests: XCTestCase {
         XCTAssertEqual(round.count, works.count)
     }
 }
+
+final class SpotlightPreferenceTests: XCTestCase {
+    func testOnlyChosenKindsAndCountries() {
+        let manhwaOnly = SpotlightPreference(categories: [.manhwa], origins: ["KR"])
+        let solo = SpotlightMedia(id: 1, title: "Solo Leveling", cover: nil, score: 85, detail: "", category: .manhwa, country: "KR")
+        let berserk = SpotlightMedia(id: 2, title: "Berserk", cover: nil, score: 93, detail: "", category: .manga, country: "JP")
+        XCTAssertTrue(manhwaOnly.allows(solo))
+        XCTAssertFalse(manhwaOnly.allows(berserk))
+        XCTAssertTrue(SpotlightPreference(categories: [.webtoons], origins: ["KR", "JP"]).allows(solo), "webtoons let manhwa through")
+        XCTAssertFalse(SpotlightPreference(categories: [.manhwa], origins: ["JP"]).allows(solo), "country filter")
+        XCTAssertEqual(SpotlightPreference.category(format: "NOVEL", country: "JP"), .novels)
+        XCTAssertEqual(SpotlightPreference.category(format: "MANGA", country: "CN"), .manhua)
+    }
+
+    func testMangaBeforeItsLightNovelUnlessOnlyNovels() throws {
+        let json = #"{"data":{"m0":{"media":[{"id":10,"title":{"english":"Mushoku Tensei","romaji":"Mushoku Tensei","native":"無職転生 ～異世界行ったら本気だす～"},"averageScore":84,"format":"NOVEL","countryOfOrigin":"JP"},{"id":11,"title":{"english":"Mushoku Tensei","romaji":"Mushoku Tensei"},"averageScore":82,"format":"MANGA","countryOfOrigin":"JP"}]}}}"#
+        let hits = QuoteFeed.matches(QuoteFeed.parseBatch(Data(json.utf8), count: 1)[0], for: "Mushoku Tensei")
+        XCTAssertEqual(QuoteFeed.choose(hits, .everything)?.id, 11, "pictures first")
+        let novelsOnly = SpotlightPreference(categories: [.novels], origins: ["JP"])
+        let novel = try XCTUnwrap(QuoteFeed.choose(hits, novelsOnly))
+        XCTAssertEqual(novel.id, 10)
+        XCTAssertEqual(novel.native, "無職転生 ～異世界行ったら本気だす～")
+        XCTAssertEqual(QuoteFeed.searchable(native: novel.native!), "無職転生")
+        XCTAssertNil(QuoteFeed.choose(hits, SpotlightPreference(categories: [.manhwa], origins: ["KR"])))
+    }
+
+    func testPicksAlternateKindsAndUseTheSynopsis() {
+        let json = #"{"data":{"manhwa":{"media":[{"id":1,"title":{"english":"Tower of God"},"averageScore":84,"format":"MANGA","countryOfOrigin":"KR","description":"What do you desire? Money and wealth? Honor and pride? Authority and power? Revenge? (Source: WEBTOON)"}]},"novels":{"media":[{"id":2,"title":{"english":"Ascendance of a Bookworm"},"averageScore":86,"format":"NOVEL","countryOfOrigin":"JP","description":"A college girl who loves books is reborn in a world where books are rare.<br><br>She decides to make them herself."}]}}}"#
+        let picks = QuoteFeed.parsePicks(Data(json.utf8), preference: SpotlightPreference(categories: [.manhwa, .novels], origins: ["JP", "KR"]))
+        XCTAssertEqual(picks.map(\.work), ["Tower of God", "Ascendance of a Bookworm"])
+        XCTAssertTrue(picks.allSatisfy(\.pick))
+        XCTAssertFalse(picks[0].quote.text.contains("Source"))
+        XCTAssertEqual(picks[1].quote.who, "Light novel pick")
+        XCTAssertNotNil(QuoteFeed.picksQuery(SpotlightPreference(categories: [.manhwa], origins: ["KR"]), page: 2)?.range(of: #"countryOfOrigin: "KR""#))
+        XCTAssertNil(QuoteFeed.picksQuery(SpotlightPreference(categories: [.comics], origins: ["JP"]), page: 1))
+    }
+}

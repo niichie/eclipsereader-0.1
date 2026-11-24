@@ -47,19 +47,21 @@ final class GlobalSearchModel: ObservableObject {
     /// Destinations with no search page the app can read (their search runs inside their own app pages).
     static let searchless: Set<String> = ["shueisha.co.jp", "j-novel.club", "royalroad.com", "comicbookplus.com", "digitalcomicmuseum.com", "tapas.io"]
 
-    func run(_ text: String, sources: [SearchSource]) {
+    /// `queries`: a different search text for some sources (by id), like a Japanese title for Syosetu.
+    func run(_ text: String, sources: [SearchSource], queries: [String: String] = [:]) {
         cancel()
         query = text
         sections = sources.map { Section(source: $0, phase: .loading) }
         for source in sources {
+            let wanted = queries[source.id] ?? text
             tasks.append(Task { [weak self] in
                 let phase: Phase
                 do {
-                    phase = .done(try await GlobalSearch.search(source, query: text))
+                    phase = .done(try await GlobalSearch.search(source, query: wanted))
                 } catch {
                     // Sites that only answer browsers: read their search page the way Safari would.
                     if case .site = source.kind {
-                        let found = await Self.rendered(source, query: text)
+                        let found = await Self.rendered(source, query: wanted)
                         phase = found.isEmpty ? .failed : .done(found)
                     } else {
                         phase = .failed
@@ -359,7 +361,12 @@ struct GlobalSearchSheet: View {
     @State private var busyID: String?
     @State private var opened: MangaSeries?
     @State private var error: String?
-    init(query: String) { _query = State(initialValue: query) }
+    /// Search the novel sources instead (with the title in its own language for Japanese sites).
+    let novels: Bool
+    let nativeQuery: String?
+    init(query: String, novels: Bool = false, nativeQuery: String? = nil) {
+        _query = State(initialValue: query); self.novels = novels; self.nativeQuery = nativeQuery
+    }
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -385,7 +392,13 @@ struct GlobalSearchSheet: View {
     }
     private func run() {
         error = nil
-        search.run(query, sources: GlobalSearchModel.sources(saved: model.state.sites ?? []))
+        if novels {
+            var queries: [String: String] = [:]
+            if let native = nativeQuery { for id in ["syosetu", "kakuyomu"] { queries[id] = QuoteFeed.searchable(native: native) } }
+            search.run(query, sources: GlobalSearchModel.sources(saved: model.state.sites ?? [], novels: true), queries: queries)
+        } else {
+            search.run(query, sources: GlobalSearchModel.sources(saved: model.state.sites ?? []))
+        }
     }
     private func open(_ item: DiscoverItem) {
         if let owned = model.series(id: item.id) ?? model.allSeries.first(where: { $0.url == item.url }) { opened = owned; return }

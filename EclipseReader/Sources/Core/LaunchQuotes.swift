@@ -15,9 +15,42 @@ public struct SpotlightMedia: Hashable, Sendable {
     public let cover: URL?
     public let score: Int?
     public let detail: String
-    public init(id: Int, title: String, cover: URL?, score: Int?, detail: String) {
+    /// Manga, manhwa, manhua or a light novel (from AniList's format and country of origin).
+    public var category: SourceCategory
+    /// AniList's country code ("JP", "KR", "CN", "TW").
+    public var country: String?
+    /// The title in its own language (what Japanese novel sites search by).
+    public var native: String?
+    public init(id: Int, title: String, cover: URL?, score: Int?, detail: String, category: SourceCategory = .manga, country: String? = nil) {
         self.id = id; self.title = title; self.cover = cover; self.score = score; self.detail = detail
+        self.category = category; self.country = country
     }
+}
+
+/// What the launch card may suggest: the kinds and countries chosen in the setup.
+public struct SpotlightPreference: Sendable, Equatable {
+    public var categories: Set<SourceCategory>
+    public var origins: Set<String>
+    public init(categories: Set<SourceCategory>, origins: Set<String>) { self.categories = categories; self.origins = origins }
+    public static let everything = SpotlightPreference(categories: Set(SourceCategory.allCases), origins: ["JP", "KR", "CN", "TW"])
+    /// Where AniList's data puts a series.
+    public static func category(format: String?, country: String?) -> SourceCategory {
+        if format == "NOVEL" { return .novels }
+        switch country {
+        case "KR": return .manhwa
+        case "CN", "TW": return .manhua
+        default: return .manga
+        }
+    }
+    /// Korean and Chinese series are mostly webtoons, so choosing webtoons lets those through too.
+    public func allows(_ media: SpotlightMedia) -> Bool {
+        let kind = categories.contains(media.category)
+            || ((media.category == .manhwa || media.category == .manhua) && categories.contains(.webtoons))
+        let origin = media.country.map { origins.isEmpty || origins.contains($0) } ?? true
+        return kind && origin
+    }
+    /// Pictures before novels when both are allowed (eclipsereader is a comics reader first).
+    func rank(_ media: SpotlightMedia) -> Int { media.category == .novels ? 1 : 0 }
 }
 
 /// The launch card: a quote, and (when it could be checked) the top-rated series it comes from.
@@ -26,11 +59,13 @@ public struct Spotlight: Hashable, Sendable, Identifiable {
     public let media: SpotlightMedia?
     /// A book's free download (Standard Ebooks), when there is one.
     public let download: URL?
+    /// A top-rated pick (its line is from the synopsis), not a quote.
+    public let pick: Bool
     public var id: String { quote.text + "|" + quote.work }
     /// The name to search and show: AniList's English title when it has one.
     public var work: String { media?.title ?? quote.work }
-    public init(quote: LaunchQuote, media: SpotlightMedia?, download: URL? = nil) {
-        self.quote = quote; self.media = media; self.download = download
+    public init(quote: LaunchQuote, media: SpotlightMedia?, download: URL? = nil, pick: Bool = false) {
+        self.quote = quote; self.media = media; self.download = download; self.pick = pick
     }
 }
 
@@ -126,13 +161,13 @@ public enum QuoteFeed {
         query (\(variables)) {
         \(fields)
         }
-        fragment f on Media { id title { english romaji } synonyms coverImage { extraLarge large } averageScore format countryOfOrigin startDate { year } }
+        fragment f on Media { id title { english romaji native } synonyms coverImage { extraLarge large } averageScore format countryOfOrigin startDate { year } }
         """
     }
 
-    /// Looks up every quote's series in one request; keeps those that are manga scored `minimumScore`+ (in order).
-    /// Curated lines are kept even when AniList can't be reached; live lines need the check.
-    public static func rate(_ quotes: [LaunchQuote], curated: Set<LaunchQuote> = []) async -> [Spotlight] {
+    /// Looks up every quote's series in one request; keeps those scored `minimumScore`+ that are among the kinds you
+    /// chose (in order). Curated lines (all manga) are kept when AniList can't be reached and manga is chosen.
+    public static func rate(_ quotes: [LaunchQuote], curated: Set<LaunchQuote> = [], preference: SpotlightPreference = .everything) async -> [Spotlight] {
         guard !quotes.isEmpty else { return [] }
         let works = quotes.map { cleanWork($0.work) }
         var variables: [String: any Sendable] = [:]
@@ -144,16 +179,89 @@ public enum QuoteFeed {
         request.httpBody = try? AniListAPI.body(batchQuery(quotes.count), variables: variables)
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else {
+            guard preference.categories.contains(.manga) else { return [] }
             return quotes.filter { curated.contains($0) }.map { Spotlight(quote: $0, media: nil) }
         }
         let hits = parseBatch(data, count: quotes.count)
         return quotes.indices.compactMap { i -> Spotlight? in
-            if let media = best(hits[safe: i] ?? [], for: works[i]) {
-                guard let score = media.score, score >= minimumScore else { return nil }
+            let found = matches(hits[safe: i] ?? [], for: works[i])
+            if !found.isEmpty {
+                // The series exists: it must be one of your kinds, and rated highly.
+                guard let media = choose(found, preference), let score = media.score, score >= minimumScore else { return nil }
                 return Spotlight(quote: quotes[i], media: media)
             }
-            return curated.contains(quotes[i]) ? Spotlight(quote: quotes[i], media: nil) : nil
+            return curated.contains(quotes[i]) && preference.categories.contains(.manga) ? Spotlight(quote: quotes[i], media: nil) : nil
         }
+    }
+
+    // MARK: Picks (when quotes for your kinds are thin)
+
+    /// AniList's top-rated series of each kind you chose (one request), for the card to mix in.
+    static func picksQuery(_ preference: SpotlightPreference, page: Int) -> String? {
+        var parts: [String] = []
+        let p = max(1, page)
+        func add(_ alias: String, _ filter: String) {
+            parts.append("\(alias): Page(page: \(p), perPage: 12) { media(type: MANGA, \(filter), sort: SCORE_DESC, isAdult: false, averageScore_greater: \(minimumScore + 2)) { ...f } }")
+        }
+        let kinds = preference.categories
+        let origins = preference.origins.isEmpty ? ["JP", "KR", "CN", "TW"] : preference.origins
+        if kinds.contains(.manga) && origins.contains("JP") { add("manga", "format_in: [MANGA, ONE_SHOT], countryOfOrigin: \"JP\"") }
+        if (kinds.contains(.manhwa) || kinds.contains(.webtoons)) && origins.contains("KR") { add("manhwa", "countryOfOrigin: \"KR\"") }
+        if (kinds.contains(.manhua) || kinds.contains(.webtoons)) && origins.contains("CN") { add("manhua", "countryOfOrigin: \"CN\"") }
+        if kinds.contains(.novels) { add("novels", "format_in: [NOVEL]") }
+        guard !parts.isEmpty else { return nil }
+        return "query {\n" + parts.joined(separator: "\n") + "\n}\nfragment f on Media { id title { english romaji native } synonyms coverImage { extraLarge large } averageScore format countryOfOrigin startDate { year } description(asHtml: false) }"
+    }
+    public static func picks(_ preference: SpotlightPreference, page: Int) async -> [Spotlight] {
+        guard let query = picksQuery(preference, page: page) else { return [] }
+        var request = URLRequest(url: AniListAPI.endpoint, timeoutInterval: 12)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try? AniListAPI.body(query)
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return [] }
+        return parsePicks(data, preference: preference)
+    }
+    static func parsePicks(_ data: Data, preference: SpotlightPreference) -> [Spotlight] {
+        let payload = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["data"] as? [String: Any] ?? [:]
+        var lists: [[Spotlight]] = []
+        for alias in ["manga", "manhwa", "manhua", "novels"] {
+            let entries = (payload[alias] as? [String: Any])?["media"] as? [[String: Any]] ?? []
+            lists.append(entries.compactMap { entry in
+                guard let hit = hit(entry), preference.allows(hit.media), let score = hit.media.score, score >= minimumScore,
+                      let line = synopsisLine(entry["description"] as? String) else { return nil }
+                let label = hit.media.category == .novels ? "Light novel pick" : "\(hit.media.category.title) pick"
+                return Spotlight(quote: LaunchQuote(text: line, who: label, work: hit.media.title), media: hit.media, pick: true)
+            }.shuffled())
+        }
+        // Alternate between kinds so one doesn't crowd out the rest.
+        var mixed: [Spotlight] = []
+        var i = 0
+        while lists.contains(where: { i < $0.count }) {
+            for list in lists where i < list.count { mixed.append(list[i]) }
+            i += 1
+        }
+        return mixed
+    }
+    /// The opening of a synopsis, as one or two sentences without credits or markup.
+    static func synopsisLine(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        var text = raw.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\((?:Source|Written by)[^)]*\)|\[(?:Written by|Source)[^\]]*\]"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        guard text.count >= 20 else { return nil }
+        var line = ""
+        for sentence in text.components(separatedBy: ". ") {
+            let piece = line.isEmpty ? sentence : line + ". " + sentence
+            if piece.count > 170 { break }
+            line = piece
+            if line.count >= 70 { break }
+        }
+        if line.isEmpty { line = String(text.prefix(160)) + "…"; text = line }
+        if !line.hasSuffix(".") && !line.hasSuffix("!") && !line.hasSuffix("?") && !line.hasSuffix("…") { line += "." }
+        return line
     }
 
     struct Hit { let media: SpotlightMedia; let names: [String] }
@@ -162,39 +270,50 @@ public enum QuoteFeed {
         let payload = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["data"] as? [String: Any] ?? [:]
         return (0..<count).map { i in
             let list = (payload["m\(i)"] as? [String: Any])?["media"] as? [[String: Any]] ?? []
-            return list.compactMap { entry -> Hit? in
-                guard let id = entry["id"] as? Int else { return nil }
-                let titles = entry["title"] as? [String: Any]
-                let english = (titles?["english"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                let romaji = titles?["romaji"] as? String
-                let names = [english, romaji].compactMap { $0 } + (entry["synonyms"] as? [String] ?? [])
-                let images = entry["coverImage"] as? [String: Any]
-                let cover = ((images?["extraLarge"] ?? images?["large"]) as? String).flatMap(URL.init(string:))
-                let kind: String = switch entry["countryOfOrigin"] as? String {
-                case "KR": "Manhwa"
-                case "CN", "TW": "Manhua"
-                default: (entry["format"] as? String) == "NOVEL" ? "Light novel" : "Manga"
-                }
-                let year = ((entry["startDate"] as? [String: Any])?["year"] as? Int).map(String.init)
-                let media = SpotlightMedia(id: id, title: english ?? romaji ?? "Untitled", cover: cover,
-                                           score: entry["averageScore"] as? Int,
-                                           detail: [kind, year].compactMap { $0 }.joined(separator: " · "))
-                return Hit(media: media, names: names)
-            }
+            return list.compactMap(hit)
         }
     }
+    static func hit(_ entry: [String: Any]) -> Hit? {
+        guard let id = entry["id"] as? Int else { return nil }
+        let titles = entry["title"] as? [String: Any]
+        let english = (titles?["english"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let romaji = titles?["romaji"] as? String
+        let names = [english, romaji].compactMap { $0 } + (entry["synonyms"] as? [String] ?? [])
+        let images = entry["coverImage"] as? [String: Any]
+        let cover = ((images?["extraLarge"] ?? images?["large"]) as? String).flatMap(URL.init(string:))
+        let country = entry["countryOfOrigin"] as? String
+        let category = SpotlightPreference.category(format: entry["format"] as? String, country: country)
+        let kind = category == .novels ? "Light novel" : category.title
+        let year = ((entry["startDate"] as? [String: Any])?["year"] as? Int).map(String.init)
+        var media = SpotlightMedia(id: id, title: english ?? romaji ?? "Untitled", cover: cover,
+                                   score: entry["averageScore"] as? Int,
+                                   detail: [kind, year].compactMap { $0 }.joined(separator: " · "), category: category, country: country)
+        media.native = titles?["native"] as? String
+        return Hit(media: media, names: names)
+    }
 
-    /// The search result that is really this series: a title that matches, or starts the same way.
-    static func best(_ hits: [Hit], for work: String) -> SpotlightMedia? {
+    /// The search results that are really this series: a title that matches, or starts the same way.
+    static func matches(_ hits: [Hit], for work: String) -> [Hit] {
         let wanted = key(work)
-        guard wanted.count >= 3 else { return nil }
-        return hits.first { hit in
+        guard wanted.count >= 3 else { return [] }
+        return hits.filter { hit in
             hit.names.contains { name in
                 let have = key(name)
                 guard have.count >= 3 else { return false }
                 return have == wanted || (wanted.count >= 5 && have.hasPrefix(wanted)) || (have.count >= 5 && wanted.hasPrefix(have))
             }
-        }?.media
+        }
+    }
+    /// Of a series' entries (its manga, its light novel…), the one to suggest: among the kinds you chose, pictures first.
+    static func choose(_ found: [Hit], _ preference: SpotlightPreference) -> SpotlightMedia? {
+        found.enumerated().filter { preference.allows($0.element.media) }
+            .min { (preference.rank($0.element.media), $0.offset) < (preference.rank($1.element.media), $1.offset) }?.element.media
+    }
+    static func best(_ hits: [Hit], for work: String) -> SpotlightMedia? { choose(matches(hits, for: work), .everything) }
+    /// A native title cut to what a site search matches ("無職転生 ～異世界行ったら本気だす～" → "無職転生").
+    public static func searchable(native: String) -> String {
+        let cut = native.components(separatedBy: CharacterSet(charactersIn: "～〜~　 ([（【「『:：-―")).first ?? native
+        return cut.count >= 2 ? cut : native
     }
 }
 

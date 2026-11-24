@@ -22,6 +22,11 @@ final class SpotlightStore: ObservableObject {
 
     // MARK: Manga
 
+    /// Your kinds changed (the setup): start over with suggestions that fit.
+    func reset() {
+        manga = nil
+        mangaQueue = []
+    }
     func loadManga(owned: Set<String>) async {
         guard manga == nil, !loadingManga else { return }
         await refillManga(owned: owned)
@@ -51,17 +56,39 @@ final class SpotlightStore: ObservableObject {
         let fresh = QuoteFeed.candidates(live, skipping: skip, limit: 9)
         let taken = skip.union(fresh.map { QuoteFeed.workKey($0.work) })
         let curated = QuoteFeed.candidates(CuratedQuotes.shuffled(CuratedQuotes.manga), skipping: taken, limit: 12 - fresh.count)
-        var rated = await QuoteFeed.rate(fresh + curated, curated: Set(curated))
+        // Only what you're into (the setup's kinds and countries).
+        let preference = SpotlightPreference(categories: Interests.categories, origins: Interests.origins)
+        var rated = await QuoteFeed.rate(fresh + curated, curated: Set(curated), preference: preference)
         // Different quotes can lead to the same series under another name: keep the first.
         var seen = Set<Int>()
         rated = rated.filter { $0.media.map { seen.insert($0.id).inserted } ?? true }
             .filter { item in item.media.map { !owned.contains(QuoteFeed.workKey($0.title)) } ?? true }
-        if rated.isEmpty {
+        // Quote databases are mostly anime (so manga): manhwa, manhua, webtoon and novel readers, or anyone whose quotes ran
+        // thin, also get top-rated picks of their kinds.
+        let thin = rated.count < 4
+        if thin || !preference.categories.isDisjoint(with: [.manhwa, .manhua, .webtoons, .novels]) {
+            let picks = await QuoteFeed.picks(preference, page: Int.random(in: 1...4)).filter { pick in
+                let key = QuoteFeed.workKey(pick.work)
+                return !skip.contains(key) && !owned.contains(key) && !(pick.media.map { seen.contains($0.id) } ?? false)
+            }
+            rated = Self.interleave(rated, Array(picks.prefix(thin ? 8 : 4)), every: thin ? 1 : 2)
+        }
+        if rated.isEmpty && preference.categories.contains(.manga) {
             // Everything shown lately: start the cycle over rather than show nothing.
             recent = []
             rated = CuratedQuotes.shuffled(CuratedQuotes.manga).filter(QuoteFeed.usable).prefix(6).map { Spotlight(quote: $0, media: nil) }
         }
         mangaQueue += rated
+    }
+    /// A pick after every `every` quotes, the rest at the end.
+    static func interleave(_ quotes: [Spotlight], _ picks: [Spotlight], every: Int) -> [Spotlight] {
+        var out: [Spotlight] = []
+        var remaining = picks[...]
+        for (i, quote) in quotes.enumerated() {
+            out.append(quote)
+            if (i + 1) % max(1, every) == 0, let pick = remaining.popFirst() { out.append(pick) }
+        }
+        return out + remaining
     }
     /// AnimeChan allows 5 requests an hour without a key: ask it at most 4 times an hour.
     private func animeChanAllowed() -> Bool {
@@ -105,8 +132,9 @@ struct SpotlightCard: View {
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: compact ? 5 : 7) {
-                Text("“\(quote.text)”")
-                    .font(.system(compact ? .subheadline : .title3, design: .serif).italic().weight(.semibold))
+                Text(spotlight.pick ? quote.text : "“\(quote.text)”")
+                    .font(spotlight.pick ? .system(compact ? .subheadline : .title3, design: .serif).weight(.semibold)
+                                         : .system(compact ? .subheadline : .title3, design: .serif).italic().weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(compact ? 4 : 5)
                     .fixedSize(horizontal: false, vertical: true)
@@ -261,9 +289,11 @@ struct HomeSetupSheet: View {
         var chosen = kinds
         if chosen.subtracting([.novels]).isEmpty { chosen.insert(.manga) }
         if novels { chosen.insert(.novels) } else { chosen.remove(.novels) }
+        let changed = chosen != Interests.categories || origins != Interests.origins
         Interests.categories = chosen
         Interests.origins = origins
         Interests.raws = raws
+        if changed { SpotlightStore.shared.reset() }
         done = true
     }
     private func option(_ value: Binding<Bool>, _ title: String, _ detail: String, _ symbol: String) -> some View {

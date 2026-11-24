@@ -138,7 +138,12 @@ struct LibraryView: View {
     @State private var bookSearch: QuoteSearch?
     @ObservedObject private var spotlights = SpotlightStore.shared
     @State private var quoteSearch: QuoteSearch?
-    struct QuoteSearch: Identifiable { let query: String; var id: String { query } }
+    struct QuoteSearch: Identifiable {
+        let query: String
+        var novels = false
+        var native: String? = nil
+        var id: String { query + (novels ? "|novels" : "") }
+    }
     @Namespace private var zoom
     @FocusState private var searchFocused: Bool
 
@@ -319,7 +324,9 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $options) { LibraryOptionsSheet().environmentObject(model).presentationDetents([.medium, .large]) }
             .sheet(isPresented: $searchingEverywhere) { GlobalSearchSheet(query: query).environmentObject(model) }
-            .sheet(item: $quoteSearch) { item in GlobalSearchSheet(query: item.query).environmentObject(model) }
+            .sheet(item: $quoteSearch) { item in
+                GlobalSearchSheet(query: item.query, novels: item.novels, nativeQuery: item.native).environmentObject(model)
+            }
             .sheet(item: $bookSearch) { item in BookSearchSheet(query: item.query).environmentObject(model) }
             .task {
                 if !setupDone && !ProcessInfo.processInfo.arguments.contains("--ui-testing") {
@@ -327,7 +334,7 @@ struct LibraryView: View {
                     settingUp = true
                 }
             }
-            .task(id: showQuote) {
+            .task(id: "\(showQuote)|\(categoriesRaw)|\(novelsOn)") {
                 guard showQuote, !ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
                 await spotlights.loadManga(owned: ownedKeys)
             }
@@ -360,12 +367,14 @@ struct LibraryView: View {
     private var ownedKeys: Set<String> { Set(model.allSeries.map { QuoteFeed.workKey($0.title) }) }
     private func ownedSeries(_ spotlight: Spotlight) -> MangaSeries? {
         let keys = [spotlight.work, spotlight.quote.work].map(QuoteFeed.workKey)
-        return model.librarySeries.first { $0.kind != .book && keys.contains(QuoteFeed.workKey($0.title)) }
+        return model.librarySeries.first { !$0.isPlainBook && keys.contains(QuoteFeed.workKey($0.title)) }
     }
     /// The launch card's series: open it if it's yours, otherwise search every site for it.
     private func readSpotlight(_ spotlight: Spotlight) {
         if let owned = ownedSeries(spotlight) { openSeries = owned }
-        else { quoteSearch = QuoteSearch(query: spotlight.work) }
+        else if spotlight.media?.category == .novels {
+            quoteSearch = QuoteSearch(query: spotlight.work, novels: true, native: spotlight.media?.native)
+        } else { quoteSearch = QuoteSearch(query: spotlight.work) }
     }
     /// A book from a quote or pick: open your copy, or look for it in the free libraries.
     private func readBook(_ title: String) {

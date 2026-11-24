@@ -128,12 +128,15 @@ final class NovelAndSourceChecks: XCTestCase {
     /// Sign-ins live in the browser's own store: a session is still there for a new browser, and signing out of one
     /// site removes it.
     func testBrowserSessionPersistsAndSignsOut() async throws {
-        let store = WKWebsiteDataStore.default()
+        let started = Date()
+        func step(_ name: String) { print("CHECK|session-time|\(name) at \(String(format: "%.1fs", Date().timeIntervalSince(started)))") }
+        let store = SiteSessions.store()
         let cookie = try XCTUnwrap(HTTPCookie(properties: [
             .domain: ".signin-check.example.com", .path: "/", .name: "session", .value: "check", .secure: "TRUE",
             .expires: Date().addingTimeInterval(3600),
         ]))
         await store.httpCookieStore.setCookie(cookie)
+        step("cookie set")
         let site = SavedSite(name: "Check", url: URL(string: "https://www.signin-check.example.com/")!)
         let other = SavedSite(name: "Other", url: URL(string: "https://other.example.org/")!)
         let configuration = WKWebViewConfiguration()
@@ -141,14 +144,18 @@ final class NovelAndSourceChecks: XCTestCase {
         let fresh = WKWebView(frame: .zero, configuration: configuration)
         let cookies = await fresh.configuration.websiteDataStore.httpCookieStore.allCookies()
         XCTAssertTrue(cookies.contains { $0.name == "session" && $0.domain.contains("signin-check") }, "the session didn't persist")
+        step("read back from a new browser")
         let signedIn = await SiteSessions.hasCookies(for: site)
         let otherSignedIn = await SiteSessions.hasCookies(for: other)
         XCTAssertTrue(signedIn)
         XCTAssertFalse(otherSignedIn)
+        step("checked")
         await SiteSessions.signOut(of: site)
+        step("signed out")
         let after = await SiteSessions.hasCookies(for: site)
         XCTAssertFalse(after, "signing out left the session")
         print("CHECK|session|persisted for a new browser, signed out cleanly")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 20, "the browser's session store was slow to answer")
     }
 
     /// CBR comics: stored RAR pages import and open; compressed ones explain themselves.

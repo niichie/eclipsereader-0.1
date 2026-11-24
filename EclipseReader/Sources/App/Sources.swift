@@ -183,6 +183,16 @@ extension LibraryModel {
 /// Sign-ins live in the in-app browser (WebKit's own store). This only signs you out of one site there.
 @MainActor
 enum SiteSessions {
+    /// WebKit's cookie store only answers once a web view using it exists; this one keeps it awake.
+    private static var keeper: WKWebView?
+    static func store() -> WKWebsiteDataStore {
+        if keeper == nil {
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .default()
+            keeper = WKWebView(frame: .zero, configuration: configuration)
+        }
+        return WKWebsiteDataStore.default()
+    }
     /// WebKit names each site's data by its registrable domain ("bbc.co.uk"), which the source's host ends with.
     static func matches(_ domain: String, _ site: SavedSite) -> Bool {
         let host = site.url.host?.lowercased() ?? ""
@@ -190,7 +200,7 @@ enum SiteSessions {
         return !d.isEmpty && (host == d || host.hasSuffix("." + d) || d.hasSuffix("." + host))
     }
     static func signOut(of site: SavedSite) async {
-        let store = WKWebsiteDataStore.default()
+        let store = store()
         let records = await store.dataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes())
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: records.filter { matches($0.displayName, site) })
         // Cookies set for a parent domain are listed under it; remove those too.
@@ -199,7 +209,7 @@ enum SiteSessions {
     }
     /// Whether the browser holds any cookies for the site (you have visited, and maybe signed in).
     static func hasCookies(for site: SavedSite) async -> Bool {
-        await WKWebsiteDataStore.default().httpCookieStore.allCookies().contains { matches($0.domain, site) }
+        await store().httpCookieStore.allCookies().contains { matches($0.domain, site) }
     }
 }
 
