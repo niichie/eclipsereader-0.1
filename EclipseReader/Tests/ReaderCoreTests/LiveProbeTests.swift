@@ -200,7 +200,13 @@ final class LiveProbeTests: XCTestCase {
         let end = text.index(r.lowerBound, offsetBy: min(after, text.distance(from: r.lowerBound, to: text.endIndex)))
         return String(text[start..<end]).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ")
     }
-    private func dump(_ name: String, _ text: String) { print("DUMP|\(name)|\(text.prefix(2400))") }
+    private func dump(_ name: String, _ text: String) {
+        // Control characters (a NUL in a response, say) make grep treat the whole log as binary and hide the rest.
+        let clean = String(String.UnicodeScalarView(text.prefix(2400).unicodeScalars.map {
+            CharacterSet.controlCharacters.contains($0) ? " " : $0
+        }))
+        print("DUMP|\(name)|\(clean)")
+    }
     private func links(_ html: String, _ pattern: String, limit: Int = 25) -> String {
         var seen = Set<String>()
         var out: [String] = []
