@@ -547,7 +547,11 @@ public struct NovelSource: Sendable {
     public func chapter(_ url: URL) async throws -> NovelChapterText {
         guard WebLink.publicHTTPS(url) else { throw SourceError.insecureURL }
         let html = try await page(url)
-        guard let text = NovelText.extract(html: html, url: url) else { throw SourceError.unsupportedStructure }
+        guard let text = NovelText.extract(html: html, url: url) else {
+            // A paid chapter whose page carries no text at all: say it's locked rather than failing.
+            if Wuxiaworld.isLocked(html: html, url: url) { return NovelChapterText(title: NovelText.title(in: html), html: "", locked: true) }
+            throw SourceError.unsupportedStructure
+        }
         return text
     }
     private func page(_ url: URL) async throws -> String {

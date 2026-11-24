@@ -183,21 +183,23 @@ extension LibraryModel {
 /// Sign-ins live in the in-app browser (WebKit's own store). This only signs you out of one site there.
 @MainActor
 enum SiteSessions {
+    /// WebKit names each site's data by its registrable domain ("bbc.co.uk"), which the source's host ends with.
+    static func matches(_ domain: String, _ site: SavedSite) -> Bool {
+        let host = site.url.host?.lowercased() ?? ""
+        let d = domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+        return !d.isEmpty && (host == d || host.hasSuffix("." + d) || d.hasSuffix("." + host))
+    }
     static func signOut(of site: SavedSite) async {
         let store = WKWebsiteDataStore.default()
-        let domain = ChapterMerge.site(site.url.host)
         let records = await store.dataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes())
-        let matching = records.filter { $0.displayName == domain || $0.displayName.hasSuffix("." + domain) }
-        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: matching)
+        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: records.filter { matches($0.displayName, site) })
+        // Cookies set for a parent domain are listed under it; remove those too.
+        let cookies = await store.httpCookieStore.allCookies()
+        for cookie in cookies where matches(cookie.domain, site) { await store.httpCookieStore.deleteCookie(cookie) }
     }
     /// Whether the browser holds any cookies for the site (you have visited, and maybe signed in).
     static func hasCookies(for site: SavedSite) async -> Bool {
-        let domain = ChapterMerge.site(site.url.host)
-        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        return cookies.contains { cookie in
-            let d = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
-            return d == domain || d.hasSuffix("." + domain)
-        }
+        await WKWebsiteDataStore.default().httpCookieStore.allCookies().contains { matches($0.domain, site) }
     }
 }
 

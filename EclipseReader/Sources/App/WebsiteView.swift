@@ -157,7 +157,7 @@ final class WebsiteBrowser: NSObject, ObservableObject, WKNavigationDelegate, WK
     var downloaded: ((URL) -> Void)?
     @Published var downloading = false
     private var destinations: [ObjectIdentifier: URL] = [:]
-    static let downloadable: Set<String> = ["epub", "kepub", "mobi", "azw", "azw3", "prc", "fb2", "txt", "rtf", "docx", "odt", "pdf", "cbz", "zip"]
+    static let downloadable: Set<String> = ["epub", "kepub", "mobi", "azw", "azw3", "prc", "fb2", "txt", "rtf", "docx", "odt", "pdf", "cbz", "cbr", "zip"]
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
         let response = navigationResponse.response

@@ -5,7 +5,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// Imports manga from Files (including iCloud Drive, USB drives and external SSDs).
-/// Supports CBZ/ZIP (stored or deflated, ZIP64), PDF, image files and folders.
+/// Supports CBZ/ZIP (stored or deflated, ZIP64), CBR (RAR pages stored without compression), PDF, image files and folders.
 /// Original files are never modified or deleted.
 actor LocalBooks {
     static let shared = LocalBooks()
@@ -117,7 +117,12 @@ actor LocalBooks {
             return [(name, try store(BookManifest(format: .pdf, bookmark: copy ? nil : bookmark, relative: relative, entries: entries),
                                      copying: copy ? file : nil))]
         }
-        guard Self.archiveTypes.contains(ext) else { return [] }
+        if ext == "cbr" || ext == "rar" || (!Self.archiveTypes.contains(ext) && RarIndex.isRar(file)) {
+            // Most CBRs are RAR archives; some are ZIPs with another name, which read like a CBZ below.
+            if RarIndex.isRar(file) { return [(name, try importRar(file))] }
+        } else if !Self.archiveTypes.contains(ext) {
+            return []
+        }
         let entries = try ZipIndex.read(file, maxEntry: maxEntry)
             .filter { e in
                 let parts = e.path.split(separator: "/")
@@ -149,6 +154,37 @@ actor LocalBooks {
             }
         }
         return result
+    }
+
+    /// A RAR comic (CBR): its pages are copied out of the archive into the app, like a folder of images.
+    /// Only pages stored without RAR compression can be read; anything else gets a clear message.
+    private func importRar(_ file: URL) throws -> String {
+        let entries: [RarIndex.Entry]
+        do { entries = try RarIndex.read(file) }
+        catch let failure as RarIndex.Failure { throw BookError.invalid("“\(file.lastPathComponent)”: \(failure.errorDescription ?? "can’t be read").") }
+        let pages = entries.filter { entry in
+            let parts = entry.path.split(separator: "/")
+            return !entry.directory && !parts.contains { $0.hasPrefix(".") || $0 == "__MACOSX" }
+                && Self.imageTypes.contains((entry.path as NSString).pathExtension.lowercased())
+        }
+        .sorted { ChapterOrder.natural($0.path, $1.path) }
+        guard !pages.isEmpty else { throw BookError.invalid("“\(file.lastPathComponent)” has no images inside.") }
+        guard pages.count <= maxPages else { throw BookError.invalid("“\(file.lastPathComponent)” has too many pages.") }
+        if pages.contains(where: \.encrypted) { throw BookError.invalid("“\(file.lastPathComponent)” is password-protected.") }
+        guard pages.allSatisfy(\.stored) else {
+            throw BookError.invalid("“\(file.lastPathComponent)” is a compressed RAR archive, which eclipsereader can’t unpack. Convert it to CBZ (any comic converter does it, or zip the images) and import that.")
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cbr-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var files: [URL] = []
+        for (i, entry) in pages.enumerated() {
+            let ext = (entry.path as NSString).pathExtension.lowercased()
+            let target = folder.appendingPathComponent(String(format: "%05d.", i) + ext)
+            try RarIndex.extract(entry, from: file, maxSize: maxEntry).write(to: target)
+            files.append(target)
+        }
+        return try makeBook(files: files, base: folder, rootForBookmark: nil, copy: true)
     }
 
     private func makeBook(files: [URL], base: URL?, rootForBookmark: Data?, copy: Bool) throws -> String {

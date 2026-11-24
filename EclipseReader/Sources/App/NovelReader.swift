@@ -445,7 +445,7 @@ struct NovelReaderView: View {
             let loaded = try await library.novelText(chapter)
             guard !Task.isCancelled else { return }
             let blocks = loaded.blocks(base: chapter.url)
-            guard !blocks.isEmpty else { throw SourceError.unsupportedStructure }
+            guard !blocks.isEmpty || loaded.locked else { throw SourceError.unsupportedStructure }
             images = await Self.pictures(in: blocks)
             text = loaded
             original = blocks
@@ -459,9 +459,11 @@ struct NovelReaderView: View {
             if let next = nextChapter {
                 Task.detached(priority: .utility) { [library] in _ = try? await library.novelText(next) }
             }
+        } catch let error as SourceError where error == .unsupportedStructure {
+            failure = "Couldn’t find this chapter’s text. The site may have changed, or the chapter needs you to be signed in: open the site in Browse, sign in, then turn on “Read with my browser sign-in” for it in Browse › Manage sources."
         } catch {
             failure = (error as? LocalizedError)?.errorDescription
-                ?? "Couldn’t read this chapter. Open it in the browser (⋯ › Open website) to check it, then try again."
+                ?? "Couldn’t read this chapter. Check your connection and try again."
         }
     }
     /// The chapter as it will be set: its text (translated when asked), then a page leading into the next chapter.

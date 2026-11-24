@@ -340,7 +340,11 @@ final class LibraryModel: ObservableObject {
         let series = MangaSeries(id: "web-" + url.absoluteString, url: url, title: found.title, cover: found.cover,
                                  kind: .web, chapters: found.chapters, summary: found.summary)
         state.series = [series] + allSeries
-        if let style = found.style { var map = state.detectedStyles ?? [:]; map[series.id] = style; state.detectedStyles = map }
+        // The source's own setting wins, then what the page says, then what kind of source it is.
+        let site = source(for: url)
+        if let style = site?.style ?? found.style ?? site?.category?.style {
+            var map = state.detectedStyles ?? [:]; map[series.id] = style; state.detectedStyles = map
+        }
         save()
         // Open straight away only when the link itself was a chapter; a series page shows its chapter list.
         let here = LinkedSource.key(url)

@@ -2335,7 +2335,7 @@ struct AddMangaView: View {
     @State private var browse: URL?
     @State private var importing = false
     @State private var copy = true
-    private static let types: [UTType] = [.folder, .zip, .pdf, .image] + [UTType(filenameExtension: "cbz")].compactMap { $0 } + BookLink.types
+    private static let types: [UTType] = [.folder, .zip, .pdf, .image] + [UTType(filenameExtension: "cbz"), UTType(filenameExtension: "cbr"), UTType(filenameExtension: "rar")].compactMap { $0 } + BookLink.types
     var body: some View {
         NavigationStack {
             Form {
