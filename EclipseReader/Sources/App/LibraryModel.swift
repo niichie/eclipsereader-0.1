@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 
 @MainActor
 final class LibraryModel: ObservableObject {
@@ -167,6 +168,14 @@ final class LibraryModel: ObservableObject {
         coverAttempts.remove(series.id)
         Task { await ensureCovers() }
     }
+    func ignoreRecommendationSeed(_ id: String) {
+        state.ignoredRecommendationSeries = (state.ignoredRecommendationSeries ?? []).union([id])
+        save()
+    }
+    func hideSuggestion(_ title: String) {
+        state.hiddenRecommendationTitles = (state.hiddenRecommendationTitles ?? []).union([QuoteFeed.workKey(title)])
+        save()
+    }
     func lastRead(_ series: MangaSeries) -> Date? {
         series.chapters.compactMap { state.progress[$0.id]?.updated }.max()
     }
@@ -257,8 +266,25 @@ final class LibraryModel: ObservableObject {
     /// One entry point for every source, so the same reader handles all of them.
     /// Downloaded chapters are read from disk first, so they work offline.
     func pages(for chapter: Chapter) async throws -> [MangaPage] {
+        if let index = downloadQueue.firstIndex(where: { $0.id == chapter.id }) {
+            let next = downloadQueue.remove(at: index)
+            downloadQueue.insert(next, at: 0)
+        }
         if let offline = await OfflineStore.shared.pages(for: chapter) { return offline }
         return try await networkPages(for: chapter)
+    }
+    func repairOfflinePage(_ chapter: Chapter, index: Int) async throws {
+        guard let offline = await OfflineStore.shared.pages(for: chapter), offline.indices.contains(index) else { throw SourceError.missingChapter }
+        let remote = try await networkPages(for: chapter)
+        guard remote.count == offline.count else { throw SourceError.unsupportedStructure }
+        let page = remote[index]
+        await pipeline.cache.remove(page.url)
+        let bytes = try await pipeline.data(for: page, chapter: chapter)
+        guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+              CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 32] as CFDictionary) != nil else { throw SourceError.invalidImage }
+        _ = try await OfflineStore.shared.write(chapter.id, index: index, data: bytes)
+        await pipeline.cache.remove(offline[index].url)
     }
     private func networkPages(for chapter: Chapter) async throws -> [MangaPage] {
         #if DEBUG
@@ -703,7 +729,10 @@ final class LibraryModel: ObservableObject {
     func isDownloaded(_ chapter: Chapter) -> Bool { downloaded.contains(chapter.id) }
     func canDownload(_ chapter: Chapter) -> Bool { chapter.url.scheme == "https" }
     func download(_ chapters: [Chapter]) {
-        for chapter in chapters where canDownload(chapter) && !downloaded.contains(chapter.id) && downloads[chapter.id] == nil {
+        for chapter in chapters where canDownload(chapter) && !downloaded.contains(chapter.id) {
+            if let status = downloads[chapter.id] {
+                guard case .failed = status else { continue }
+            }
             downloadQueue.append(chapter)
             downloads[chapter.id] = .queued
         }
@@ -754,11 +783,11 @@ final class LibraryModel: ObservableObject {
             }
             let pages = try await networkPages(for: chapter)
             guard !pages.isEmpty else { throw SourceError.unsupportedStructure }
-            try await OfflineStore.shared.begin(chapter.id)
-            var files: [String] = []
-            for (i, page) in pages.enumerated() {
+            var files = try await OfflineStore.shared.resume(chapter.id, pages: pages)
+            for (i, page) in pages.enumerated().dropFirst(files.count) {
                 guard downloads[chapter.id] != nil else { throw CancellationError() }
                 let data = try await pipeline.data(for: page, chapter: chapter)
+                guard downloads[chapter.id] != nil else { throw CancellationError() }
                 let name = try await OfflineStore.shared.write(chapter.id, index: i, data: data)
                 files.append(name)
                 downloads[chapter.id] = .running(Double(i + 1) / Double(pages.count))
@@ -767,7 +796,7 @@ final class LibraryModel: ObservableObject {
             downloaded.insert(chapter.id)
             downloads[chapter.id] = nil
         } catch {
-            await OfflineStore.shared.remove(chapter.id)
+            if error is CancellationError { await OfflineStore.shared.remove(chapter.id) }
             if downloads[chapter.id] != nil {
                 downloads[chapter.id] = .failed(error is CancellationError ? "Cancelled" : error.localizedDescription)
             }
@@ -789,8 +818,7 @@ final class LibraryModel: ObservableObject {
         save()
     }
     func removeHistory(_ chapter: Chapter) {
-        state.progress[chapter.id] = nil
-        if state.lastChapterID == chapter.id { state.lastChapterID = nil }
+        state.hiddenHistoryDates = (state.hiddenHistoryDates ?? [:]).merging([chapter.id: Date()]) { _, new in new }
         save()
     }
     /// Starts downloading the next two chapters after the one being read (Settings › Download ahead).

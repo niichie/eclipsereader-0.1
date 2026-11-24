@@ -110,6 +110,7 @@ struct HistoryView: View {
         let items = Array(model.state.progress
             .compactMap { entry in index[entry.key].map { HistoryItem(series: $0.0, chapter: $0.1, progress: entry.value) } }
             .filter { $0.progress.updated > (model.state.historyCleared ?? .distantPast) }
+            .filter { $0.progress.updated > (model.state.hiddenHistoryDates?[$0.chapter.id] ?? .distantPast) }
             .sorted { $0.progress.updated > $1.progress.updated }
             .filter { seen.insert($0.series.id).inserted }
             .prefix(150))

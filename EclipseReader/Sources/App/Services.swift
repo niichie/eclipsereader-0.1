@@ -178,9 +178,9 @@ struct CoverTint: Sendable, Equatable {
 
 /// Clean low-contrast noise at source resolution so enlargement does not amplify it.
 enum PageEnhancer {
-    nonisolated(unsafe) private static let context = CIContext(options: [.cacheIntermediates: false])
+    nonisolated(unsafe) static let context = CIContext(options: [.cacheIntermediates: false])
 
-    static func enhance(_ image: CGImage, targetLongSide: Double) -> CGImage? {
+    static func enhance(_ image: CGImage, targetLongSide: Double, strength: Double = 0.035) -> CGImage? {
         let width = Double(image.width)
         let height = Double(image.height)
         let long = max(width, height)
@@ -190,7 +190,7 @@ enum PageEnhancer {
         let scale = min(2, max(1, targetLongSide / long), sqrt(8_000_000 / pixels), 16_384 / long)
         let input = CIImage(cgImage: image)
         let clean = input.clampedToExtent()
-            .applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.035, "inputSharpness": 0.0])
+            .applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": strength, "inputSharpness": 0.0])
         let output = scale > 1 ? clean.applyingFilter("CILanczosScaleTransform", parameters: [
             kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0
         ]) : clean

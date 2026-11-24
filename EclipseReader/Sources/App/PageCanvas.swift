@@ -3,6 +3,8 @@ import ImageIO
 
 private struct DecodedImage: @unchecked Sendable {
     let image: UIImage
+    let sourceRegion: CGRect
+    let needsTiles: Bool
     let ratio: Double
 }
 /// Picks how many pixels to decode per page for this device: its screen's real pixel size,
@@ -27,7 +29,32 @@ enum DisplayQuality {
     }
 }
 
-private enum PageDecoder {
+private actor PageDecoder {
+    static let shared = PageDecoder()
+    func render(_ data: Data, trim: Bool, limit: Double, enhance: Bool, strength: Double, half: MangaPage.Half?) throws -> DecodedImage {
+        try Task.checkCancellation()
+        return try Self.decode(data, trim: trim, limit: limit, enhance: enhance, strength: strength, half: half)
+    }
+    func panels(_ source: PanelSource, rtl: Bool) throws -> [PanelRect] {
+        try Task.checkCancellation()
+        return PanelSource.detect(source, rightToLeft: rtl)
+    }
+    func tile(_ data: Data, region: CGRect, pixels: CGSize, strength: Double?) throws -> UIImage? {
+        try Task.checkCancellation()
+        guard let source = CIImage(data: data, options: [.applyOrientationProperty: true]) else { return nil }
+        let bounds = source.extent
+        let rect = CGRect(x: bounds.minX + region.minX * bounds.width, y: bounds.maxY - region.maxY * bounds.height,
+                          width: region.width * bounds.width, height: region.height * bounds.height)
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        let scale = min(pixels.width / rect.width, pixels.height / rect.height, 2,
+                        sqrt(4_000_000 / (rect.width * rect.height)))
+        var content = source
+        if let strength { content = content.applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": strength, "inputSharpness": 0]) }
+        let transform = CGAffineTransform(scaleX: scale, y: scale)
+        let output = content.transformed(by: transform)
+        guard let cg = PageEnhancer.context.createCGImage(output, from: rect.applying(transform).integral) else { return nil }
+        return UIImage(cgImage: cg)
+    }
     /// Normal pages decode to the device's quality limit on the long side. Webtoon strips (tall and
     /// narrow) keep their full width so text stays sharp, up to 16384 px tall.
     static func maxPixels(width: Double, height: Double, limit: Double = 4096) -> Double {
@@ -35,39 +62,44 @@ private enum PageDecoder {
         if height > width * 2.5 && width <= 1600 { return min(long, 16384) }
         return min(long, limit)
     }
-    static func decode(_ data: Data, trim: Bool = true, limit: Double = 4096, enhance: Bool = false,
+    static func decode(_ data: Data, trim: Bool = true, limit: Double = 4096, enhance: Bool = false, strength: Double = 0.035,
                        half: MangaPage.Half? = nil) throws -> DecodedImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Double,
               let height = properties[kCGImagePropertyPixelHeight] as? Double,
-              width > 0, height > 0, width * height <= 40_000_000,
+              width > 0, height > 0, width * height <= 120_000_000,
               let cg = CGImageSourceCreateThumbnailAtIndex(source, 0,
                 [kCGImageSourceCreateThumbnailFromImageAlways: true,
                  kCGImageSourceCreateThumbnailWithTransform: true,
                  kCGImageSourceShouldCacheImmediately: true,
-                 kCGImageSourceThumbnailMaxPixelSize: maxPixels(width: width, height: height, limit: limit)] as CFDictionary)
+                 kCGImageSourceThumbnailMaxPixelSize: min(maxPixels(width: width, height: height, limit: limit), max(width, height) * sqrt(8_000_000 / (width * height)))] as CFDictionary)
         else { throw SourceError.invalidImage }
         var base = cg
+        var left = 0.0
         if let half, cg.width > 1 {
             let mid = cg.width / 2
             let rect = half == .left ? CGRect(x: 0, y: 0, width: mid, height: cg.height)
                                      : CGRect(x: mid, y: 0, width: cg.width - mid, height: cg.height)
-            base = cg.cropping(to: rect) ?? cg
+            if let cropped = cg.cropping(to: rect) { base = cropped; left = rect.minX }
         }
-        var final = trim ? (cropMargins(base) ?? base) : base
+        let full = CGRect(x: 0, y: 0, width: base.width, height: base.height)
+        let crop = trim ? (cropMargins(base) ?? full) : full
+        var final = base.cropping(to: crop) ?? base
+        let region = CGRect(x: (left + crop.minX) / CGFloat(cg.width), y: crop.minY / CGFloat(cg.height),
+                            width: crop.width / CGFloat(cg.width), height: crop.height / CGFloat(cg.height))
         if enhance {
             let target = final.height > final.width * 3
                 ? 1440 * Double(final.height) / Double(final.width)
                 : limit * 0.66
-            final = PageEnhancer.enhance(final, targetLongSide: target) ?? final
+            final = PageEnhancer.enhance(final, targetLongSide: target, strength: strength) ?? final
         }
-        return DecodedImage(image: UIImage(cgImage: final), ratio: Double(final.width) / Double(final.height))
+        return DecodedImage(image: UIImage(cgImage: final), sourceRegion: region, needsTiles: width * height > 8_000_000, ratio: Double(final.width) / Double(final.height))
     }
     /// Removes plain white or black scan margins (the bars beside single pages).
     /// Conservative: an edge row/column is trimmed only when ~98% of it is blank,
     /// and never more than 15% per side, so artwork is not cut.
-    static func cropMargins(_ image: CGImage) -> CGImage? {
+    static func cropMargins(_ image: CGImage) -> CGRect? {
         let w = image.width, h = image.height
         guard w > 32, h > 32 else { return nil }
         let scale = min(1, 400.0 / Double(max(w, h)))
@@ -110,7 +142,7 @@ private enum PageDecoder {
                           width: Double(sw - left - right) * fx, height: Double(sh - top - bottom) * fy).integral
             .intersection(CGRect(x: 0, y: 0, width: w, height: h))
         guard rect.width > Double(w) * 0.6, rect.height > Double(h) * 0.6 else { return nil }
-        return image.cropping(to: rect)
+        return rect
     }
 }
 
@@ -142,6 +174,12 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     private let retry = UIButton(type: .system)
     private let message = UILabel()
     private var work: Task<Void, Never>?
+    private let detail = UIImageView()
+    private var detailWork: Task<Void, Never>?
+    private var originalData: Data?
+    private var sourceRegion = CGRect.zero
+    private var needsTiles = false
+    private var comparing = false
     private var lastSize = CGSize.zero
     private var baseScale: CGFloat = 1
     private var preference = ReaderPreferences()
@@ -167,6 +205,10 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         scroll.contentInsetAdjustmentBehavior = .never
         scroll.bouncesZoom = true; scroll.alwaysBounceHorizontal = false; scroll.alwaysBounceVertical = false; scroll.isDirectionalLockEnabled = true
         imageView.contentMode = .scaleAspectFit
+        imageView.addSubview(detail)
+        let compare = UILongPressGestureRecognizer(target: self, action: #selector(compareOriginal(_:)))
+        compare.numberOfTouchesRequired = 2
+        scroll.addGestureRecognizer(compare)
         // Smooth downscaling (mipmapped) keeps screentones and crosshatching free of shimmering moiré.
         imageView.layer.minificationFilter = .trilinear
         imageView.layer.magnificationFilter = .linear
@@ -194,7 +236,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         imageView.accessibilityLabel = page.label; imageView.isAccessibilityElement = false
         start = { [weak self] in
             guard let self else { return }
-            work?.cancel(); imageView.image = nil; imageView.isAccessibilityElement = false; message.text = nil; retry.isHidden = true; spinner.startAnimating()
+            clearDetail(); work?.cancel(); imageView.image = nil; imageView.isAccessibilityElement = false; message.text = nil; retry.isHidden = true; spinner.startAnimating()
             let trim = preferences.trimMargins ?? true
             let enhance = preferences.enhance ?? false
             let limit = DisplayQuality.longSide(preferences.quality ?? .automatic)
@@ -203,11 +245,11 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                     let data = try await pipeline.data(for: page, chapter: chapter)
                     try Task.checkCancellation()
                     let half = page.half
-                    let decoded = try await Task.detached(priority: .userInitiated) { [trim, limit, enhance, half] in
-                        try PageDecoder.decode(data, trim: trim, limit: limit, enhance: enhance, half: half)
-                    }.value
+                    let decoded = try await PageDecoder.shared.render(data, trim: trim, limit: limit, enhance: enhance,
+                                                                      strength: preferences.cleanupStrength ?? 0.035, half: half)
                     try Task.checkCancellation()
                     guard let self else { return }
+                    originalData = data; sourceRegion = decoded.sourceRegion; needsTiles = decoded.needsTiles
                     spinner.stopAnimating(); imageView.image = decoded.image
                     resetFit(); loaded(index, decoded.ratio)
                     findPanels(rightToLeft: preferences.direction == .rightToLeft)
@@ -223,7 +265,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         }
         start?()
     }
-    func cancel() { work?.cancel(); work = nil; panelWork?.cancel(); start = nil; imageView.image = nil }
+    func cancel() { clearDetail(); work?.cancel(); work = nil; panelWork?.cancel(); start = nil; imageView.image = nil }
 
     // MARK: Guided view
     private func findPanels(rightToLeft: Bool) {
@@ -231,7 +273,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         guard preference.guided == true, preference.mode == .paged, let cg = imageView.image?.cgImage else { return }
         let box = PanelSource(image: cg)
         panelWork = Task { [weak self] in
-            let found = await Task.detached(priority: .utility) { PanelSource.detect(box, rightToLeft: rightToLeft) }.value
+            let found = (try? await PageDecoder.shared.panels(box, rtl: rightToLeft)) ?? []
             guard !Task.isCancelled, let self else { return }
             self.panels = found
         }
@@ -271,7 +313,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
             self.scroll.zoom(to: rect, animated: false)
         }
     }
-    func suspend() { work?.cancel(); work = nil; imageView.image = nil }
+    func suspend() { clearDetail(); panelWork?.cancel(); work?.cancel(); work = nil; imageView.image = nil }
     func resume() { if imageView.image == nil && work == nil { start?() } }
     func updatePreferences(_ preferences: ReaderPreferences) {
         let changedFit = preference.fit != preferences.fit
@@ -281,11 +323,24 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     }
     override func layoutSubviews() {
         super.layoutSubviews()
+        let previousCenter = imageView.convert(CGPoint(x: scroll.bounds.midX, y: scroll.bounds.midY), from: scroll)
+        let relative = scroll.zoomScale / max(0.001, baseScale)
         scroll.frame = bounds
         spinner.center = CGPoint(x: bounds.midX, y: bounds.midY)
         message.frame = CGRect(x: 16, y: bounds.midY - 70, width: max(0, bounds.width - 32), height: 110)
         retry.frame = CGRect(x: 16, y: bounds.midY + 45, width: max(0, bounds.width - 32), height: 50)
-        if lastSize != bounds.size { lastSize = bounds.size; resetFit() }
+        if lastSize != bounds.size {
+            let restore = lastSize != .zero && relative > 1.01
+            lastSize = bounds.size
+            resetFit()
+            if restore {
+                let zoom = min(scroll.maximumZoomScale, baseScale * relative)
+                let size = CGSize(width: bounds.width / zoom, height: bounds.height / zoom)
+                scroll.zoom(to: CGRect(x: previousCenter.x - size.width / 2, y: previousCenter.y - size.height / 2,
+                                       width: size.width, height: size.height), animated: false)
+            }
+        }
+        scheduleDetail()
     }
     private func resetFit() {
         guard let image = imageView.image, bounds.width > 0, bounds.height > 0 else { return }
@@ -321,6 +376,41 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     }
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
     func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
+    private func clearDetail() {
+        detailWork?.cancel(); detail.image = nil; originalData = nil; comparing = false
+    }
+    @objc private func compareOriginal(_ gesture: UILongPressGestureRecognizer) {
+        comparing = gesture.state == .began || gesture.state == .changed
+        scheduleDetail()
+    }
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { scheduleDetail() }
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { scheduleDetail() }
+    private func scheduleDetail() {
+        detailWork?.cancel()
+        guard let data = originalData, scroll.zoomScale > baseScale * 1.05 || comparing || needsTiles else {
+            detail.image = nil
+            return
+        }
+        let box = imageView.bounds
+        let visible = imageView.convert(scroll.bounds, from: scroll).intersection(box)
+        guard !visible.isEmpty, !visible.isNull, box.width > 0, box.height > 0 else { return }
+        let region = CGRect(x: sourceRegion.minX + visible.minX / box.width * sourceRegion.width,
+                            y: sourceRegion.minY + visible.minY / box.height * sourceRegion.height,
+                            width: visible.width / box.width * sourceRegion.width,
+                            height: visible.height / box.height * sourceRegion.height)
+        let density = scroll.zoomScale * traitCollection.displayScale
+        let pixels = CGSize(width: visible.width * density, height: visible.height * density)
+        let strength = !comparing && preference.enhance == true ? preference.cleanupStrength ?? 0.035 : nil
+        detailWork = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(120))
+                let tile = try await PageDecoder.shared.tile(data, region: region, pixels: pixels, strength: strength)
+                try Task.checkCancellation()
+                self?.detail.frame = visible
+                self?.detail.image = tile
+            } catch {}
+        }
+    }
     @objc private func retryPage() { start?() }
     @objc private func toggleControls(_ recognizer: UITapGestureRecognizer) {
         let width = window?.bounds.width ?? bounds.width
@@ -419,7 +509,12 @@ extension ZoomPageView: UIContextMenuInteractionDelegate {
             let cover = UIAction(title: "Set as cover", image: UIImage(systemName: "photo")) { _ in
                 NotificationCenter.default.post(name: ZoomPageView.useAsCover, object: nil, userInfo: ["index": index])
             }
-            return UIMenu(children: [share, save, cover])
+            var actions = [share, save, cover]
+            if let self, self.panelIndex >= 0 {
+                actions.append(UIAction(title: "Show whole page") { [weak self] _ in self?.panelIndex = -1; self?.showPanel() })
+                actions.append(UIAction(title: "Skip panel") { [weak self] _ in _ = self?.stepPanel(forward: true) })
+            }
+            return UIMenu(children: actions)
         }
     }
     private func present(_ controller: UIViewController) {

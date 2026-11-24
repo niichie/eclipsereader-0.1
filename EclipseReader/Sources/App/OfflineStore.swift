@@ -36,7 +36,7 @@ actor OfflineStore {
         for dir in dirs {
             guard let data = try? Data(contentsOf: dir.appendingPathComponent("chapter.json")),
                   let manifest = try? JSONDecoder().decode(Manifest.self, from: data) else {
-                // An interrupted download leaves no manifest: clean it up.
+                if FileManager.default.fileExists(atPath: dir.appendingPathComponent("partial.json").path) { continue }
                 try? FileManager.default.removeItem(at: dir)
                 continue
             }
@@ -64,6 +64,26 @@ actor OfflineStore {
         var rootURL = root
         try? rootURL.setResourceValues(values)
     }
+    func resume(_ chapterID: String, pages: [MangaPage]) throws -> [String] {
+        loadIfNeeded()
+        let folder = root.appendingPathComponent(Self.key(chapterID))
+        let marker = folder.appendingPathComponent("partial.json")
+        let signature = Self.key(try JSONEncoder().encode(pages.map { $0.url.absoluteString }).base64EncodedString())
+        if (try? String(contentsOf: marker, encoding: .utf8)) != signature {
+            try begin(chapterID)
+            try signature.write(to: marker, atomically: true, encoding: .utf8)
+            return []
+        }
+        var saved: [String] = []
+        for index in pages.indices {
+            let name = String(format: "%04d.page", index)
+            let bytes = try? folder.appendingPathComponent(name).resourceValues(forKeys: [.fileSizeKey]).fileSize
+            guard (bytes ?? 0) > 0 else { break }
+            saved.append(name)
+        }
+        return saved
+    }
+
     func write(_ chapterID: String, index: Int, data: Data) throws -> String {
         let name = String(format: "%04d.page", index)
         try data.write(to: root.appendingPathComponent(Self.key(chapterID)).appendingPathComponent(name), options: .atomic)
@@ -77,6 +97,7 @@ actor OfflineStore {
         }
         let manifest = Manifest(chapterID: chapterID, title: title, files: files, bytes: bytes, date: Date())
         try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("chapter.json"), options: .atomic)
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("partial.json"))
         manifests[chapterID] = manifest
     }
     func remove(_ chapterID: String) {

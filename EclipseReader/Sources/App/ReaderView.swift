@@ -7,6 +7,8 @@ struct ReaderView: View {
     @State private var chapter: Chapter
     @State private var pages: [MangaPage] = []
     @State private var page = 0
+    @State private var scrub: Int?
+    @State private var returnPage: Int?
     @State private var loading = true
     @State private var failure: String?
     @State private var controls = true
@@ -39,7 +41,12 @@ struct ReaderView: View {
         let seriesID = library.seriesID(for: chapter)
         var style = library.style(for: seriesID)
         if webtoon && (library.preferences.autoWebtoon ?? true) && library.styleOverride(seriesID) == .automatic && !style.scrolls { style = .webtoon }
-        return library.preferences.applying(style)
+        var prefs = library.preferences.applying(style)
+        if let strength = library.state.seriesCleanup?[seriesID] {
+            prefs.enhance = strength > 0
+            prefs.cleanupStrength = strength
+        }
+        return prefs
     }
     /// Only real webtoon strips (much taller than a printed page, even after margin trimming) count.
     /// The built-in Berserk source is manga and is never switched automatically.
@@ -317,6 +324,35 @@ struct ReaderView: View {
                 if library.canDownload(chapter) && !library.isDownloaded(chapter) && library.downloads[chapter.id] == nil {
                     Button("Download chapter", systemImage: "arrow.down.circle") { library.download([chapter]) }
                 }
+                Menu("Scan cleanup for this series") {
+                    ForEach(["Use global setting", "Off", "Light", "Standard", "Strong"], id: \.self) { label in
+                        Button(label) {
+                            var overrides = library.state.seriesCleanup ?? [:]
+                            let levels = ["Off": 0.0, "Light": 0.018, "Standard": 0.035, "Strong": 0.06]
+                            overrides[library.seriesID(for: chapter)] = levels[label]
+                            library.state.seriesCleanup = overrides
+                            library.save()
+                        }
+                    }
+                }
+                Button("Copy reader report", systemImage: "doc.on.doc") {
+                    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+                    let source = chapter.url.scheme == "https" ? chapter.url.host ?? "Website" : "Local"
+                    let dimensions = pages[safe: page].map { "\(Int($0.width ?? 0)) × \(Int($0.height ?? 0))" } ?? "unknown"
+                    UIPasteboard.general.string = "EclipseReader \(version)\nSource: \(source)\nPage: \(page + 1)/\(pages.count)\nPublished dimensions: \(dimensions)\nMode: \(effective.mode)\nEnhance: \(effective.enhance == true)\nChapter load failed: \(failure != nil)"
+                    flash("Reader report copied")
+                }
+                if library.isDownloaded(chapter), let index = origin[safe: page] ?? (pages.indices.contains(page) ? page : nil) {
+                    Button("Repair offline page", systemImage: "wrench") {
+                        let target = chapter
+                        Task {
+                            do {
+                                try await library.repairOfflinePage(target, index: index)
+                                if target.id == chapter.id { retry += 1; flash("Offline page repaired") }
+                            } catch { flash(error.localizedDescription) }
+                        }
+                    }
+                }
                 Section("Cover") {
                     if pages.indices.contains(page) {
                         Button("Use this page as cover", systemImage: "photo") {
@@ -351,13 +387,25 @@ struct ReaderView: View {
         let previous = library.previous(before: chapter)
         let next = library.next(after: chapter)
         return VStack(spacing: 10) {
+            if let scrub, let preview = pages[safe: scrub] {
+                CoverView(url: preview.url, referer: chapter).id(preview.id)
+                    .frame(width: 78, height: 108).clipShape(RoundedRectangle(cornerRadius: 6))
+                    .accessibilityLabel("Preview of page \(scrub + 1)")
+            } else if let previous = returnPage, pages.indices.contains(previous) {
+                Button("Return to page \(previous + 1)") { returnPage = nil; page = previous }
+            }
             HStack(spacing: 10) {
                 chapterButton("backward.end.fill", "Previous chapter", enabled: previous != nil) { if let previous { open(previous) } }
                 HStack(spacing: 10) {
                     Text("\(page + 1)").monospacedDigit().font(.footnote.weight(.semibold)).frame(minWidth: 22)
                         .accessibilityLabel("Page \(page + 1) of \(pages.count)").accessibilityIdentifier("logicalPage")
-                    Slider(value: Binding(get: { Double(page) }, set: { page = Int($0.rounded()) }),
-                           in: 0...Double(max(1, pages.count - 1)), step: 1)
+                    Slider(value: Binding(get: { Double(scrub ?? page) }, set: { value in
+                        if scrub == nil { returnPage = page }
+                        scrub = Int(value.rounded())
+                    }), in: 0...Double(max(1, pages.count - 1)), step: 1, onEditingChanged: { active in
+                        if active { returnPage = page; scrub = page }
+                        else if let target = scrub { page = target; scrub = nil }
+                    })
                         .tint(Eclipse.accent)
                         .disabled(pages.count == 1).accessibilityLabel("Page position")
                     Text("\(pages.count)").monospacedDigit().font(.footnote).foregroundStyle(.secondary).frame(minWidth: 22)
@@ -475,7 +523,7 @@ struct ReaderView: View {
     }
     private func open(_ target: Chapter) {
         remember()
-        pages = []; loading = true; chapter = target
+        scrub = nil; returnPage = nil; pages = []; loading = true; chapter = target
     }
     /// Tap the left or right edge to turn the page (direction-aware), the middle to show or hide controls.
     private func tapped(at x: CGFloat, groups: [PageGroup]) {

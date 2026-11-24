@@ -201,7 +201,11 @@ struct LibraryView: View {
     private var recentSeries: MangaSeries? {
         guard let chapter = model.lastChapter, let series = model.series(id: model.seriesID(for: chapter)), (!series.isNovel || novelsOn), (!series.isPlainBook || booksOn),
               !model.isHidden(series) else { return nil }
-        return series
+        if model.state.ignoredRecommendationSeries?.contains(series.id) != true { return series }
+        return ([model.berserk] + model.allSeries).filter {
+            !model.isHidden($0) && (!$0.isNovel || novelsOn) && (!$0.isPlainBook || booksOn)
+                && model.state.ignoredRecommendationSeries?.contains($0.id) != true
+        }.compactMap { candidate in model.lastRead(candidate).map { (candidate, $0) } }.max { $0.1 < $1.1 }?.0
     }
     var body: some View {
         NavigationStack {
@@ -271,7 +275,7 @@ struct LibraryView: View {
                                 TextRecommendationStrip(series: recent, width: contentWidth, openSeries: $openSeries)
                                     .id(recent.id)
                             } else {
-                                DiscoverStrip(openSeries: $openSeries, width: contentWidth, similarTo: recent.title)
+                                DiscoverStrip(openSeries: $openSeries, width: contentWidth, similarTo: recent.title, seedID: recent.id)
                                     .id(recent.id)
                             }
                         }
@@ -595,6 +599,7 @@ struct DiscoverStrip: View {
     var width: CGFloat = 390
     /// nil: popular on MangaDex. A title: "Because you read …" that series.
     var similarTo: String? = nil
+    var seedID: String? = nil
     @State private var items: [DiscoverItem] = []
     @State private var adding: String?
     @State private var error: String?
@@ -606,6 +611,7 @@ struct DiscoverStrip: View {
                     if let similarTo {
                         Text("\(Text("Because you read ").foregroundStyle(.secondary))\(similarTo)")
                             .font(.title3.weight(.bold)).lineLimit(1)
+                            .contextMenu { if let seedID { Button("Ignore this series for recommendations") { model.ignoreRecommendationSeed(seedID) } } }
                     } else {
                         Text("Discover").font(.title3.weight(.bold))
                         Text("Popular on MangaDex").font(.footnote).foregroundStyle(.secondary)
@@ -614,7 +620,7 @@ struct DiscoverStrip: View {
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 12) {
-                        ForEach(items.filter { item in !model.libraryMembers.contains { $0.url == item.url } }) { item in
+                        ForEach(items.filter { item in (similarTo == nil || model.state.hiddenRecommendationTitles?.contains(QuoteFeed.workKey(item.title)) != true) && !model.libraryMembers.contains { $0.url == item.url } }) { item in
                             VStack(alignment: .leading, spacing: 5) {
                                 Button { select(item, add: false) } label: {
                                     CoverView(url: item.cover, referer: nil)
@@ -641,6 +647,7 @@ struct DiscoverStrip: View {
                                 }.buttonStyle(PressableStyle())
                             }
                             .frame(width: cardWidth)
+                            .contextMenu { if similarTo != nil { Button("Less like this") { model.hideSuggestion(item.title) } } }
                             .disabled(adding != nil)
                         }
                     }
@@ -683,7 +690,7 @@ private struct TextRecommendationStrip: View {
     @State private var search: LibraryView.QuoteSearch?
 
     var body: some View {
-        let owned = Set((model.libraryMembers.map(\.title) + [series.title]).map(QuoteFeed.workKey))
+        let owned = Set((model.libraryMembers.map(\.title) + [series.title]).map(QuoteFeed.workKey)).union(model.state.hiddenRecommendationTitles ?? [])
         let suggestions = novels.filter { !owned.contains(QuoteFeed.workKey($0.title)) }
         let classics = books.filter { !owned.contains(QuoteFeed.workKey($0.title)) }
         VStack(alignment: .leading, spacing: 0) {
@@ -691,6 +698,7 @@ private struct TextRecommendationStrip: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("\(Text("Because you read ").foregroundStyle(.secondary))\(series.title)")
                         .font(.title3.weight(.bold)).lineLimit(1)
+                        .contextMenu { Button("Ignore this series for recommendations") { model.ignoreRecommendationSeed(series.id) } }
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(suggestions) { item in
@@ -732,7 +740,7 @@ private struct TextRecommendationStrip: View {
                 Text(title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
                 Text(detail).font(.caption2).foregroundStyle(.secondary)
             }.frame(width: min(150, max(104, width / 3.6)))
-        }.buttonStyle(PressableStyle())
+        }.buttonStyle(PressableStyle()).contextMenu { Button("Less like this") { model.hideSuggestion(title) } }
     }
 }
 
@@ -1156,6 +1164,7 @@ struct LibrarySettingsPage: View {
                 }
                 Toggle("Popular on MangaDex", isOn: $showDiscover)
                 Toggle("“Because you read…” recommendations", isOn: $showBecause)
+                Button("Reset recommendation feedback") { model.state.hiddenRecommendationTitles = nil; model.state.ignoredRecommendationSeries = nil; model.save() }
                 Button("Show the home setup again") { setupDone = false }
             }
             Section {
@@ -2548,6 +2557,7 @@ struct BookmarksSheet: View {
                                 if let chapter = model.prepareToOpen(mark) { open(chapter) }
                             } label: {
                                 VStack(alignment: .leading, spacing: 3) {
+                                    if let note = mark.note { Text(note).font(.body).lineLimit(4) }
                                     Text(ChapterText.split(mark.chapterTitle).name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                                     Text("Page \(mark.page + 1)\(mark.pageCount > 0 ? " of \(mark.pageCount)" : "") · \(mark.created.formatted(.relative(presentation: .named)))")
                                         .font(.caption).foregroundStyle(.secondary)
