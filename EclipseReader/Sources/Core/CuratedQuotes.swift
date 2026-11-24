@@ -43,6 +43,9 @@ public enum CuratedQuotes {
         q("In the name of the Moon, I'll punish you!", "Usagi Tsukino", "Sailor Moon"),
         q("It'll definitely be all right.", "Sakura Kinomoto", "Cardcaptor Sakura"),
         q("I'm gonna be King of the Pirates!", "Monkey D. Luffy", "One Piece"),
+        q("I am the hope of the universe.", "Goku", "Dragon Ball"),
+        q("Believe in the me that believes in you!", "Kamina", "Gurren Lagann"),
+        q("Just who the hell do you think I am?!", "Kamina", "Gurren Lagann"),
         q("I'm not gonna run away, and I never go back on my word! That's my ninja way!", "Naruto Uzumaki", "Naruto"),
         q("Because I'm a genius!", "Hanamichi Sakuragi", "Slam Dunk"),
     ]

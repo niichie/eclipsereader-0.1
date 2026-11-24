@@ -37,6 +37,30 @@ jobs:
             grep -nE "error|crash|Crash|signal|exception|Exception|unexpected|Terminat" checks.log | grep -v "^.*warning" | tail -40
             echo "----- end of log -----"
             tail -60 checks.log
+            echo "----- crash reports -----"
+            for f in $(ls -t ~/Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -3); do
+              echo "== $f"
+              python3 - "$f" <<'PY'
+          import json, sys
+          text = open(sys.argv[1]).read()
+          head, _, body = text.partition("\n")
+          try:
+              report = json.loads(body)
+          except Exception:
+              print(text[:3000]); sys.exit()
+          print(head[:300])
+          ex = report.get("exception", {}); print("exception:", ex, report.get("termination", {}).get("indicator"))
+          for key in ("asi", "lastExceptionBacktrace"):
+              if key in report: print(key, json.dumps(report[key])[:1500])
+          images = report.get("usedImages", [])
+          for thread in report.get("threads", []):
+              if thread.get("triggered"):
+                  print("crashed thread:", thread.get("name", ""), thread.get("queue", ""))
+                  for frame in thread.get("frames", [])[:40]:
+                      image = images[frame.get("imageIndex", 0)].get("name", "?") if images else "?"
+                      print("  ", image, frame.get("symbol", hex(frame.get("imageOffset", 0))), frame.get("sourceFile", ""), frame.get("sourceLine", ""))
+          PY
+            done
             exit 1
           fi
       - uses: actions/upload-artifact@v4
