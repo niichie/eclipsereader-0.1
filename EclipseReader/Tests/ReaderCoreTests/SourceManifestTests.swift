@@ -1,5 +1,5 @@
 import XCTest
-@testable import EclipseReader
+@testable import ReaderCore
 
 final class SourceManifestTests: XCTestCase {
     /// The file that ships in the app: it must always decode, with unique ids and https addresses.

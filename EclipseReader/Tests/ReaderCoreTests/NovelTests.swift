@@ -1,5 +1,5 @@
 import XCTest
-@testable import EclipseReader
+@testable import ReaderCore
 
 final class NovelTests: XCTestCase {
     func testSyosetuChapterKeepsForewordTextAndAfterword() throws {
