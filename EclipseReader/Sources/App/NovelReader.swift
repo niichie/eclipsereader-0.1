@@ -517,6 +517,9 @@ struct NovelReaderView: View {
         anchorOffset = nil
         typeset = result
         page = target
+        if result.pages.indices.contains(target), let series {
+            library.setNovelPosition(NovelPosition(chapterID: chapter.id, offset: result.pages[target].range.location), for: series.id)
+        }
         if chrome {
             try? await Task.sleep(for: .seconds(2))
             if !Task.isCancelled { chrome = false }
@@ -546,6 +549,9 @@ struct NovelReaderView: View {
         landAtEnd = atEnd
         typeset = nil
         page = 0
+        if !atEnd, let series {
+            library.setNovelPosition(NovelPosition(chapterID: target.id, offset: 0), for: series.id)
+        }
         if Syosetu.handles(target.url) { translator.active = false }
         chapter = target
     }
