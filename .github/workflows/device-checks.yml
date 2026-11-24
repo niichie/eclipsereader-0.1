@@ -32,7 +32,13 @@ jobs:
           xcodebuild test -project EclipseReader.xcodeproj -scheme EclipseReader \
             -destination "id=$UDID" -only-testing:"${{ inputs.only || 'EclipseReaderAppTests' }}" \
             -resultBundlePath checks.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee checks.log | grep -E "CHECK\||error:|Test Case|XCTAssert|failed|passed|\*\* TEST" || true
-          grep -q "\*\* TEST SUCCEEDED \*\*" checks.log
+          if ! grep -q "\*\* TEST SUCCEEDED \*\*" checks.log; then
+            echo "----- why it failed -----"
+            grep -nE "error|crash|Crash|signal|exception|Exception|unexpected|Terminat" checks.log | grep -v "^.*warning" | tail -40
+            echo "----- end of log -----"
+            tail -60 checks.log
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
