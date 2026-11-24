@@ -358,7 +358,7 @@ public enum Discover {
     static func parse(_ data: Data) throws -> [(item: DiscoverItem, tags: Any?, language: String, style: ReadingStyle)] {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let list = object["data"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
-        return list.compactMap { entry -> (item: DiscoverItem, tags: Any?)? in
+        return list.compactMap { entry in
             guard let id = entry["id"] as? String, let a = entry["attributes"] as? [String: Any],
                   let page = URL(string: "https://mangadex.org/title/\(id)") else { return nil }
             let title = MangaDex.displayTitle(a) ?? "Untitled"
