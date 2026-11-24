@@ -128,7 +128,7 @@ struct BooksBrowseSection: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(popular) { book in
-                                FreeBookCard(book: book, busy: busyID == book.id, open: { open(book, false) }, download: { open(book, true) })
+                                FreeBookCard(book: book, busy: busyID == book.id, open: { open(book, downloadFile: false) }, download: { open(book, downloadFile: true) })
                                     .disabled(busyID != nil)
                             }
                         }.padding(.vertical, 2)
