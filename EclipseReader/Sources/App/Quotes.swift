@@ -320,13 +320,12 @@ struct SpotlightCard: View {
                     .font(spotlight.pick ? .system(compact ? .subheadline : .title3, design: .serif).weight(.semibold)
                                          : .system(compact ? .subheadline : .title3, design: .serif).italic().weight(.semibold))
                     .foregroundStyle(.white)
-                    .lineLimit(compact ? 4 : 5)
+                    .lineLimit(compact ? 4 : 5, reservesSpace: true)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(quote.who.isEmpty || quote.who == quote.work ? quote.work : "\(quote.who) · \(quote.work)")
                     .font(.caption.weight(.semibold)).foregroundStyle(Eclipse.highlight.opacity(0.9)).lineLimit(1)
-                if let meta {
-                    Text(meta).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
+                Text(meta ?? " ").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    .accessibilityHidden(meta == nil)
                 HStack(spacing: 8) {
                     Button(action: read) {
                         HStack(spacing: 5) {
@@ -364,8 +363,6 @@ struct SpotlightCard: View {
             LinearGradient(colors: [Eclipse.accent.opacity(0.22), Eclipse.surface.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing),
             in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Eclipse.hairline))
-        .id(spotlight.id)
-        .transition(.opacity)
         .contextMenu {
             Button(action: read) { Label(actionTitle, systemImage: "book") }
             Button(action: next) { Label("Another series", systemImage: "shuffle") }
