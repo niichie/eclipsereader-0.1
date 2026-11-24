@@ -62,6 +62,29 @@ final class ReaderChecks: XCTestCase {
         add(attachment)
     }
 
+    func testPreviewProgressAndExplicitLibraryAddition() async throws {
+        let model = model()
+        let original = model.state
+        defer { model.state = original; model.save() }
+        let url = URL(string: "https://catalog.example/series")!
+        let chapter = Chapter(url: url.appendingPathComponent("1"), title: "One", number: "1")
+        let found = LinkInspection(title: "Fixture", cover: nil, pages: [], chapters: [chapter])
+        guard case .series(let preview, _) = model.commit(url, found, addToShelf: false) else {
+            return XCTFail("Expected series details")
+        }
+        XCTAssertFalse(model.librarySeries.contains { $0.id == preview.id })
+        XCTAssertFalse(model.isFavorite(preview))
+        XCTAssertFalse(model.isDownloaded(chapter))
+        model.record(chapter, page: 1, count: 3)
+        XCTAssertEqual(model.chapterIndex[chapter.id]?.0.id, preview.id)
+        XCTAssertFalse(model.librarySeries.contains { $0.id == preview.id })
+        _ = try await model.addLink(url.absoluteString)
+        _ = model.addToLibrary(preview)
+        XCTAssertEqual(model.librarySeries.filter { $0.id == preview.id }.count, 1)
+        XCTAssertEqual(model.allSeries.filter { $0.id == preview.id }.count, 1)
+        XCTAssertNotNil(model.state.progress[chapter.id])
+    }
+
     // MARK: Books
 
     /// Every page of every section is accounted for: pagination never drops text.

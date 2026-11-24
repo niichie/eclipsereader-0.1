@@ -156,7 +156,7 @@ struct BrowseView: View {
                         }
                     }
                     .overlay(alignment: .topTrailing) {
-                        if model.allSeries.contains(where: { $0.url == item.url }) {
+                        if model.libraryMembers.contains(where: { $0.url == item.url }) {
                             Image(systemName: "checkmark.circle.fill").font(.callout).foregroundStyle(Eclipse.highlight)
                                 .background(Circle().fill(.black)).padding(5)
                         }
@@ -179,9 +179,9 @@ struct BrowseView: View {
         Task {
             defer { addingID = nil }
             do {
-                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title) { opened = series }
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title, addToShelf: false) { opened = series }
             } catch {
-                discoverError = "Couldn’t add \(item.title): \(error.localizedDescription)"
+                discoverError = "Couldn’t open \(item.title): \(error.localizedDescription)"
             }
         }
     }
@@ -349,14 +349,14 @@ struct MangaBrowserView: View {
             AddPreviewSheet(item: item) { readNow in
                 pending = nil
                 if let novel = item.novel {
-                    let series = model.commitNovel(item.url, novel)
+                    let series = model.commitNovel(item.url, novel, addToShelf: !readNow)
                     lastAdded = series
                     let here = browser.currentURL
                     if readNow { reader = series.chapters.first { $0.url == here } ?? model.resume(series) }
                     else { show("Added \(series.title) · \(series.chapters.count) chapter\(series.chapters.count == 1 ? "" : "s")") }
                     return
                 }
-                let result = model.commit(item.url, item.found)
+                let result = model.commit(item.url, item.found, addToShelf: !readNow)
                 if case .series(let series, let open) = result {
                     lastAdded = series
                     if readNow { reader = open ?? model.resume(series) }
@@ -368,13 +368,13 @@ struct MangaBrowserView: View {
         }
         .sheet(item: $viewing) { series in SeriesSheet(series: series).environmentObject(model) }
         .onAppear {
-            // Anything downloaded in the browser (EPUB, MOBI, CBZ, PDF…) goes straight into the library.
+            // Keep downloaded files available offline.
             browser.downloaded = { file in
                 Task {
                     do {
-                        let series = try await model.importFiles([file], copy: true)
+                        let series = try await model.importFiles([file], copy: true, addToShelf: false)
                         lastAdded = series
-                        show("Added \(series.title)" + (series.kind == .book ? " to Boring books without pictures" : ""))
+                        show("Downloaded \(series.title)")
                     } catch {
                         show("Couldn’t open that download: \(error.localizedDescription)")
                     }
@@ -450,8 +450,8 @@ struct MangaBrowserView: View {
             if model.isNovel(url) || (Features.novelsOn && html.map { NovelText.looksLikeChapter(html: $0, url: url) } == true) {
                 guard Features.novelsOn else { lastAdded = nil; show(NovelsOff().errorDescription ?? ""); return }
                 if let existing = model.allSeries.first(where: { $0.kind == .novel && ($0.url == url || $0.chapters.contains { $0.url == url }) }) {
-                    lastAdded = existing
-                    show("\(existing.title) is already in your library")
+                    lastAdded = model.addToLibrary(existing)
+                    show(existing.isLibraryMember ? "\(existing.title) is already in your library" : "Added \(existing.title)")
                     return
                 }
                 do {
@@ -469,8 +469,8 @@ struct MangaBrowserView: View {
                 case .existing(.open(let chapter)):
                     lastAdded = nil; reader = chapter
                 case .existing(.series(let series, _)):
-                    lastAdded = series
-                    show("\(series.title) is already in your library")
+                    lastAdded = model.addToLibrary(series)
+                    show(series.isLibraryMember ? "\(series.title) is already in your library" : "Added \(series.title)")
                 case .fresh(let target, let found):
                     pending = PendingAdd(url: target, found: found)
                 }
@@ -489,10 +489,10 @@ struct MangaBrowserView: View {
         Task {
             defer { adding = false }
             do {
-                switch try await model.addLink(url.absoluteString, html: await browser.pageHTML()) {
+                switch try await model.addLink(url.absoluteString, html: await browser.pageHTML(), addToShelf: false) {
                 case .open(let chapter): reader = chapter
                 case .series(let series, let chapter):
-                    lastAdded = series
+                    lastAdded = series.isLibraryMember ? series : nil
                     if let chapter { reader = chapter } else if let first = model.resume(series) { reader = first }
                 }
             } catch { show("This page has no readable manga pages. Try opening a chapter.") }
@@ -526,8 +526,8 @@ private struct BrowserToolbar: View {
                     // A book's page: download its EPUB (or Kindle/FB2 file) into the library.
                     Button(action: addBook) {
                         ViewThatFits(in: .horizontal) {
-                            addLabel(browser.downloading ? "Downloading…" : "Add book · \(bookLink.format)", symbol: "text.book.closed")
-                            addLabel("Add book", symbol: "text.book.closed")
+                            addLabel(browser.downloading ? "Downloading…" : "Download · \(bookLink.format)", symbol: "text.book.closed")
+                            addLabel("Download", symbol: "text.book.closed")
                             addLabel(nil, symbol: "text.book.closed")
                         }
                     }
@@ -643,7 +643,7 @@ private struct AddGuideSheet: View {
             if books {
                 VStack(alignment: .leading, spacing: 14) {
                     step(1, "Open a book", "Tap a title to go to the book's own page, the one with its download links.")
-                    step(2, "Tap Add book", "The yellow Add book button downloads its EPUB into Boring books without pictures.")
+                    step(2, "Tap Download", "Open the downloaded book to read it or add it to your library.")
                     step(3, "Or tap a download link", "EPUB, Kindle (AZW3/MOBI) and FB2 links on any site go straight into your library.")
                 }
                 Label("These libraries only have books that are out of copyright. Newer books aren't free here.", systemImage: "info.circle")
@@ -747,7 +747,7 @@ private struct AddPreviewSheet: View {
                         .background(Eclipse.highlight, in: RoundedRectangle(cornerRadius: 14)).foregroundStyle(.black)
                 }.buttonStyle(PressableStyle()).accessibilityIdentifier("confirmAdd")
                 Button { confirm(true) } label: {
-                    Label("Add and read now", systemImage: "book").font(.headline)
+                    Label("Read now", systemImage: "book").font(.headline)
                         .frame(maxWidth: .infinity).frame(height: 50)
                         .background(Eclipse.surfaceHigh, in: RoundedRectangle(cornerRadius: 14))
                         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Eclipse.hairline))

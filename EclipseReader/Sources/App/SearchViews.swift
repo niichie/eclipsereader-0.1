@@ -120,7 +120,7 @@ struct GlobalSearchResults: View {
                     row(title: section.source.name, host: section.source.host, count: items.count) {
                         ForEach(items) { item in
                             card(title: item.title, cover: item.cover, detail: item.detail,
-                                 owned: library.allSeries.contains { $0.url == item.url }, busy: busyID == item.id, referer: nil) {
+                                 owned: library.libraryMembers.contains { $0.url == item.url }, busy: busyID == item.id, referer: nil) {
                                 pick(item)
                             }
                         }
@@ -407,8 +407,8 @@ struct GlobalSearchSheet: View {
         Task {
             defer { busyID = nil }
             do {
-                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title) { opened = series }
-            } catch { self.error = "Couldn’t add \(item.title): \(error.localizedDescription)" }
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title, addToShelf: false) { opened = series }
+            } catch { self.error = "Couldn’t open \(item.title): \(error.localizedDescription)" }
         }
     }
 }

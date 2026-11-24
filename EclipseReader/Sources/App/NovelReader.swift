@@ -50,20 +50,21 @@ extension LibraryModel {
         }
     }
     /// Adds a novel from a link (a novel's page or one of its chapters).
-    func addNovel(_ url: URL, html: String? = nil, title: String? = nil) async throws -> MangaSeries {
+    func addNovel(_ url: URL, html: String? = nil, title: String? = nil, addToShelf: Bool = true) async throws -> MangaSeries {
         guard Features.novelsOn else { throw NovelsOff() }
         if let existing = allSeries.first(where: { $0.url == url || ($0.kind == .novel && $0.chapters.contains { $0.url == url }) }) {
-            return existing
+            return addToShelf ? addToLibrary(existing) : existing
         }
         var info = try await novelInfo(url, html: html)
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty { info.title = title }
-        return commitNovel(info.home ?? url, info)
+        return commitNovel(info.home ?? url, info, addToShelf: addToShelf)
     }
     @discardableResult
-    func commitNovel(_ url: URL, _ info: NovelInfo) -> MangaSeries {
-        if let existing = allSeries.first(where: { $0.url == url }) { return existing }
-        let series = MangaSeries(id: "novel-" + url.absoluteString, url: url, title: info.title, cover: info.cover, kind: .novel,
+    func commitNovel(_ url: URL, _ info: NovelInfo, addToShelf: Bool = true) -> MangaSeries {
+        if let existing = allSeries.first(where: { $0.url == url }) { return addToShelf ? addToLibrary(existing) : existing }
+        var series = MangaSeries(id: "novel-" + url.absoluteString, url: url, title: info.title, cover: info.cover, kind: .novel,
                                  chapters: info.chapters, summary: info.summary, author: info.author, language: info.language)
+        series.inLibrary = addToShelf
         state.series = [series] + allSeries
         save()
         if info.cover == nil {
@@ -760,8 +761,8 @@ struct NovelBrowseSection: View {
         failure = nil
         Task {
             defer { adding = nil }
-            do { opened = try await model.addNovel(item.url, title: item.title) }
-            catch { failure = "Couldn’t add \(item.title): \(error.localizedDescription)" }
+            do { opened = try await model.addNovel(item.url, title: item.title, addToShelf: false) }
+            catch { failure = "Couldn’t open \(item.title): \(error.localizedDescription)" }
         }
     }
 }

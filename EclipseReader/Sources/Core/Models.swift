@@ -418,6 +418,11 @@ public struct MangaSeries: Codable, Hashable, Identifiable, Sendable {
     /// Chapters in reading order (first chapter first).
     public var chapters: [Chapter]
     public var added: Date
+    /// Older records predate explicit membership and belong to the library.
+    public var inLibrary: Bool?
+    /// Direct source of a downloaded catalog book, for reopening the saved copy.
+    public var bookDownloadURL: URL?
+    public var isLibraryMember: Bool { inLibrary ?? true }
     /// Synopsis from the site, when it has one.
     public var summary: String?
     /// The writer, for books.

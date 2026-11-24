@@ -53,8 +53,8 @@ struct RootView: View {
             model.seedBundledSources()
             Task { await model.refreshSourceLists() }
         }
-        .task(id: model.allSeries.count) {
-            SpotlightIndex.update(model.allSeries, hidden: Set(model.state.hiddenSeries ?? []))
+        .task(id: model.libraryMembers.count) {
+            SpotlightIndex.update(model.libraryMembers, hidden: Set(model.state.hiddenSeries ?? []))
         }
     }
 }
@@ -364,7 +364,7 @@ struct LibraryView: View {
 
     /// The quote's series: straight to it when it's in your library, otherwise every site is searched for it.
     /// Series and books already in the library, the way the launch card recognises them.
-    private var ownedKeys: Set<String> { Set(model.allSeries.map { QuoteFeed.workKey($0.title) }) }
+    private var ownedKeys: Set<String> { Set(model.libraryMembers.map { QuoteFeed.workKey($0.title) }) }
     private func ownedSeries(_ spotlight: Spotlight) -> MangaSeries? {
         let keys = [spotlight.work, spotlight.quote.work].map(QuoteFeed.workKey)
         return model.librarySeries.first { !$0.isPlainBook && keys.contains(QuoteFeed.workKey($0.title)) }
@@ -607,9 +607,9 @@ struct DiscoverStrip: View {
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 12) {
-                        ForEach(items.filter { item in !model.allSeries.contains { $0.url == item.url } }) { item in
-                            Button { add(item) } label: {
-                                VStack(alignment: .leading, spacing: 5) {
+                        ForEach(items.filter { item in !model.libraryMembers.contains { $0.url == item.url } }) { item in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Button { select(item, add: false) } label: {
                                     CoverView(url: item.cover, referer: nil)
                                         .aspectRatio(0.7, contentMode: .fit)
                                         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -619,15 +619,21 @@ struct DiscoverStrip: View {
                                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                                             }
                                         }
-                                        .overlay(alignment: .bottomTrailing) {
-                                            Image(systemName: "plus").font(.caption.weight(.heavy)).foregroundStyle(.black)
-                                                .frame(width: 24, height: 24).background(Eclipse.highlight, in: Circle()).padding(6)
-                                        }
-                                    Text(item.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
-                                    if let detail = item.detail { Text(detail).font(.caption2).foregroundStyle(.secondary) }
-                                }.frame(width: cardWidth)
+                                }.buttonStyle(PressableStyle())
+                                .overlay(alignment: .bottomTrailing) {
+                                    Button { select(item, add: true) } label: {
+                                        Image(systemName: "plus").font(.caption.weight(.heavy)).foregroundStyle(.black)
+                                            .frame(width: 24, height: 24).background(Eclipse.highlight, in: Circle()).padding(6)
+                                    }.buttonStyle(.plain).accessibilityLabel("Add to Library")
+                                }
+                                Button { select(item, add: false) } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(item.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                                        if let detail = item.detail { Text(detail).font(.caption2).foregroundStyle(.secondary) }
+                                    }
+                                }.buttonStyle(PressableStyle())
                             }
-                            .buttonStyle(PressableStyle())
+                            .frame(width: cardWidth)
                             .disabled(adding != nil)
                         }
                     }
@@ -641,19 +647,19 @@ struct DiscoverStrip: View {
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
             #endif
             if let similarTo {
-                items = (try? await Discover.similar(to: similarTo, excluding: Set(model.allSeries.map(\.title)))) ?? []
+                items = (try? await Discover.similar(to: similarTo, excluding: Set(model.libraryMembers.map(\.title)))) ?? []
             } else if items.isEmpty {
                 items = (try? await Discover.mangaDex(limit: 24)) ?? []
             }
         }
     }
-    private func add(_ item: DiscoverItem) {
+    private func select(_ item: DiscoverItem, add: Bool) {
         adding = item.id; error = nil
         Task {
             defer { adding = nil }
             do {
-                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title) { openSeries = series }
-            } catch { self.error = "Couldn’t add \(item.title)." }
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title, addToShelf: add), !add { openSeries = series }
+            } catch { self.error = "Couldn’t load \(item.title)." }
         }
     }
 }
@@ -1146,6 +1152,7 @@ struct DownloadSettingsPage: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var downloadBytes: Int64 = 0
     @State private var confirmDelete = false
+    @State private var offlineDetails: MangaSeries?
     var body: some View {
         Form {
             Section {
@@ -1201,7 +1208,7 @@ struct DownloadSettingsPage: View {
                     }
                 }
             }
-            let offline = model.librarySeries.filter { model.downloadedCount($0) > 0 }
+            let offline = (model.librarySeries + model.allSeries.filter { !$0.isLibraryMember }).filter { model.downloadedCount($0) > 0 || (!$0.isLibraryMember && !$0.isOnline) }
             if !offline.isEmpty {
                 Section("On this device") {
                     ForEach(offline) { series in
@@ -1210,10 +1217,12 @@ struct DownloadSettingsPage: View {
                                 .frame(width: 34, height: 48).clipShape(RoundedRectangle(cornerRadius: 5))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(series.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                Text("\(model.downloadedCount(series)) chapter\(model.downloadedCount(series) == 1 ? "" : "s")")
+                                Text(series.isOnline ? "\(model.downloadedCount(series)) chapter\(model.downloadedCount(series) == 1 ? "" : "s")" : "Downloaded file")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture { offlineDetails = series }
                         .swipeActions {
                             Button(role: .destructive) {
                                 for chapter in series.chapters where model.isDownloaded(chapter) { model.removeDownload(chapter) }
@@ -1230,6 +1239,7 @@ struct DownloadSettingsPage: View {
             }
         }
         .settingsPage("Downloads")
+        .sheet(item: $offlineDetails) { SeriesSheet(series: $0).environmentObject(model) }
         .confirmationDialog("Delete all downloaded chapters?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete downloads", role: .destructive) { model.removeAllDownloads(); downloadBytes = 0 }
         } message: { Text("Reading progress is kept. You can download chapters again any time.") }
@@ -1724,6 +1734,13 @@ struct SeriesView: View {
                 Section {
                     SeriesHeader(series: series, reader: $reader, website: $website, checking: series.isOnline && !checked)
                         .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
+                    if !builtIn {
+                        Button { model.addToLibrary(series) } label: {
+                            Label(series.isLibraryMember ? "In Library" : "Add to Library",
+                                  systemImage: series.isLibraryMember ? "checkmark.circle" : "plus.circle")
+                        }
+                        .disabled(series.isLibraryMember)
+                    }
                     if let message {
                         Label(message, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
                             .listRowBackground(Color.clear)

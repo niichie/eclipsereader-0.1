@@ -122,6 +122,18 @@ final class LibraryModel: ObservableObject {
     /// Everything the user added from links or Files, newest first.
     var allSeries: [MangaSeries] { state.series ?? [] }
 
+    var libraryMembers: [MangaSeries] { allSeries.filter(\.isLibraryMember) }
+
+    @discardableResult
+    func addToLibrary(_ series: MangaSeries) -> MangaSeries {
+        guard var records = state.series, let i = records.firstIndex(where: { $0.id == series.id }),
+              !records[i].isLibraryMember else { return self.series(id: series.id) ?? series }
+        records[i].inLibrary = true
+        state.series = records
+        save()
+        return records[i]
+    }
+
     // MARK: Library presentation
 
     static let berserkID = "berserk"
@@ -132,7 +144,7 @@ final class LibraryModel: ObservableObject {
     }
     /// Berserk first, then everything the user added.
     var librarySeries: [MangaSeries] {
-        let all = [berserk] + allSeries
+        let all = [berserk] + libraryMembers
         guard !showHidden, let hidden = state.hiddenSeries, !hidden.isEmpty else { return all }
         return all.filter { !hidden.contains($0.id) }
     }
@@ -333,12 +345,13 @@ final class LibraryModel: ObservableObject {
         return .fresh(url, found)
     }
     /// Adds a previewed series to the library.
-    func commit(_ url: URL, _ found: LinkInspection) -> LinkResult {
-        if let existing = allSeries.first(where: { $0.url == url }) { return .series(existing, open: nil) }
+    func commit(_ url: URL, _ found: LinkInspection, addToShelf: Bool = true) -> LinkResult {
+        if let existing = allSeries.first(where: { $0.url == url }) { return .series(addToShelf ? addToLibrary(existing) : existing, open: nil) }
         // No cover art on the page: leave it empty so the library looks for the site's art later,
         // then falls back to a cropped first page.
-        let series = MangaSeries(id: "web-" + url.absoluteString, url: url, title: found.title, cover: found.cover,
+        var series = MangaSeries(id: "web-" + url.absoluteString, url: url, title: found.title, cover: found.cover,
                                  kind: .web, chapters: found.chapters, summary: found.summary)
+        series.inLibrary = addToShelf
         state.series = [series] + allSeries
         // The source's own setting wins, then what the page says, then what kind of source it is.
         let site = source(for: url)
@@ -352,25 +365,27 @@ final class LibraryModel: ObservableObject {
         return .series(series, open: opened)
     }
     /// `title`: the name a search result showed, cleaner than many series pages' headings.
-    func addLink(_ text: String, html: String? = nil, title: String? = nil) async throws -> LinkResult {
+    func addLink(_ text: String, html: String? = nil, title: String? = nil, addToShelf: Bool = true) async throws -> LinkResult {
         if let url = WebLink.parse(text), isNovel(url) {
-            let series = try await addNovel(url, html: html, title: title)
+            let series = try await addNovel(url, html: html, title: title, addToShelf: addToShelf)
             return .series(series, open: series.chapters.first { $0.url == url })
         }
         switch try await preview(text, html: html) {
+        case .existing(.series(let series, let chapter)):
+            return .series(addToShelf ? addToLibrary(series) : series, open: chapter)
         case .existing(let result): return result
         case .fresh(let url, var found):
             if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty, title != found.title {
                 found = LinkInspection(title: title, cover: found.cover, pages: found.pages, chapters: found.chapters,
                                        style: found.style, summary: found.summary)
             }
-            guard found.chapters.isEmpty && found.pages.isEmpty else { return commit(url, found) }
+            guard found.chapters.isEmpty && found.pages.isEmpty else { return commit(url, found, addToShelf: addToShelf) }
             // Nothing to read here (MangaDex only links licensed series to the publisher's app):
             // add the same series from a site that has its chapters.
             let host = url.host?.replacingOccurrences(of: "www.", with: "") ?? "This site"
             if let (other, otherFound) = await readableElsewhere(found.title, avoiding: url.host) {
-                let result = commit(other, otherFound)
-                if case .series(let series, _) = result {
+                let result = commit(other, otherFound, addToShelf: addToShelf)
+                if addToShelf, case .series(let series, _) = result {
                     notice = (series.id, "\(host) has no chapters to read for \(found.title), so it was added from \(other.host?.replacingOccurrences(of: "www.", with: "") ?? "another site") instead.")
                 }
                 return result
@@ -538,17 +553,18 @@ final class LibraryModel: ObservableObject {
         markNew(fresh, in: series.id)
         save()
     }
-    func importFiles(_ urls: [URL], copy: Bool) async throws -> MangaSeries {
+    func importFiles(_ urls: [URL], copy: Bool, addToShelf: Bool = true) async throws -> MangaSeries {
         // Books (EPUB, MOBI, TXT…) join "Boring books without pictures"; everything else is read as pages.
         let books = urls.filter { BookFormat.from(fileExtension: $0.pathExtension) != nil }
         var first: MangaSeries?
         for book in books {
-            let series = try await importBook(book)
+            let series = try await importBook(book, addToShelf: addToShelf)
             if first == nil { first = series }
         }
         let rest = urls.filter { BookFormat.from(fileExtension: $0.pathExtension) == nil }
         if rest.isEmpty, let first { return first }
-        let series = try await LocalBooks.shared.importSeries(rest, copy: copy)
+        var series = try await LocalBooks.shared.importSeries(rest, copy: copy)
+        series.inLibrary = addToShelf
         state.series = [series] + allSeries
         save()
         return series
@@ -628,7 +644,7 @@ final class LibraryModel: ObservableObject {
         foundThisCheck = [:]
         await refresh()
         // Series you're reading first, so a short background window covers what matters most.
-        let order = allSeries.filter { $0.isOnline && ($0.kind != .novel || Features.novelsOn) }
+        let order = libraryMembers.filter { $0.isOnline && ($0.kind != .novel || Features.novelsOn) }
             .sorted { (lastRead($0) ?? .distantPast) > (lastRead($1) ?? .distantPast) }
         for series in order {
             try? await update(series)
@@ -762,7 +778,7 @@ final class LibraryModel: ObservableObject {
     /// Every chapter in the library with its series, for the Updates and History tabs.
     var chapterIndex: [String: (MangaSeries, Chapter)] {
         var map: [String: (MangaSeries, Chapter)] = [:]
-        for series in librarySeries { for chapter in series.chapters { map[chapter.id] = (series, chapter) } }
+        for series in librarySeries + allSeries.filter({ !$0.isLibraryMember }) { for chapter in series.chapters { map[chapter.id] = (series, chapter) } }
         return map
     }
     /// Forgets where you stopped in every chapter; finished chapters stay marked as read.

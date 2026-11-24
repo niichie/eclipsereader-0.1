@@ -53,23 +53,31 @@ struct FreeBookCard: View {
     let book: FreeBook
     var busy = false
     var width: CGFloat = 104
+    let open: () -> Void
+    let download: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            CoverView(url: book.cover, referer: nil)
-                .frame(width: width, height: width * 1.5)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.08)))
-                .overlay {
-                    if busy {
-                        ZStack { Color.black.opacity(0.5); ProgressView().tint(.white) }.clipShape(RoundedRectangle(cornerRadius: 6))
+            Button(action: open) {
+                CoverView(url: book.cover, referer: nil)
+                    .frame(width: width, height: width * 1.5)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.08)))
+                    .overlay {
+                        if busy {
+                            ZStack { Color.black.opacity(0.5); ProgressView().tint(.white) }.clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
                     }
-                }
-                .overlay(alignment: .bottomTrailing) {
+            }.buttonStyle(PressableStyle())
+            .overlay(alignment: .bottomTrailing) {
+                Button(action: book.download == nil ? open : download) {
                     Image(systemName: book.download != nil ? "arrow.down" : "safari").font(.caption.weight(.heavy)).foregroundStyle(.black)
                         .frame(width: 24, height: 24).background(Eclipse.highlight, in: Circle()).padding(5)
-                }
-                .shadow(color: .black.opacity(0.45), radius: 6, y: 3)
-            Text(book.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                }.buttonStyle(.plain).accessibilityLabel(book.download == nil ? "Open details" : "Download")
+            }
+            .shadow(color: .black.opacity(0.45), radius: 6, y: 3)
+            Button(action: open) {
+                Text(book.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+            }.buttonStyle(.plain)
             if let author = book.author { Text(author).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
             if let detail = book.detail, !detail.isEmpty { Text(detail).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
         }
@@ -98,7 +106,7 @@ struct BooksBrowseSection: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Boring books without pictures").font(.title3.weight(.bold))
-                Text("Free books, downloaded straight into your library").font(.footnote).foregroundStyle(.secondary)
+                Text("Browse and download free books").font(.footnote).foregroundStyle(.secondary)
             }
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -113,15 +121,15 @@ struct BooksBrowseSection: View {
             .padding(12).eclipseCard(cornerRadius: 14)
             if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
             if !search.query.isEmpty {
-                BookSearchResults(search: search, busyID: busyID) { open($0) }
+                BookSearchResults(search: search, busyID: busyID, pick: open)
             } else if !popular.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Popular free classics").font(.headline)
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(popular) { book in
-                                Button { open(book) } label: { FreeBookCard(book: book, busy: busyID == book.id) }
-                                    .buttonStyle(PressableStyle()).disabled(busyID != nil)
+                                FreeBookCard(book: book, busy: busyID == book.id, open: { open(book, false) }, download: { open(book, true) })
+                                    .disabled(busyID != nil)
                             }
                         }.padding(.vertical, 2)
                     }
@@ -156,9 +164,11 @@ struct BooksBrowseSection: View {
             }
         }
     }
-    private func open(_ book: FreeBook) {
+    private func open(_ book: FreeBook, downloadFile: Bool) {
         message = nil
-        if let download = book.download {
+        if let url = book.download, let saved = model.allSeries.first(where: { $0.bookDownloadURL == url }) {
+            opened = saved
+        } else if downloadFile, let download = book.download {
             busyID = book.id
             Task {
                 defer { busyID = nil }
@@ -176,7 +186,7 @@ struct BookSearchResults: View {
     @EnvironmentObject private var model: LibraryModel
     @ObservedObject var search: BookSearchModel
     var busyID: String?
-    let pick: (FreeBook) -> Void
+    let pick: (FreeBook, Bool) -> Void
     var body: some View {
         let mine = model.librarySeries.filter { $0.kind == .book && !search.query.isEmpty && $0.title.localizedCaseInsensitiveContains(search.query) }
         VStack(alignment: .leading, spacing: 18) {
@@ -186,8 +196,8 @@ struct BookSearchResults: View {
                     Text("\(series.title)\(series.author.map { " · \($0)" } ?? "")").font(.subheadline)
                 }
             }
-            row("Standard Ebooks", "Tap to download and keep", search.standard)
-            row("Project Gutenberg", "Tap to download and keep", search.gutenberg)
+            row("Standard Ebooks", "Tap a cover for details", search.standard)
+            row("Project Gutenberg", "Tap a cover for details", search.gutenberg)
             if search.nothingFound {
                 Label {
                     Text("Free libraries only have books that are out of copyright (mostly published before 1930). For newer books, download an EPUB you own in the browser, or import it from Files.")
@@ -213,8 +223,8 @@ struct BookSearchResults: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(books) { book in
-                                Button { pick(book) } label: { FreeBookCard(book: book, busy: busyID == book.id) }
-                                    .buttonStyle(PressableStyle()).disabled(busyID != nil)
+                                FreeBookCard(book: book, busy: busyID == book.id, open: { pick(book, false) }, download: { pick(book, true) })
+                                    .disabled(busyID != nil)
                             }
                         }.padding(.vertical, 2)
                     }
@@ -245,7 +255,7 @@ struct BookSearchSheet: View {
                     }
                     .padding(.horizontal, 14).frame(height: 50).eclipseCard(cornerRadius: 14)
                     if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
-                    BookSearchResults(search: search, busyID: busyID) { open($0) }
+                    BookSearchResults(search: search, busyID: busyID, pick: open)
                 }
                 .padding(20).frame(maxWidth: 900).frame(maxWidth: .infinity)
             }
@@ -258,9 +268,11 @@ struct BookSearchSheet: View {
         }
         .preferredColorScheme(.dark)
     }
-    private func open(_ book: FreeBook) {
+    private func open(_ book: FreeBook, downloadFile: Bool) {
         message = nil
-        if let download = book.download {
+        if let url = book.download, let saved = model.allSeries.first(where: { $0.bookDownloadURL == url }) {
+            opened = saved
+        } else if downloadFile, let download = book.download {
             busyID = book.id
             Task {
                 defer { busyID = nil }

@@ -138,7 +138,7 @@ enum GeneratedCover {
 
 extension LibraryModel {
     /// Adds a book file to the library under "Boring books without pictures" (and turns books on).
-    func importBook(_ source: URL) async throws -> MangaSeries {
+    func importBook(_ source: URL, addToShelf: Bool = true, downloadURL: URL? = nil) async throws -> MangaSeries {
         let (file, document) = try await BookStore.shared.importBook(source)
         let id = "book-" + (file as NSString).deletingPathExtension
         let chapters = document.sections.enumerated().map { index, section in
@@ -148,8 +148,14 @@ extension LibraryModel {
         }
         var cover: URL?
         if let data = document.cover { cover = try? await OfflineStore.shared.saveCover(LibraryModel.coverShaped(data), seriesID: id) }
-        let series = MangaSeries(id: id, url: BookLink.book(file), title: document.title, cover: cover, kind: .book,
+        var series = MangaSeries(id: id, url: BookLink.book(file), title: document.title, cover: cover, kind: .book,
                                  chapters: chapters, summary: document.summary, author: document.author)
+        if let downloadURL, let saved = allSeries.first(where: { $0.bookDownloadURL == downloadURL }) {
+            await BookStore.shared.delete(file)
+            return saved
+        }
+        series.bookDownloadURL = downloadURL
+        series.inLibrary = addToShelf
         state.series = [series] + allSeries
         save()
         if cover == nil {
@@ -175,10 +181,11 @@ extension LibraryModel {
     /// Downloads a free book (Project Gutenberg EPUB) straight into the library.
     /// Downloads a book into the library, trying Project Gutenberg's mirror when gutenberg.org is down.
     func downloadBook(_ url: URL) async throws -> MangaSeries {
+        if let saved = allSeries.first(where: { $0.bookDownloadURL == url }) { return saved }
         let client = WebsiteHTTPClient()
         var lastError: Error = SourceError.unavailable(0)
         for candidate in [url] + FreeBooks.mirrors(for: url) {
-            do { return try await importBook(try await client.downloadFile(candidate)) }
+            do { return try await importBook(try await client.downloadFile(candidate), addToShelf: false, downloadURL: url) }
             catch { lastError = error }
         }
         throw lastError
