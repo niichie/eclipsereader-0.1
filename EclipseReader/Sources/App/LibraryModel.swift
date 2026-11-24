@@ -395,7 +395,7 @@ final class LibraryModel: ObservableObject {
         guard let best, var list = state.series, let i = list.firstIndex(where: { $0.id == series.id }) else { return nil }
         let before = Set(list[i].chapters.map(\.id))
         list[i].merged = best.url
-        list[i].chapters = ChapterMerge.combine(main: list[i].chapters, filler: best.chapters, mainHost: list[i].url.host,
+        list[i].chapters = ChapterMerge.combine(main: list[i].chapters, filler: best.chapters, fillerHost: best.url.host,
                                                 keep: { self.state.progress[$0.id] != nil })
         state.series = list
         save()
@@ -403,9 +403,9 @@ final class LibraryModel: ObservableObject {
     }
     func stopMerging(_ series: MangaSeries) {
         guard var list = state.series, let i = list.firstIndex(where: { $0.id == series.id }) else { return }
-        let ownHost = list[i].url.host?.lowercased()
+        let filler = list[i].merged?.host
         list[i].merged = nil
-        list[i].chapters = list[i].chapters.filter { $0.url.host?.lowercased() == ownHost || state.progress[$0.id] != nil }
+        list[i].chapters = list[i].chapters.filter { !ChapterMerge.isFiller($0, from: filler) || state.progress[$0.id] != nil }
         state.series = list
         save()
     }
@@ -502,7 +502,7 @@ final class LibraryModel: ObservableObject {
         // A merged second site fills the gaps (and filler chapters give way once the main site has them).
         if let merged = list[i].merged, let other = try? await inspectAny(merged) {
             let before = Set(list[i].chapters.map(\.id))
-            list[i].chapters = ChapterMerge.combine(main: list[i].chapters, filler: other.chapters, mainHost: list[i].url.host,
+            list[i].chapters = ChapterMerge.combine(main: list[i].chapters, filler: other.chapters, fillerHost: merged.host,
                                                     keep: { self.state.progress[$0.id] != nil })
             fresh += list[i].chapters.filter { !before.contains($0.id) && !fresh.contains($0) }
         }

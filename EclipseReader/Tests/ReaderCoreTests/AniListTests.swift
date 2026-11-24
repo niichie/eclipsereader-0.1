@@ -54,14 +54,20 @@ final class SimilarAndMergeTests: XCTestCase {
         let main = [ch("mangadex.org", "1"), ch("mangadex.org", "2"), ch("mangadex.org", "5")]
         let other = [ch("weebcentral.com", "1"), ch("weebcentral.com", "2"), ch("weebcentral.com", "3"), ch("weebcentral.com", "4"), ch("weebcentral.com", "5"), ch("weebcentral.com", "5.5")]
         XCTAssertEqual(ChapterMerge.missing(from: main, in: other).map(\.number), ["3", "4", "5.5"])
-        let merged = ChapterMerge.combine(main: main, filler: other, mainHost: "mangadex.org")
+        let merged = ChapterMerge.combine(main: main, filler: other, fillerHost: "weebcentral.com")
         XCTAssertEqual(merged.map(\.number), ["1", "2", "3", "4", "5", "5.5"])
         XCTAssertEqual(merged.filter { $0.url.host == "weebcentral.com" }.count, 3)
         // MangaDex later posts chapter 3: the filler copy gives way, unless it's being read.
         let later = merged + [ch("mangadex.org", "3")]
-        XCTAssertEqual(ChapterMerge.combine(main: later, filler: other, mainHost: "mangadex.org")
+        XCTAssertEqual(ChapterMerge.combine(main: later, filler: other, fillerHost: "weebcentral.com")
             .filter { $0.number == "3" }.map { $0.url.host }, ["mangadex.org"])
-        XCTAssertEqual(ChapterMerge.combine(main: later, filler: other, mainHost: "mangadex.org", keep: { $0.url.host == "weebcentral.com" })
+        XCTAssertEqual(ChapterMerge.combine(main: later, filler: other, fillerHost: "weebcentral.com", keep: { $0.url.host == "weebcentral.com" })
             .filter { $0.number == "3" }.count, 2)
+        // A main site serving chapters from its own subdomain never has them treated as filler.
+        let sub = [ch("read.example.com", "1"), ch("read.example.com", "2")]
+        XCTAssertEqual(ChapterMerge.combine(main: sub, filler: [ch("weebcentral.com", "2"), ch("weebcentral.com", "3")], fillerHost: "weebcentral.com")
+            .map { $0.url.host ?? "" }, ["read.example.com", "read.example.com", "weebcentral.com"])
+        XCTAssertFalse(ChapterMerge.isFiller(ch("www.weebcentral.com", "1"), from: nil))
+        XCTAssertTrue(ChapterMerge.isFiller(ch("www.weebcentral.com", "1"), from: "weebcentral.com"))
     }
 }

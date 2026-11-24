@@ -525,7 +525,7 @@ struct LibraryOptionsSheet: View {
                     }.pickerStyle(.segmented)
                     Toggle("Titles on covers", isOn: $titlesOnCovers)
                     Toggle("Continue reading bar", isOn: $showContinue)
-                    Toggle("Quote of the launch", isOn: $showQuote)
+                    Toggle("Manga quote on launch", isOn: $showQuote)
                     Toggle("Popular on MangaDex", isOn: $showDiscover)
                     Toggle("Because you read…", isOn: $showBecause)
                 }
@@ -1024,7 +1024,7 @@ struct LibrarySettingsPage: View {
                 Toggle("Continue reading bar", isOn: $showContinue)
                 Toggle(isOn: $showQuote) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Quote of the launch")
+                        Text("Manga quote on launch")
                         Text("A line from a top-rated manga (live from AnimeChan and Yurippe, checked on AniList), with a button to read it")
                             .font(.caption).foregroundStyle(.secondary)
                     }

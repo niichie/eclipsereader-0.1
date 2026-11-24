@@ -341,13 +341,21 @@ public enum ChapterMerge {
             return seen.insert(k).inserted
         }
     }
+    /// The site a host belongs to ("www.webtoons.com" and "m.webtoons.com" → "webtoons.com").
+    public static func site(_ host: String?) -> String {
+        (host ?? "").lowercased().split(separator: ".").suffix(2).joined(separator: ".")
+    }
+    /// Whether a chapter came from the filling site (by site, so a main site's own subdomains never count).
+    public static func isFiller(_ chapter: Chapter, from fillerHost: String?) -> Bool {
+        guard fillerHost != nil else { return false }
+        return site(chapter.url.host) == site(fillerHost)
+    }
     /// Main chapters, plus filler chapters for numbers the main site lacks, in reading order.
     /// A filler chapter is dropped once the main site has its number, unless `keep` says otherwise (reading progress).
-    public static func combine(main: [Chapter], filler: [Chapter], mainHost: String?, keep: (Chapter) -> Bool = { _ in false }) -> [Chapter] {
-        let ownHost = mainHost?.lowercased()
-        let mainOnly = main.filter { $0.url.host?.lowercased() == ownHost }
+    public static func combine(main: [Chapter], filler: [Chapter], fillerHost: String?, keep: (Chapter) -> Bool = { _ in false }) -> [Chapter] {
+        let mainOnly = main.filter { !isFiller($0, from: fillerHost) }
         let mainNumbers = Set(mainOnly.compactMap(key))
-        let oldFiller = main.filter { $0.url.host?.lowercased() != ownHost }
+        let oldFiller = main.filter { isFiller($0, from: fillerHost) }
         let keptFiller = oldFiller.filter { chapter in key(chapter).map { !mainNumbers.contains($0) } ?? true || keep(chapter) }
         let newFiller = missing(from: mainOnly + keptFiller, in: filler)
         return ChapterOrder.sorted(mainOnly + keptFiller + newFiller)

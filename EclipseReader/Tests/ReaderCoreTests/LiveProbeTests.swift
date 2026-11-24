@@ -211,6 +211,75 @@ final class LiveProbeTests: XCTestCase {
         return out.joined(separator: " ")
     }
 
+    /// What the novel sites and sign-in pages send back (structure, for writing and checking the adapters).
+    func testNovelDiagnostics() async {
+        func first(_ html: String, _ pattern: String, base: String) -> String? {
+            for m in LinkedSource.matches(#"href=["']([^"'#]+)["']"#, html) where m[0].range(of: pattern, options: .regularExpression) != nil {
+                return m[0].hasPrefix("http") ? m[0] : base + m[0]
+            }
+            return nil
+        }
+        // Royal Road
+        let (rs, rt, search) = await body("https://www.royalroad.com/fictions/search?title=mother%20of%20learning", ua: "desktop")
+        dump("rr search", "\(rs) \(rt) " + around(search, "fiction-list-item", before: 50, after: 1800))
+        let (fs, _, fiction) = await body("https://www.royalroad.com/fiction/21220/mother-of-learning", ua: "desktop")
+        dump("rr fiction", "\(fs) " + around(fiction, #"id="chapters""#, before: 100, after: 1500))
+        dump("rr fiction head", around(fiction, #"og:image|fic-header"#, before: 100, after: 900))
+        dump("rr chapter links", links(fiction, "/chapter/", limit: 6))
+        if let chapter = first(fiction, "/fiction/21220/[^/]+/chapter/", base: "https://www.royalroad.com") {
+            let (cs, _, page) = await body(chapter, ua: "desktop")
+            dump("rr chapter", "\(cs) \(chapter) " + around(page, "chapter-inner|chapter-content", before: 100, after: 1200))
+            dump("rr chapter styles", around(page, #"display:\s*none|speak:\s*never"#, before: 300, after: 300))
+            dump("rr chapter nav", links(page, "/chapter/", limit: 8))
+        }
+        // Syosetu (official API, then pages)
+        let (ss, st, api) = await body("https://api.syosetu.com/novelapi/api/?out=json&lim=3&of=t-n-w-s-ga-nt-e&word=%E7%84%A1%E8%81%B7%E8%BB%A2%E7%94%9F", ua: "desktop")
+        dump("syosetu api", "\(ss) \(st) \(api.prefix(1500))")
+        let (is_, _, index) = await body("https://ncode.syosetu.com/n9669bk/", ua: "desktop")
+        dump("syosetu index", "\(is_) " + around(index, "p-eplist|index_box|novel_sublist", before: 100, after: 1500))
+        dump("syosetu index pager", around(index, #"c-pager|\?p=2"#, before: 200, after: 600))
+        let (cs2, _, chapter2) = await body("https://ncode.syosetu.com/n9669bk/1/", ua: "desktop")
+        dump("syosetu chapter", "\(cs2) " + around(chapter2, "js-novel-text|novel_honbun|p-novel__body", before: 300, after: 1200))
+        dump("syosetu chapter title", around(chapter2, "p-novel__title|novel_subtitle", before: 50, after: 400))
+        // Kakuyomu
+        let (ks, _, ksearch) = await body("https://kakuyomu.jp/search?q=%E8%BB%A2%E7%94%9F", ua: "desktop")
+        dump("kakuyomu search", "\(ks) " + links(ksearch, "^/works/[0-9]+$", limit: 6))
+        dump("kakuyomu search data", around(ksearch, "__NEXT_DATA__|__APOLLO_STATE__", before: 50, after: 1500))
+        if let work = first(ksearch, "^/works/[0-9]+$", base: "https://kakuyomu.jp") {
+            let (ws, _, workPage) = await body(work, ua: "desktop")
+            dump("kakuyomu work", "\(ws) \(work) " + links(workPage, "/episodes/", limit: 6))
+            dump("kakuyomu work data", around(workPage, #""Episode:"#, before: 100, after: 800))
+            dump("kakuyomu work toc", around(workPage, #"tableOfContents|TableOfContentsChapter"#, before: 100, after: 900))
+            if let episode = first(workPage, "/episodes/[0-9]+", base: "https://kakuyomu.jp") {
+                let (es, _, ep) = await body(episode, ua: "desktop")
+                dump("kakuyomu episode", "\(es) \(episode) " + around(ep, "widget-episodeBody|episode-body", before: 200, after: 1000))
+            }
+        }
+        // Wuxiaworld (official)
+        let (xs, _, novel) = await body("https://www.wuxiaworld.com/novel/martial-world", ua: "desktop")
+        dump("wuxiaworld novel", "\(xs) " + links(novel, "/novel/martial-world/", limit: 8))
+        dump("wuxiaworld novel data", around(novel, "__NEXT_DATA__|__REACT_QUERY_STATE__|dehydratedState", before: 50, after: 1500))
+        let (xc, _, wxChapter) = await body("https://www.wuxiaworld.com/novel/martial-world/mw-chapter-1", ua: "desktop")
+        dump("wuxiaworld chapter", "\(xc) " + around(wxChapter, "chapter-content|<p", before: 200, after: 1200))
+        let (xl, _, wxList) = await body("https://www.wuxiaworld.com/novels", ua: "desktop")
+        dump("wuxiaworld novels", "\(xl) " + links(wxList, "^/novel/[a-z0-9-]+$", limit: 10))
+        // Sign-in pages and the MangaDex token service
+        for (name, address) in [("webtoon login", "https://www.webtoons.com/en/member/login"), ("tapas login", "https://tapas.io/account/signin"),
+                                ("royalroad login", "https://www.royalroad.com/account/login"), ("wuxiaworld login", "https://www.wuxiaworld.com/manage/profile")] {
+            let (status, type, text) = await body(address, ua: "iphone")
+            dump(name, "\(status) \(type) \(LinkedSource.title(in: text) ?? "-")")
+        }
+        var token = URLRequest(url: URL(string: "https://auth.mangadex.org/realms/mangadex/protocol/openid-connect/token")!)
+        token.httpMethod = "POST"
+        token.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        token.httpBody = Data("grant_type=password&username=probe&password=probe&client_id=personal-client-probe&client_secret=probe".utf8)
+        if let (data, response) = try? await URLSession.shared.data(for: token) {
+            dump("mangadex token", "\((response as? HTTPURLResponse)?.statusCode ?? 0) \(String(data: data, encoding: .utf8)?.prefix(400) ?? "")")
+        }
+        let (ms, _, me) = await body("https://api.mangadex.org/user/follows/manga?limit=1", ua: "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)", accept: "application/json")
+        dump("mangadex follows anon", "\(ms) \(me.prefix(300))")
+    }
+
     func testDiagnostics() async {
         for (label, ua) in [("iphone", "iphone"), ("app", "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"), ("none", nil)] as [(String, String?)] {
             let (status, type, text) = await body("https://api.mangadex.org/manga?limit=1&title=chainsaw", ua: ua, accept: "application/json")

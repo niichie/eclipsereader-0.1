@@ -195,7 +195,7 @@ struct HomeSetupSheet: View {
                     .listRowBackground(Color.clear)
                 }
                 Section {
-                    option($showQuote, "Quote of the launch", "A line from a top-rated manga, with a button to start reading it. A new one every launch.", "quote.opening")
+                    option($showQuote, "Manga quote on launch", "A line from a top-rated manga each time you open the app, with a button to start reading it.", "quote.opening")
                     option($showContinue, "Continue reading", "Pick up where you left off in one tap.", "play.circle")
                     option($showDiscover, "Popular on MangaDex", "A row of what everyone's reading right now.", "flame")
                     option($showBecause, "Because you read…", "Series like the one you read last.", "sparkles")
