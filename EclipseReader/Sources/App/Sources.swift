@@ -199,13 +199,19 @@ enum SiteSessions {
         let d = domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
         return !d.isEmpty && (host == d || host.hasSuffix("." + d) || d.hasSuffix("." + host))
     }
+    /// Signs out at once by deleting the site's cookies (where sign-ins live). The site's stored data (some sites keep a
+    /// token there too) is cleared in the background: WebKit can take minutes to answer that, and the button mustn't wait.
     static func signOut(of site: SavedSite) async {
         let store = store()
-        let records = await store.dataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes())
-        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: records.filter { matches($0.displayName, site) })
-        // Cookies set for a parent domain are listed under it; remove those too.
-        let cookies = await store.httpCookieStore.allCookies()
-        for cookie in cookies where matches(cookie.domain, site) { await store.httpCookieStore.deleteCookie(cookie) }
+        for cookie in await store.httpCookieStore.allCookies() where matches(cookie.domain, site) {
+            await store.httpCookieStore.deleteCookie(cookie)
+        }
+        let types: Set<String> = [WKWebsiteDataTypeCookies, WKWebsiteDataTypeLocalStorage, WKWebsiteDataTypeSessionStorage,
+                                  WKWebsiteDataTypeIndexedDBDatabases]
+        Task { @MainActor in
+            let records = await store.dataRecords(ofTypes: types)
+            await store.removeData(ofTypes: types, for: records.filter { matches($0.displayName, site) })
+        }
     }
     /// Whether the browser holds any cookies for the site (you have visited, and maybe signed in).
     static func hasCookies(for site: SavedSite) async -> Bool {
