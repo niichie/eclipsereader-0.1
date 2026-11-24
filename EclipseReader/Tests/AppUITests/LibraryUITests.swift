@@ -27,7 +27,8 @@ final class LibraryUITests: XCTestCase {
             let center = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             let from = center.withOffset(CGVector(dx: window.width * 0.28, dy: 0))
             let to = center.withOffset(CGVector(dx: -window.width * 0.28, dy: 0))
-            from.press(forDuration: 0.03, thenDragTo: to)
+            // The manga fixture uses the default rightward swipe to advance.
+            to.press(forDuration: 0.03, thenDragTo: from)
             let advanced = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@", "Page 1 of 8"), object: counter)
             XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 5), .completed)
             let landed = counter.label
