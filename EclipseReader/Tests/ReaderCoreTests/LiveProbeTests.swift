@@ -415,6 +415,19 @@ final class LiveProbeTests: XCTestCase {
         }
     }
 
+    func testLaunchPicks() async {
+        for (name, preference) in [("manhwa+novels", SpotlightPreference(categories: [.manhwa, .novels], origins: ["KR", "JP"])),
+                                   ("everything", SpotlightPreference.everything)] {
+            _ = await timed("Picks \(name)", { await QuoteFeed.picks(preference, page: 1) }) {
+                ($0.count >= 4, "\($0.count): " + $0.prefix(6).map { "\($0.work) [\($0.media?.category.rawValue ?? "?")] \($0.quote.text.prefix(50))" }.joined(separator: " | "))
+            }
+        }
+        let quotes = [LaunchQuote(text: "x", who: "Rudeus", work: "Mushoku Tensei"), LaunchQuote(text: "y", who: "Sung Jinwoo", work: "Solo Leveling")]
+        _ = await timed("Rate for novels+manhwa", { await QuoteFeed.rate(quotes, preference: SpotlightPreference(categories: [.manhwa, .novels], origins: ["KR", "JP"])) }) {
+            (!$0.isEmpty, $0.map { "\($0.work) → \($0.media?.detail ?? "-") native=\($0.media?.native ?? "-")" }.joined(separator: " | "))
+        }
+    }
+
     func testDiagnostics() async {
         for (label, ua) in [("iphone", "iphone"), ("app", "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"), ("none", nil)] as [(String, String?)] {
             let (status, type, text) = await body("https://api.mangadex.org/manga?limit=1&title=chainsaw", ua: ua, accept: "application/json")
