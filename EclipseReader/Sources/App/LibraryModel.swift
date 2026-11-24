@@ -199,7 +199,7 @@ final class LibraryModel: ObservableObject {
         #if DEBUG
         if ReaderTestFixture.demo { return }
         #endif
-        for series in librarySeries where !coverAttempts.contains(series.id) {
+        for series in librarySeries where !coverAttempts.contains(series.id) && series.kind != .novel {
             let isWeb = series.kind == .web && series.id != Self.berserkID
             // Website series without the site's own cover art get one look for it (stored, so it
             // happens once), even if a first-page cover is already showing.

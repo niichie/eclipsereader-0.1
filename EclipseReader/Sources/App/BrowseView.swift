@@ -347,6 +347,14 @@ struct MangaBrowserView: View {
         .sheet(item: $pending) { item in
             AddPreviewSheet(item: item) { readNow in
                 pending = nil
+                if let novel = item.novel {
+                    let series = model.commitNovel(item.url, novel)
+                    lastAdded = series
+                    let here = browser.currentURL
+                    if readNow { reader = series.chapters.first { $0.url == here } ?? model.resume(series) }
+                    else { show("Added \(series.title) · \(series.chapters.count) chapter\(series.chapters.count == 1 ? "" : "s")") }
+                    return
+                }
                 let result = model.commit(item.url, item.found)
                 if case .series(let series, let open) = result {
                     lastAdded = series
@@ -436,8 +444,27 @@ struct MangaBrowserView: View {
         adding = true
         Task {
             defer { adding = false }
+            let html = await browser.pageHTML()
+            // Novels (a novel site, a source set to novels, or a page that's mostly running text, with novels turned on).
+            if model.isNovel(url) || (Features.novelsOn && html.map { NovelText.looksLikeChapter(html: $0, url: url) } == true) {
+                guard Features.novelsOn else { lastAdded = nil; show(NovelsOff().errorDescription ?? ""); return }
+                if let existing = model.allSeries.first(where: { $0.kind == .novel && ($0.url == url || $0.chapters.contains { $0.url == url }) }) {
+                    lastAdded = existing
+                    show("\(existing.title) is already in your library")
+                    return
+                }
+                do {
+                    let info = try await model.novelInfo(url, html: html)
+                    pending = PendingAdd(url: info.home ?? url, found: LinkInspection(title: info.title, cover: info.cover, pages: [], chapters: info.chapters),
+                                         novel: info)
+                } catch {
+                    lastAdded = nil
+                    show("Couldn’t find a novel here. Open the novel’s page or one of its chapters, then try again.")
+                }
+                return
+            }
             do {
-                switch try await model.preview(url.absoluteString, html: await browser.pageHTML()) {
+                switch try await model.preview(url.absoluteString, html: html) {
                 case .existing(.open(let chapter)):
                     lastAdded = nil; reader = chapter
                 case .existing(.series(let series, _)):
@@ -670,6 +697,8 @@ private struct AddGuideSheet: View {
 struct PendingAdd: Identifiable {
     let url: URL
     let found: LinkInspection
+    /// Set when what's being added is a novel (read as text).
+    var novel: NovelInfo? = nil
     var id: String { url.absoluteString }
 }
 
@@ -681,7 +710,7 @@ private struct AddPreviewSheet: View {
     let confirm: (_ readNow: Bool) -> Void
     var body: some View {
         let found = item.found
-        let style = found.style ?? .automatic
+        let style = item.novel == nil ? (found.style ?? .automatic) : .automatic
         VStack(spacing: 18) {
             Capsule().fill(Color.white.opacity(0.25)).frame(width: 40, height: 5).padding(.top, 8)
             HStack(alignment: .top, spacing: 16) {
@@ -695,7 +724,8 @@ private struct AddPreviewSheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     HStack(spacing: 6) {
                         Label("\(found.chapters.count) chapter\(found.chapters.count == 1 ? "" : "s")", systemImage: "list.number")
-                        if style != .automatic { Label(style.title, systemImage: style.symbol) }
+                        if item.novel != nil { Label("Novel", systemImage: "text.book.closed") }
+                        else if style != .automatic { Label(style.title, systemImage: style.symbol) }
                     }
                     .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     if let first = found.chapters.first, let last = found.chapters.last, found.chapters.count > 1 {

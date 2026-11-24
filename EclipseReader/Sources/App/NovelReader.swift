@@ -333,6 +333,8 @@ struct NovelReaderView: View {
     @State private var language: String?
     @State private var toast: String?
     @State private var reloads = 0
+    /// Bumped whenever the chapter's document is rebuilt (loaded, translated, or shown in the original), to set it again.
+    @State private var revision = 0
     @StateObject private var translator = NovelTranslator()
 
     init(chapter: Chapter) { _chapter = State(initialValue: chapter) }
@@ -387,7 +389,7 @@ struct NovelReaderView: View {
                         .transition(.opacity)
                 }
             }
-            .task(id: "\(document == nil ? "loading" : "ready")|\(Int(pageSize.width))x\(Int(pageSize.height))|\(style.key)|\(twoUp)|\(translator.version)") {
+            .task(id: "\(revision)|\(Int(pageSize.width))x\(Int(pageSize.height))|\(style.key)|\(twoUp)") {
                 await layout(pageSize: pageSize)
             }
             .onChange(of: geometry.safeAreaInsets, initial: true) { _, now in
@@ -422,6 +424,8 @@ struct NovelReaderView: View {
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: page) { _, _ in haptics }
         .novelTranslationRunner(translator)
         .onChange(of: translator.status) { _, now in if let now { show(now) } }
+        // A translation arrived: set the chapter again in the new language.
+        .onChange(of: translator.version) { _, _ in rebuild() }
         .sheet(isPresented: $settings) {
             BookSettingsSheet(fontRaw: $fontRaw, size: $size, spacing: $spacing, margin: $margin, justify: $justify,
                               themeRaw: $themeRaw, curl: $curl)
@@ -489,11 +493,14 @@ struct NovelReaderView: View {
         }
         document = BookDocument(title: series?.title ?? chapter.title,
                                 sections: [BookSection(title: chapter.title, blocks: blocks), BookSection(title: nil, blocks: ending)])
+        revision += 1
     }
     private func layout(pageSize: CGSize) async {
         guard let document, pageSize.width > 60, pageSize.height > 80 else { return }
+        // Setting it again (new size, font, or a translation with a different length): keep the same place in the chapter.
+        var fraction: Double?
         if let typeset, typeset.pages.indices.contains(page), typeset.pages[page].section == 0 {
-            anchorOffset = typeset.pages[page].range.location
+            fraction = Double(typeset.pages[page].range.location) / Double(max(1, Self.length(typeset)))
         }
         let style = self.style, images = self.images
         let result = await Task.detached(priority: .userInitiated) {
@@ -502,15 +509,21 @@ struct NovelReaderView: View {
         guard !Task.isCancelled else { return }
         let target: Int
         if landAtEnd { target = max(0, result.pagesIn(section: 0) - 1) }
+        else if let fraction { target = result.page(for: 0, offset: Int(fraction * Double(Self.length(result)))) }
         else if let anchorOffset { target = result.page(for: 0, offset: anchorOffset) }
         else { target = 0 }
         landAtEnd = false
+        anchorOffset = nil
         typeset = result
         page = target
         if chrome {
             try? await Task.sleep(for: .seconds(2))
             if !Task.isCancelled { chrome = false }
         }
+    }
+    /// How much text the chapter itself holds (its pages, not the "next chapter" page).
+    private static func length(_ book: TypesetBook) -> Int {
+        book.pages.filter { $0.section == 0 }.map { $0.range.location + $0.range.length }.max() ?? 1
     }
     /// Pictures in the chapter (illustrations), fetched once; at most a dozen per chapter.
     private static func pictures(in blocks: [BookBlock]) async -> [String: Data] {

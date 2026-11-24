@@ -1576,8 +1576,8 @@ struct SeriesCard: View {
                         if let style {
                             Text(style.tag).font(.system(size: 8.5 * k, weight: .heavy)).tracking(0.6)
                                 .padding(.horizontal, 5 * k).padding(.vertical, 3 * k)
-                        } else if series.kind == .book {
-                            Text("BOOK").font(.system(size: 8.5 * k, weight: .heavy)).tracking(0.6)
+                        } else if series.readsAsText {
+                            Text(series.isNovel ? "NOVEL" : "BOOK").font(.system(size: 8.5 * k, weight: .heavy)).tracking(0.6)
                                 .padding(.horizontal, 5 * k).padding(.vertical, 3 * k)
                         } else {
                             Image(systemName: "internaldrive.fill").font(.system(size: 9 * k, weight: .bold))
@@ -1587,7 +1587,7 @@ struct SeriesCard: View {
                     .foregroundStyle(.white.opacity(0.9))
                     .background(.ultraThinMaterial, in: Capsule())
                     .padding(6 * k)
-                    .accessibilityLabel(style?.title ?? (series.kind == .book ? "Book" : "On this device"))
+                    .accessibilityLabel(style?.title ?? (series.isNovel ? "Novel" : series.kind == .book ? "Book" : "On this device"))
                 }
                 .clipShape(RoundedRectangle(cornerRadius: radius))
                 .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(Color.white.opacity(0.07)))
@@ -2009,11 +2009,15 @@ struct SeriesHeader: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(series.title).font(.title2.weight(.heavy)).lineLimit(4).minimumScaleFactor(0.8)
                         .fixedSize(horizontal: false, vertical: true)
-                    Label(builtIn ? "Built in" : series.kind == .book ? (series.author ?? "Book") : series.kind == .web ? (series.url.host?.replacingOccurrences(of: "www.", with: "") ?? "Website") : "On this device",
+                    Label(builtIn ? "Built in" : series.kind == .book ? (series.author ?? "Book")
+                          : series.isOnline ? ([series.author, series.url.host?.replacingOccurrences(of: "www.", with: "")].compactMap { $0 }.joined(separator: " · "))
+                          : "On this device",
                           systemImage: series.kind == .local ? "internaldrive" : series.kind == .book ? "person" : "globe")
                         .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                     HStack(spacing: 6) {
-                        if series.kind == .book { chip("Book", symbol: "text.book.closed") } else { chip(style.title, symbol: style.symbol) }
+                        if series.isNovel { chip(series.kind == .book ? "Light novel" : "Novel", symbol: "text.book.closed") }
+                        else if series.kind == .book { chip("Book", symbol: "text.book.closed") }
+                        else { chip(style.title, symbol: style.symbol) }
                         if model.downloadedCount(series) > 0 { chip("\(model.downloadedCount(series))", symbol: "arrow.down.circle.fill") }
                     }
                     Text(series.chapters.isEmpty ? (checking ? "Loading chapters…" : "No chapters to read")
@@ -2259,7 +2263,7 @@ struct CoverPicker: View {
                         }
                     }
                     if let error { Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
-                    if !series.chapters.isEmpty && series.kind != .book {
+                    if !series.chapters.isEmpty && !series.readsAsText {
                         Text("Or use a page").font(.headline)
                         if loading { ProgressView().frame(maxWidth: .infinity) }
                         if !loading && choices.isEmpty { Text("Pages couldn’t be loaded. Check your connection.").foregroundStyle(.secondary) }
@@ -2278,7 +2282,7 @@ struct CoverPicker: View {
             .background(EclipseBackground())
             .navigationTitle("Cover").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Done") { dismiss() }.fontWeight(.semibold) }
-            .task { if series.kind != .book { choices = await model.coverChoices(series) }; loading = false }
+            .task { if !series.readsAsText { choices = await model.coverChoices(series) }; loading = false }
             .onChange(of: photo) { _, item in
                 guard let item else { return }
                 apply {
