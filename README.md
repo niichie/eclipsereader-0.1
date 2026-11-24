@@ -22,10 +22,10 @@
 
 ### Library
 - Mihon-style home that scales with the screen: a cover grid in three sizes, unread / **NEW** / downloaded badges and progress bars.
-- Tabs with counts: All, your own **categories**, Reading, New, Downloaded, Manga, Manhwa, Manhua, Webtoons, Comics, Books, On device.
+- Tabs with counts: All, your own **categories**, Reading, New, Downloaded, Manga, Manhwa, Manhua, Webtoons, Comics, On device (and Books, if you turn books on).
 - **Select several series** to mark read, download, file into a category, hide or remove in one go.
-- A new **quote on every launch**, only from top-rated works on MyAnimeList and Goodreads. *Read* takes you to that series. Close it, or hide it in Settings.
-- A **live pick** on every launch from AniList's top-rated manga (MyAnimeList as backup) and Standard Ebooks' most-read classics (one tap to download), plus **"Because you read…"** recommendations (MangaDex titles sharing the genres of what you read last).
+- **One launch card that doubles as a recommendation:** a manga quote pulled live from two anime quote databases (Yurippe and AnimeChan) plus a hand-picked list, kept only when AniList readers rate the work 77% or higher. It shows the cover, score and year; *Read* finds it on every site, and shuffle shows another. It never repeats a recent quote or suggests something already in your library, and it shrinks on small screens.
+- A **first-launch setup** lets you choose what the home shows (quote, Continue reading, Popular on MangaDex, Because you read…) and whether to read books too. Discover and Because you read are off by default. Change any of it in Settings › Library.
 - **Full cover control:** Photos, Files, an image link, any page of the series, or the automatic cover. Covers tint the series page.
 - Hidden series behind Face ID, an app lock, reading stats with streaks, and Spotlight search for your library.
 
@@ -37,7 +37,8 @@
 - On-device **translation of raw chapters** (Vision text recognition and Apple Translation): bubbles are remembered, and a pinned raw series translates every chapter automatically.
 - Optional enhancement for low-resolution scans; image quality matched to the screen, memory and Low Power Mode.
 
-### Boring books without pictures
+### Books (optional)
+Off unless you turn it on in the setup or Settings › Library (adding a book file turns it on). With books off, the Books tab and book search are hidden. There are no book quotes or book recommendations either way.
 - Reads **EPUB, MOBI, AZW3, FB2, TXT, RTF, HTML, DOCX and ODT**, set like a printed book: left to right, page curl, two pages side by side in landscape, running heads and page numbers.
 - Eight typefaces, size, spacing, margins, justification, and night, dusk, sepia or paper themes.
 - Covers fetched automatically from Open Library and Google Books.
@@ -49,6 +50,8 @@
 - More sites that add and read in the app: Asura Scans, MangaDot and Tapas. Every listed source is checked against the live site by the **Probe sources** workflow.
 - Built-in browser for any other site, with ads, trackers and "get the app" banners blocked.
 - The **Add** button only appears where a series can be read; elsewhere a guide explains why, with *Try anyway*.
+- **Fill missing chapters** (from Neko): when a site lacks some chapters (licensed MangaDex series, say), the series page can fill the gaps from the same series on another site. Only the missing numbers are added, they're refreshed on every update, and they give way once the main site posts them.
+- **Similar series** (from Neko): AniList readers' recommendations for any series, with scores. Tap one to find it on every site.
 - **Migrate** a series to another site, keeping your progress.
 
 ### Everything else
