@@ -200,28 +200,42 @@ final class ReaderChecks: XCTestCase {
     }
 
     /// Rapid page turns, a re-layout in the middle of a turn, and a jump: what crashed a few pages into a book.
-    func testBookPagerSurvivesTurnsDuringRelayout() async throws {
+    /// Kept synchronous on purpose: the page curl runs on the run loop below, with no async test frame
+    /// alive around it (an async test frame here tripped XCTest's own task allocator).
+    func testBookPagerSurvivesTurnsDuringRelayout() throws {
         let library = model()
-        let file = try await WebsiteHTTPClient().downloadFile(URL(string: Self.books[0].1)!)
-        let series = try await library.importBook(file)
-        guard let stored = BookLink.file(of: series.url) else { return XCTFail("no file") }
-        let document = try await BookStore.shared.document(stored)
         let style = BookStyle(font: .newYork, size: 19, spacing: 1.4, margin: 1, justify: true, theme: .night)
-        let size = CGSize(width: 330, height: 700)
-        let first = BookTypesetter.typeset(document, images: [:], style: style, pageSize: size)
-        let second = BookTypesetter.typeset(document, images: [:], style: style, pageSize: CGSize(width: 330, height: 660))
+        let books = Holder<(TypesetBook, TypesetBook)>()
+        let ready = expectation(description: "book typeset")
+        Task { @MainActor in
+            defer { ready.fulfill() }
+            do {
+                let file = try await WebsiteHTTPClient().downloadFile(URL(string: Self.books[0].1)!)
+                let series = try await library.importBook(file)
+                guard let stored = BookLink.file(of: series.url) else { return }
+                let document = try await BookStore.shared.document(stored)
+                books.value = (BookTypesetter.typeset(document, images: [:], style: style, pageSize: CGSize(width: 330, height: 700)),
+                               BookTypesetter.typeset(document, images: [:], style: style, pageSize: CGSize(width: 330, height: 660)))
+            } catch {
+                books.failure = "\(error)"
+            }
+        }
+        wait(for: [ready], timeout: 180)
+        guard let (first, second) = books.value else { return XCTFail("couldn't open the book: \(books.failure ?? "no file")") }
         let pager = BookPagerController()
         let reported = Counter()
         pager.changed = { _ in reported.count += 1 }
-        defer { pager.changed = nil }
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
         window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
         window.rootViewController = pager
+        window.windowLevel = .alert + 1
         window.makeKeyAndVisible()
         windows.append(window)
-        let insets = UIEdgeInsets(top: 60, left: 30, bottom: 84, right: 30)
-        pager.configure(book: first, style: style, insets: insets, twoUp: false, curl: true, title: "Frankenstein", page: 0)
+        pager.configure(book: first, style: style, insets: UIEdgeInsets(top: 60, left: 30, bottom: 84, right: 30),
+                        twoUp: false, curl: true, title: "Frankenstein", page: 0)
+        func pump(_ seconds: Double) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+        pump(0.3)
         for round in 0..<12 {
             pager.turn(forward: true)
             if round % 3 == 1 {
@@ -231,9 +245,10 @@ final class ReaderChecks: XCTestCase {
                                 twoUp: false, curl: true, title: "Frankenstein", page: pager.current)
             }
             if round % 4 == 2 { pager.jump(to: pager.current + 3, animated: true) }
-            try? await Task.sleep(for: .milliseconds(round % 2 == 0 ? 60 : 450))
+            pump(round % 2 == 0 ? 0.06 : 0.45)
         }
-        try? await Task.sleep(for: .seconds(1.5))
+        pump(1.5)
+        pager.changed = nil
         print("CHECK|pager|turns reported \(reported.count), now on page \(pager.current + 1)")
         XCTAssertGreaterThan(pager.current, 3, "pages didn't advance")
         XCTAssertTrue(all(BookPageView.self, in: window).contains { $0.text.length > 0 }, "blank page after turning")
@@ -275,3 +290,4 @@ final class ReaderChecks: XCTestCase {
 
 /// A reference counter for closures that outlive a test's own frame.
 final class Counter { var count = 0 }
+final class Holder<T> { var value: T?; var failure: String? }
