@@ -1,0 +1,39 @@
+{
+  "about": [
+    "Bundled sources: every entry appears in Browse right after install, in its category, and opens in the in-app browser.",
+    "People can edit, hide, remove, reorder and favourite them in Browse › Sources. Onboarding turns categories on.",
+    "Fields: id (unique; never reuse one), name, url (https), category (manga | manhwa | manhua | webtoons | comics | novels),",
+    "note (one short line), native (true only for sites with a dedicated connection in the app), style (optional:",
+    "manga | manhwa | manhua | webtoon | comic). Everything else on a site works through the generic browser and reader."
+  ],
+  "sources": [
+    { "id": "mangadex", "name": "MangaDex", "url": "https://mangadex.org/", "category": "manga", "native": true,
+      "note": "Huge community library, every language" },
+    { "id": "weebcentral", "name": "WeebCentral", "url": "https://weebcentral.com/", "category": "manga", "native": true,
+      "note": "Manga with full chapter lists" },
+    { "id": "mangadot", "name": "MangaDot", "url": "https://mangadot.net/", "category": "manga",
+      "note": "Latest ~50 chapters per series (all need an account)" },
+    { "id": "mangaplus", "name": "MANGA Plus", "url": "https://mangaplus.shueisha.co.jp/", "category": "manga",
+      "note": "Shueisha's official free simulpubs · reads on the site" },
+    { "id": "asura", "name": "Asura Scans", "url": "https://asurascans.com/comics", "category": "manhwa", "style": "manhwa",
+      "note": "Action manhwa, fast releases" },
+    { "id": "webtoon", "name": "WEBTOON", "url": "https://www.webtoons.com/en/", "category": "webtoons", "native": true,
+      "note": "Official webtoons and Canvas" },
+    { "id": "tapas", "name": "Tapas", "url": "https://tapas.io/", "category": "webtoons",
+      "note": "Webcomics and novels, many free" },
+    { "id": "comicbookplus", "name": "Comic Book Plus", "url": "https://comicbookplus.com/", "category": "comics", "style": "comic",
+      "note": "Public-domain Golden Age comics · free downloads" },
+    { "id": "digitalcomicmuseum", "name": "Digital Comic Museum", "url": "https://digitalcomicmuseum.com/", "category": "comics", "style": "comic",
+      "note": "Public-domain comics · free downloads with an account" },
+    { "id": "syosetu", "name": "Syosetu", "url": "https://ncode.syosetu.com/", "category": "novels", "native": true,
+      "note": "Where most Japanese light novels start · Japanese, translates on the device" },
+    { "id": "kakuyomu", "name": "Kakuyomu", "url": "https://kakuyomu.jp/", "category": "novels", "native": true,
+      "note": "Kadokawa's web novels · Japanese, translates on the device" },
+    { "id": "wuxiaworld", "name": "Wuxiaworld", "url": "https://www.wuxiaworld.com/", "category": "novels", "native": true,
+      "note": "Official translated Chinese and Korean novels · free chapters" },
+    { "id": "jnovelclub", "name": "J-Novel Club", "url": "https://j-novel.club/", "category": "novels",
+      "note": "Official light novels · sign in on the site to read your membership" },
+    { "id": "royalroad", "name": "Royal Road", "url": "https://www.royalroad.com/home", "category": "novels",
+      "note": "Free original web fiction" }
+  ]
+}

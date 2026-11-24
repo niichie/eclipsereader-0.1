@@ -49,6 +49,9 @@ struct RootView: View {
             if UserDefaults.standard.object(forKey: Features.booksKey) == nil {
                 UserDefaults.standard.set(model.hasBooks, forKey: Features.booksKey)
             }
+            // The bundled destinations (Resources/DefaultSources.json), and any source lists you subscribed to.
+            model.seedBundledSources()
+            Task { await model.refreshSourceLists() }
         }
         .task(id: model.allSeries.count) {
             SpotlightIndex.update(model.allSeries, hidden: Set(model.state.hiddenSeries ?? []))
@@ -57,11 +60,25 @@ struct RootView: View {
 }
 
 enum LibraryFilter: String, CaseIterable, Identifiable {
-    case all, new, reading, downloaded, manga, manhwa, manhua, webtoon, comic, books, files
+    case all, favorites, new, reading, downloaded, manga, manhwa, manhua, webtoon, comic, novels, books, files
     var id: String { rawValue }
+    /// The kind of content a tab shows (the setup's choices put these tabs first).
+    var category: SourceCategory? {
+        switch self {
+        case .manga: .manga
+        case .manhwa: .manhwa
+        case .manhua: .manhua
+        case .webtoon: .webtoons
+        case .comic: .comics
+        case .novels: .novels
+        default: nil
+        }
+    }
     var title: String {
         switch self {
         case .all: "All"
+        case .favorites: "Favourites"
+        case .novels: "Light novels"
         case .new: "New chapters"
         case .reading: "Reading"
         case .downloaded: "Downloaded"
@@ -111,9 +128,13 @@ struct LibraryView: View {
     @State private var quoteClosed = false
     /// Normal books are an option (Settings › Library, or the first-launch setup).
     @AppStorage(Features.booksKey) private var booksOn = false
+    /// So are novels (redraws the tabs when switched), and the kinds chosen in the setup order the tabs.
+    @AppStorage(Features.novelsKey) private var novelsOn = false
+    @AppStorage(Interests.categoriesKey) private var categoriesRaw = ""
     @AppStorage("libraryShowDiscover") private var showDiscover = false
     @AppStorage("homeSetupDone") private var setupDone = false
     @State private var settingUp = false
+    @State private var showingBookmarks = false
     @State private var bookSearch: QuoteSearch?
     @ObservedObject private var spotlights = SpotlightStore.shared
     @State private var quoteSearch: QuoteSearch?
@@ -128,19 +149,21 @@ struct LibraryView: View {
         case .new: model.newCount(series) > 0
         case .downloaded: model.downloadedCount(series) > 0 || series.kind == .local
         case .reading: model.lastRead(series) != nil && model.readCount(series) < series.chapters.count
-        case .manga: series.kind != .book && model.style(for: series.id) == .manga
-        case .manhwa: series.kind != .book && model.style(for: series.id) == .manhwa
-        case .manhua: series.kind != .book && model.style(for: series.id) == .manhua
-        case .webtoon: series.kind != .book && model.style(for: series.id) == .webtoon
-        case .comic: series.kind != .book && model.style(for: series.id) == .comic
-        case .books: series.kind == .book
+        case .favorites: model.isFavorite(series)
+        case .manga: !series.readsAsText && model.style(for: series.id) == .manga
+        case .manhwa: !series.readsAsText && model.style(for: series.id) == .manhwa
+        case .manhua: !series.readsAsText && model.style(for: series.id) == .manhua
+        case .webtoon: !series.readsAsText && model.style(for: series.id) == .webtoon
+        case .comic: !series.readsAsText && model.style(for: series.id) == .comic
+        case .novels: series.isNovel
+        case .books: series.isPlainBook
         case .files: series.kind == .local
         }
     }
     private var visible: [MangaSeries] {
         let shelf = categoryID.flatMap { id in model.categories.first { $0.id == id } }.map { Set($0.seriesIDs) }
         let list = model.librarySeries.filter { series in
-            (booksOn || series.kind != .book)
+            (booksOn || !series.isPlainBook) && (Features.novelsOn || !series.isNovel)
                 && (query.isEmpty || series.title.localizedCaseInsensitiveContains(query)) && matches(series, filter)
                 && (shelf?.contains(series.id) ?? true)
         }
@@ -156,16 +179,22 @@ struct LibraryView: View {
     }
     /// Tabs with something in them (All always shows), with counts like Mihon's categories.
     private var tabs: [(LibraryFilter, Int)] {
-        LibraryFilter.allCases.compactMap { item in
+        // Content tabs follow the setup: the kinds you chose come first.
+        let chosen = Interests.categories
+        let content = LibraryFilter.allCases.filter { $0.category != nil }
+        let ordered = LibraryFilter.allCases.filter { $0.category == nil && $0 != .books && $0 != .files }
+            + content.filter { chosen.contains($0.category!) } + content.filter { !chosen.contains($0.category!) } + [.books, .files]
+        return ordered.compactMap { item in
             if item == .books && !booksOn { return nil }
-            let count = model.librarySeries.filter { matches($0, item) }.count
+            if item == .novels && !Features.novelsOn { return nil }
+            let count = model.librarySeries.filter { matches($0, item) && (booksOn || !$0.isPlainBook) && (Features.novelsOn || !$0.isNovel) }.count
             return item == .all || count > 0 || item == filter ? (item, count) : nil
         }
     }
 
     /// The comic you read most recently, for "Because you read …".
     private var recentSeries: MangaSeries? {
-        guard let chapter = model.lastChapter, let series = model.series(id: model.seriesID(for: chapter)), series.kind != .book,
+        guard let chapter = model.lastChapter, let series = model.series(id: model.seriesID(for: chapter)), !series.readsAsText,
               !model.isHidden(series) else { return nil }
         return series
     }
@@ -302,6 +331,9 @@ struct LibraryView: View {
                 guard showQuote, !ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
                 await spotlights.loadManga(owned: ownedKeys)
             }
+            .sheet(isPresented: $showingBookmarks) {
+                BookmarksSheet { chapter in showingBookmarks = false; reader = chapter }.environmentObject(model)
+            }
             .sheet(isPresented: $settingUp, onDismiss: { setupDone = true }) {
                 HomeSetupSheet().presentationDetents([.medium, .large])
             }
@@ -385,6 +417,9 @@ struct LibraryView: View {
                         }
                         Button { withAnimation(.snappy) { selecting = true; selection = [] } } label: {
                             Label("Select…", systemImage: "checkmark.circle")
+                        }
+                        Button { showingBookmarks = true } label: {
+                            Label("Bookmarks" + ((model.state.bookmarks ?? []).isEmpty ? "" : " (\(model.state.bookmarks?.count ?? 0))"), systemImage: "bookmark")
                         }
                         if let random = model.librarySeries.randomElement() {
                             Button { openSeries = random } label: { Label("Open a random series", systemImage: "shuffle") }
@@ -930,10 +965,7 @@ struct ReaderSettingsPage: View {
                 Toggle("Keep the screen on while reading", isOn: $keepScreenOn)
                 Toggle("Show page number", isOn: $showPageNumber)
                 Toggle("Page-turn haptics", isOn: $haptics)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack { Text("Warm night filter"); Spacer(); Text(warmth == 0 ? "Off" : "\(Int(warmth * 100))%").foregroundStyle(.secondary).monospacedDigit() }
-                    Slider(value: $warmth, in: 0...0.6).tint(Eclipse.highlight)
-                }
+                LabeledSlider(title: "Warm night filter", symbol: "flame", value: $warmth, range: 0...0.6)
             } header: { Text("Display") } footer: {
                 Text("The warm filter tints pages amber for reading at night. It stays on until you turn it off; there’s also a shortcut in the reader.")
             }
@@ -1012,6 +1044,7 @@ struct LibrarySettingsPage: View {
     @AppStorage("libraryShowBecause") private var showBecause = false
     @AppStorage("homeSetupDone") private var setupDone = false
     @AppStorage(Features.booksKey) private var booksOn = false
+    @AppStorage(Features.novelsKey) private var novelsOn = false
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     @State private var alertMessage: String?
     var body: some View {
@@ -1034,6 +1067,13 @@ struct LibrarySettingsPage: View {
                 Button("Show the home setup again") { setupDone = false }
             }
             Section {
+                Toggle(isOn: $novelsOn) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Light novels & web novels")
+                        Text("Read novels from Syosetu, Kakuyomu, Wuxiaworld and any novel site, set like a printed book, with on-device translation for raws. Adds a Light novels tab and novel sources in Browse.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Toggle(isOn: $booksOn) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Books too")
@@ -1041,7 +1081,9 @@ struct LibrarySettingsPage: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-            } header: { Text("Books") }
+            } header: { Text("Reading beyond comics") } footer: {
+                Text("eclipsereader is a manga, manhwa, manhua, webtoon and comics reader first; these add text reading on top.")
+            }
             Section {
                 NavigationLink { CategoriesPage() } label: {
                     LabeledContent("Categories", value: model.categories.isEmpty ? "None" : "\(model.categories.count)")
@@ -1412,7 +1454,13 @@ struct ReaderPreferencesForm: View {
                     Text("Tapping the page edge moves panel by panel, then turns the page").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Toggle("Trim white scan margins", isOn: Binding(get: { preferences.trimMargins ?? true }, set: { preferences.trimMargins = $0 }))
+            Toggle(isOn: Binding(get: { preferences.trimMargins ?? true }, set: { preferences.trimMargins = $0 })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Trim blank scan borders")
+                    Text("Removes plain white or black borders around scanned pages so the art fills the screen. Clean digital pages are left as they are.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Toggle(isOn: Binding(get: { preferences.enhance ?? false }, set: { preferences.enhance = $0 })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Enhance low-resolution pages")
@@ -1660,7 +1708,7 @@ struct SeriesView: View {
             }
             List {
                 Section {
-                    SeriesHeader(series: series, reader: $reader, website: $website, checking: series.kind == .web && !checked)
+                    SeriesHeader(series: series, reader: $reader, website: $website, checking: series.isOnline && !checked)
                         .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
                     if let message {
                         Label(message, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
@@ -1682,7 +1730,7 @@ struct SeriesView: View {
                         }
                     }
                     if series.chapters.isEmpty {
-                        if builtIn || (series.kind == .web && (!checked || updating)) {
+                        if builtIn || (series.isOnline && (!checked || updating)) {
                             HStack(spacing: 10) {
                                 ProgressView()
                                 Text(builtIn && !model.loading ? "No chapters yet. Pull to refresh." : "Loading chapters…").foregroundStyle(.secondary)
@@ -1766,7 +1814,7 @@ struct SeriesView: View {
                 if let notice = model.notice, notice.seriesID == seriesID { message = notice.text; model.notice = nil }
                 if builtIn && series.chapters.isEmpty { await model.refresh() }
                 // Fresh chapter list the first time a website series is opened each session.
-                if series.kind == .web && !builtIn && model.sessionRefreshed.insert(series.id).inserted {
+                if series.isOnline && !builtIn && model.sessionRefreshed.insert(series.id).inserted {
                     try? await model.update(series)
                 }
                 checked = true
@@ -1784,7 +1832,7 @@ struct SeriesView: View {
                                 model.record(chapter, page: 0, count: 1, completed: true)
                             }
                         } label: { Label("Mark all as read", systemImage: "checkmark.circle") }
-                        if series.kind == .web {
+                        if series.isOnline {
                             Section("Offline") {
                                 Button {
                                     let start = model.resume(series).flatMap { series.chapters.firstIndex(of: $0) } ?? 0
@@ -1802,12 +1850,20 @@ struct SeriesView: View {
                         }
                         Section {
                             Button { pickingCover = true } label: { Label("Change cover…", systemImage: "photo") }
-                            if series.kind == .web {
+                            Button { model.toggleFavorite(series) } label: {
+                                Label(model.isFavorite(series) ? "Remove from favourites" : "Add to favourites", systemImage: model.isFavorite(series) ? "star.slash" : "star")
+                            }
+                            if series.isOnline {
                                 Button { website = true } label: { Label("Open website", systemImage: "safari") }
                                 ShareLink(item: series.url) { Label("Share link", systemImage: "square.and.arrow.up") }
                             }
-                            if series.kind != .book {
+                            if series.kind != .book || series.isNovel {
                                 Button { similar = true } label: { Label("Similar series…", systemImage: "sparkles.rectangle.stack") }
+                            }
+                            if series.kind == .book && Features.novelsOn {
+                                Button { model.setLightNovel(!(series.lightNovel ?? false), series) } label: {
+                                    Label(series.lightNovel == true ? "Shelve with books" : "Shelve with light novels", systemImage: "books.vertical")
+                                }
                             }
                             if series.kind == .web && !builtIn {
                                 if let merged = series.merged {
@@ -2347,3 +2403,44 @@ struct AddMangaView: View {
 }
 
 extension URL: @retroactive Identifiable { public var id: String { absoluteString } }
+
+
+/// Every place you marked, newest first, by series. Tap to open the chapter right there.
+struct BookmarksSheet: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let open: (Chapter) -> Void
+    var body: some View {
+        NavigationStack {
+            List {
+                let marks = model.state.bookmarks ?? []
+                if marks.isEmpty {
+                    ContentUnavailableView("No bookmarks yet", systemImage: "bookmark",
+                                           description: Text("Tap the bookmark at the top of the reader to mark a page."))
+                        .listRowBackground(Color.clear)
+                }
+                let groups = Dictionary(grouping: marks, by: \.seriesID)
+                ForEach(groups.keys.sorted { (groups[$0]?.first?.created ?? .distantPast) > (groups[$1]?.first?.created ?? .distantPast) }, id: \.self) { id in
+                    Section(model.series(id: id)?.title ?? "Removed series") {
+                        ForEach(groups[id] ?? []) { mark in
+                            Button {
+                                if let chapter = model.prepareToOpen(mark) { open(chapter) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(ChapterText.split(mark.chapterTitle).name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                    Text("Page \(mark.page + 1)\(mark.pageCount > 0 ? " of \(mark.pageCount)" : "") · \(mark.created.formatted(.relative(presentation: .named)))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            .disabled(model.series(id: id) == nil)
+                            .swipeActions { Button("Delete", role: .destructive) { model.removeBookmark(mark) } }
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden).background(Eclipse.surface)
+            .navigationTitle("Bookmarks").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}

@@ -172,8 +172,8 @@ struct SpotlightPlaceholder: View {
     }
 }
 
-/// First launch: choose what the library home shows. Everything here can be changed later in
-/// Settings › Library.
+/// First launch: what you read, where it's from, and what the library home shows. Everything here can be changed
+/// later in Settings › Library.
 struct HomeSetupSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("libraryShowQuote") private var showQuote = true
@@ -182,36 +182,87 @@ struct HomeSetupSheet: View {
     @AppStorage("libraryShowBecause") private var showBecause = false
     @AppStorage("homeSetupDone") private var done = false
     @AppStorage(Features.booksKey) private var books = false
+    @AppStorage(Features.novelsKey) private var novels = false
+    @State private var kinds: Set<SourceCategory> = Interests.categories
+    @State private var origins: Set<String> = Interests.origins
+    @State private var raws = Interests.raws
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
                         EclipseWordmark(size: 24)
-                        Text("Choose what your library home shows. You can change it any time in Settings › Library.")
+                        Text("A few choices and the app fits what you read. Change any of it later in Settings › Library.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
                     .listRowBackground(Color.clear)
                 }
                 Section {
-                    option($showQuote, "Manga quote on launch", "A line from a top-rated manga each time you open the app, with a button to start reading it.", "quote.opening")
+                    ForEach(SourceCategory.allCases.filter { $0 != .novels }) { kind in
+                        option(Binding(get: { kinds.contains(kind) }, set: { on in if on { kinds.insert(kind) } else { kinds.remove(kind) } }),
+                               kind.title, detail(kind), kind.symbol)
+                    }
+                } header: { Text("What are you into?") } footer: {
+                    Text("Your picks come first in the library tabs and in Browse, and the launch card only suggests these.")
+                }
+                Section {
+                    option($novels, "Light novels & web novels", "Novels too: Syosetu, Kakuyomu, Wuxiaworld or any novel site, set like a printed book. Raws translate on the device.", "text.book.closed")
+                    option($books, "Books", "Normal books (EPUB, Kindle, FB2, TXT…), set like a printed book. Adds a Books tab and free classics in Browse.", "books.vertical")
+                } header: { Text("Reading beyond comics") } footer: {
+                    Text("Both are optional; eclipsereader is a comics reader first.")
+                }
+                Section {
+                    ForEach(Interests.allOrigins, id: \.code) { origin in
+                        Toggle(origin.name, isOn: Binding(get: { origins.contains(origin.code) },
+                                                          set: { on in if on { origins.insert(origin.code) } else if origins.count > 1 { origins.remove(origin.code) } }))
+                            .tint(Eclipse.accent)
+                    }
+                    Toggle(isOn: $raws) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Raws too")
+                            Text("Untranslated works, read with on-device translation.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.tint(Eclipse.accent)
+                } header: { Text("Where from") } footer: {
+                    Text("Steers suggestions on the launch card and Discover. Search still finds everything.")
+                }
+                Section {
+                    option($showQuote, "Manga quote on launch", "A line from a top-rated series you're into each time you open the app, with a button to start reading it.", "quote.opening")
                     option($showContinue, "Continue reading", "Pick up where you left off in one tap.", "play.circle")
                     option($showDiscover, "Popular on MangaDex", "A row of what everyone's reading right now.", "flame")
                     option($showBecause, "Because you read…", "Series like the one you read last.", "sparkles")
-                }
+                } header: { Text("Your library home") }
                 Section {
-                    option($books, "Books too", "eclipsereader can also read normal books (EPUB, Kindle, FB2, TXT…), set like a printed book. Adds a Books tab and free classics in Browse.", "text.book.closed")
-                } footer: {
-                    Text("Manga, manhwa, manhua, webtoons and comics are always on.")
+                    Label("Have an account on a site? Sign in on the site in Browse. In Browse › Manage sources, a source can read with your sign-in, which stays in the browser.", systemImage: "person.crop.circle.badge.checkmark")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .listRowBackground(Color.clear)
                 }
             }
             .scrollContentBackground(.hidden).background(Eclipse.surface)
             .navigationTitle("Make it yours").navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done") { done = true; dismiss() }.fontWeight(.semibold) }
-            .interactiveDismissDisabled(false)
-            .onDisappear { done = true }
+            .toolbar { Button("Done") { finish(); dismiss() }.fontWeight(.semibold) }
+            .onDisappear { finish() }
         }
+    }
+    private func detail(_ kind: SourceCategory) -> String {
+        switch kind {
+        case .manga: "Japanese comics, right to left with real page turns."
+        case .manhwa: "Korean comics, one long vertical strip."
+        case .manhua: "Chinese comics, vertical strips."
+        case .webtoons: "Webcomics from WEBTOON, Tapas and more."
+        case .comics: "Western comics, left to right."
+        case .novels: ""
+        }
+    }
+    private func finish() {
+        var chosen = kinds
+        if chosen.subtracting([.novels]).isEmpty { chosen.insert(.manga) }
+        if novels { chosen.insert(.novels) } else { chosen.remove(.novels) }
+        Interests.categories = chosen
+        Interests.origins = origins
+        Interests.raws = raws
+        done = true
     }
     private func option(_ value: Binding<Bool>, _ title: String, _ detail: String, _ symbol: String) -> some View {
         Toggle(isOn: value) {

@@ -57,6 +57,8 @@ struct ReaderView: View {
         // Books read as books; everything else in the page reader.
         if BookLink.isBook(chapter) {
             BookReaderView(chapter: chapter)
+        } else if library.isNovelChapter(chapter) {
+            NovelReaderView(chapter: chapter)
         } else {
             mangaBody
         }
@@ -203,11 +205,13 @@ struct ReaderView: View {
                                 Text("Now: \(library.style(for: library.seriesID(for: chapter)).title) · \(library.style(for: library.seriesID(for: chapter)).detail). The settings below are your manga defaults.")
                             }
                             ReaderPreferencesForm(preferences: Binding(get: { library.preferences }, set: { library.preferences = $0 }))
-                            Section("Screen dimming") {
-                                Slider(value: $dimming, in: 0...0.7) { Text("Dim artwork") }
-                                Slider(value: $warmth, in: 0...0.6) { Text("Warm filter") }
-                                Text("Warm filter: \(Int(warmth * 100))% · stays on between sessions").font(.caption).foregroundStyle(.secondary)
-                                Text("Applies inside this reader only.").foregroundStyle(.secondary)
+                            Section {
+                                LabeledSlider(title: "Dim artwork", symbol: "sun.min", value: $dimming, range: 0...0.7)
+                                LabeledSlider(title: "Warm filter", symbol: "flame", value: $warmth, range: 0...0.6)
+                            } header: {
+                                Text("Screen dimming")
+                            } footer: {
+                                Text("Dim artwork darkens the pages for this reading session. The warm filter tints them amber for night reading and stays on until you turn it down. Both apply inside the reader only.")
                             }
                         }.navigationTitle("Reader settings").navigationBarTitleDisplayMode(.inline)
                             .toolbar { Button("Done") { settings = false } }
@@ -297,6 +301,13 @@ struct ReaderView: View {
                     .frame(width: 44, height: 44)
             }.accessibilityLabel(translator.active ? "Turn off translation" : "Translate this page")
                 .accessibilityIdentifier("translatePage")
+            Button { toggleBookmark() } label: {
+                Image(systemName: pageBookmark == nil ? "bookmark" : "bookmark.fill")
+                    .foregroundStyle(pageBookmark == nil ? .white : Eclipse.highlight)
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel(pageBookmark == nil ? "Bookmark this page" : "Remove bookmark")
+            .disabled(pages.isEmpty)
             Menu {
                 if chapter.url.scheme == "https" { Button("Open in browser", systemImage: "safari") { website = true } }
                 Button("Reload chapter", systemImage: "arrow.clockwise") { retry += 1 }
@@ -365,8 +376,6 @@ struct ReaderView: View {
                 } label: { quickLabel(effective.mode == .vertical ? "arrow.up.and.down.text.horizontal" : "book.pages", effective.mode == .vertical ? "Scroll" : (rtl ? "RTL" : "LTR")) }
                     .accessibilityLabel("Reading mode")
                 if effective.mode == .paged {
-                    Button { toggleTrim() } label: { quickLabel("crop", "Crop", on: effective.trimMargins ?? true) }
-                        .accessibilityLabel("Trim page margins")
                     Button {
                         library.preferences.guided = !(library.preferences.guided ?? false)
                         flash((library.preferences.guided ?? false) ? "Guided view: tap the edges to go panel by panel" : "Guided view off")
@@ -453,8 +462,13 @@ struct ReaderView: View {
         library.logReading(seconds: min(300, now.timeIntervalSince(lastActivity)))
         lastActivity = now
     }
-    private func toggleTrim() {
-        library.preferences.trimMargins = !(library.preferences.trimMargins ?? true)
+    /// The bookmark on the page showing, if any.
+    private var pageBookmark: Bookmark? { library.bookmarks(chapterID: chapter.id).first { $0.page == page } }
+    private func toggleBookmark() {
+        if let existing = pageBookmark { library.removeBookmark(existing); flash("Bookmark removed"); return }
+        library.addBookmark(Bookmark(seriesID: library.seriesID(for: chapter), chapterID: chapter.id, chapterTitle: chapter.title,
+                                     page: page, pageCount: pages.count))
+        flash("Bookmarked page \(page + 1)")
     }
     private func open(_ target: Chapter) {
         remember()
@@ -565,5 +579,27 @@ struct ReaderSurface: UIViewControllerRepresentable {
         vc.configure(pages: pages, groups: groups, chapter: chapter, pipeline: pipeline,
                      preferences: preferences, page: page,
                      changed: { page = $0 }, tap: tap, dimensions: dimensions)
+    }
+}
+
+/// A slider with its name, symbol and current value above it (so two sliders in a row can't be mixed up).
+struct LabeledSlider: View {
+    let title: String
+    let symbol: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(title, systemImage: symbol)
+                Spacer()
+                Text(value <= range.lowerBound ? "Off" : "\(Int((value - range.lowerBound) / (range.upperBound - range.lowerBound) * 100))%")
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            Slider(value: $value, in: range) { Text(title) }
+                .tint(Eclipse.highlight)
+                .accessibilityValue(value <= range.lowerBound ? "Off" : "\(Int((value - range.lowerBound) / (range.upperBound - range.lowerBound) * 100)) percent")
+        }
+        .padding(.vertical, 2)
     }
 }

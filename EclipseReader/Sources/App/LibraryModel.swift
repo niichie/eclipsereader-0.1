@@ -255,6 +255,11 @@ final class LibraryModel: ObservableObject {
         if chapter.url.scheme == "eclipselib" { return try await LocalBooks.shared.pages(chapter) }
         if series(containing: chapter) != nil
             || ReadBerserkParser.normalize(chapter.url.absoluteString, relativeTo: ReadBerserkParser.home) == nil && chapter.url.host != "example.invalid" {
+            if usesBrowserSession(chapter.url), source(for: chapter.url)?.native != true,
+               let html = try? await PageRenderer.html(for: chapter.url), let pages = try? LinkedSource.detect(in: html, base: chapter.url), !pages.isEmpty {
+                // Signed in on this site in the browser: what your account can see, through that session.
+                return pages
+            }
             do { return try await LinkedSource().pages(chapter.url) }
             catch let e as SourceError where e == .unsupportedStructure || e == .restricted {
                 // Script-built or browser-only sites: render the page like Safari, then read its images.
@@ -267,6 +272,10 @@ final class LibraryModel: ObservableObject {
     /// Reads a link directly; if the site builds its pages with scripts (or only answers browsers),
     /// renders it in an off-screen web view and reads the result instead.
     private func inspectAny(_ url: URL) async throws -> LinkInspection {
+        if usesBrowserSession(url), source(for: url)?.native != true {
+            // A site you signed in to in the browser: read the page through that session.
+            if let found = try? LinkedSource.analyze(html: await PageRenderer.html(for: url), url: url) { return found }
+        }
         do { return try await LinkedSource().inspect(url) }
         catch let e as SourceError where e == .unsupportedStructure || e == .restricted {
             let html = try await PageRenderer.html(for: url)
@@ -340,6 +349,10 @@ final class LibraryModel: ObservableObject {
     }
     /// `title`: the name a search result showed, cleaner than many series pages' headings.
     func addLink(_ text: String, html: String? = nil, title: String? = nil) async throws -> LinkResult {
+        if let url = WebLink.parse(text), isNovel(url) {
+            let series = try await addNovel(url, html: html, title: title)
+            return .series(series, open: series.chapters.first { $0.url == url })
+        }
         switch try await preview(text, html: html) {
         case .existing(let result): return result
         case .fresh(let url, var found):
@@ -493,6 +506,12 @@ final class LibraryModel: ObservableObject {
     /// Re-reads a web series' chapter list and adds new chapters, keeping progress.
     func update(_ series: MangaSeries) async throws {
         if series.id == Self.berserkID { await refresh(); if let message = self.error { throw BookError.invalid(message) }; return }
+        if series.kind == .novel {
+            let fresh = try await updateNovel(series)
+            markNew(fresh, in: series.id)
+            save()
+            return
+        }
         guard series.kind == .web else { return }
         let found = try await inspectAny(series.url)
         guard var list = state.series, let i = list.firstIndex(where: { $0.id == series.id }) else { return }
@@ -577,7 +596,7 @@ final class LibraryModel: ObservableObject {
     var totalNew: Int { librarySeries.reduce(0) { $0 + newCount($1) } }
     /// New chapters found during the current update check, per series (for notifications).
     private var foundThisCheck: [String: (count: Int, latest: String?)] = [:]
-    private func markNew(_ fresh: [Chapter], in seriesID: String) {
+    func markNew(_ fresh: [Chapter], in seriesID: String) {
         guard !fresh.isEmpty else { return }
         let previous = foundThisCheck[seriesID]?.count ?? 0
         foundThisCheck[seriesID] = (previous + fresh.count, fresh.last?.title)
@@ -605,7 +624,7 @@ final class LibraryModel: ObservableObject {
         foundThisCheck = [:]
         await refresh()
         // Series you're reading first, so a short background window covers what matters most.
-        let order = allSeries.filter { $0.kind == .web }
+        let order = allSeries.filter { $0.isOnline && ($0.kind != .novel || Features.novelsOn) }
             .sorted { (lastRead($0) ?? .distantPast) > (lastRead($1) ?? .distantPast) }
         for series in order {
             try? await update(series)
@@ -706,6 +725,13 @@ final class LibraryModel: ObservableObject {
         guard downloads[chapter.id] != nil else { return }   // cancelled while queued
         downloads[chapter.id] = .running(0)
         do {
+            if series(containing: chapter)?.kind == .novel {
+                // A novel chapter is its text: one small file.
+                try await downloadNovelChapter(chapter)
+                downloaded.insert(chapter.id)
+                downloads[chapter.id] = nil
+                return
+            }
             let pages = try await networkPages(for: chapter)
             guard !pages.isEmpty else { throw SourceError.unsupportedStructure }
             try await OfflineStore.shared.begin(chapter.id)
@@ -761,14 +787,60 @@ final class LibraryModel: ObservableObject {
     func saveSite(name: String, url: URL) {
         guard WebLink.publicHTTPS(url) else { return }
         var sites = state.sites ?? []
-        guard !sites.contains(where: { $0.url.host == url.host }) else { return }
+        if let i = sites.firstIndex(where: { $0.owns(url) }) {
+            // Already a source (maybe a hidden built-in one): show it again.
+            if sites[i].hidden == true { sites[i].hidden = false; state.sites = sites; save() }
+            return
+        }
         let title = name.trimmingCharacters(in: .whitespaces)
         sites.append(SavedSite(name: title.isEmpty ? (url.host ?? "Site") : String(title.prefix(60)), url: url))
         state.sites = sites
         save()
     }
-    func removeSite(_ site: SavedSite) {
-        state.sites = (state.sites ?? []).filter { $0.id != site.id }
+    func removeSite(_ site: SavedSite) { removeSource(site) }
+
+    // MARK: Favourites and bookmarks
+
+    func isFavorite(_ series: MangaSeries) -> Bool { state.favorites?.contains(series.id) == true }
+    func toggleFavorite(_ series: MangaSeries) {
+        var list = state.favorites ?? []
+        if let i = list.firstIndex(of: series.id) { list.remove(at: i) } else { list.append(series.id) }
+        state.favorites = list
+        save()
+    }
+    func bookmarks(chapterID: String) -> [Bookmark] { (state.bookmarks ?? []).filter { $0.chapterID == chapterID } }
+    func addBookmark(_ bookmark: Bookmark) {
+        state.bookmarks = [bookmark] + (state.bookmarks ?? [])
+        save()
+    }
+    func removeBookmark(_ bookmark: Bookmark) {
+        state.bookmarks = (state.bookmarks ?? []).filter { $0.id != bookmark.id }
+        save()
+    }
+    /// Sets things up so opening the bookmark's chapter lands on its spot, and returns the chapter to open.
+    func prepareToOpen(_ bookmark: Bookmark) -> Chapter? {
+        guard let series = series(id: bookmark.seriesID), let chapter = series.chapters.first(where: { $0.id == bookmark.chapterID }) else { return nil }
+        switch series.kind {
+        case .novel:
+            var map = state.novelPositions ?? [:]
+            map[series.id] = NovelPosition(chapterID: chapter.id, offset: bookmark.offset ?? 0)
+            state.novelPositions = map
+        case .book:
+            var map = state.bookPositions ?? [:]
+            map[series.id] = BookPosition(section: bookmark.section ?? BookLink.section(of: chapter), offset: bookmark.offset ?? 0)
+            state.bookPositions = map
+        default:
+            let completed = state.progress[chapter.id]?.completed == true
+            state.progress[chapter.id] = ChapterProgress(page: bookmark.page, pageCount: max(bookmark.pageCount, bookmark.page + 1), completed: completed)
+        }
+        save()
+        return chapter
+    }
+    /// A book file shelved with light novels (or back with books).
+    func setLightNovel(_ on: Bool, _ series: MangaSeries) {
+        guard var list = state.series, let i = list.firstIndex(where: { $0.id == series.id }) else { return }
+        list[i].lightNovel = on
+        state.series = list
         save()
     }
 
@@ -815,7 +887,7 @@ final class LibraryModel: ObservableObject {
     func backupFile() throws -> URL {
         var copy = state
         // Imported files live on this device only; their entries would not open elsewhere.
-        copy.series = copy.series?.filter { $0.kind == .web }
+        copy.series = copy.series?.filter { $0.isOnline }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -838,7 +910,7 @@ final class LibraryModel: ObservableObject {
         var incoming = backup.state
         func safe(_ url: URL) -> Bool { WebLink.publicHTTPS(url) }
         incoming.series = incoming.series?.compactMap { series in
-            guard series.kind == .web, safe(series.url) else { return nil }
+            guard series.isOnline, safe(series.url) else { return nil }
             var clean = series
             clean.chapters = series.chapters.filter { safe($0.url) }
             if let cover = clean.cover, !safe(cover) { clean.cover = nil }

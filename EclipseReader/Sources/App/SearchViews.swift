@@ -13,21 +13,39 @@ final class GlobalSearchModel: ObservableObject {
     @Published private(set) var query = ""
     private var tasks: [Task<Void, Never>] = []
 
-    /// MangaDex, WeebCentral and WEBTOON, then the user's saved sites and the popular sites.
-    static func sources(saved: [SavedSite]) -> [SearchSource] {
+    /// Pictures: MangaDex, WeebCentral and WEBTOON, then your other picture sources. Novels (when `novels`): Syosetu,
+    /// Kakuyomu and your novel sources. Hidden sources, categories you didn't choose, and sites that only read in their
+    /// own browser pages (no search page) are left out.
+    static func sources(saved: [SavedSite], novels: Bool = false) -> [SearchSource] {
+        let chosen = Interests.categories
+        let visible = saved.filter { $0.hidden != true && ($0.category.map(chosen.contains) ?? true) }
+        if novels {
+            var list: [SearchSource] = []
+            if chosen.contains(.novels) {
+                list = [SearchSource(name: "Syosetu", kind: .syosetu), SearchSource(name: "Kakuyomu", kind: .kakuyomu)]
+            }
+            var hosts = Set(list.map(\.host))
+            for site in visible where site.category == .novels && site.native != true && !searchless.contains(ChapterMerge.site(site.url.host)) {
+                let source = SearchSource(name: site.name, kind: .site(site.url), novels: true)
+                if !source.host.isEmpty, hosts.insert(source.host).inserted { list.append(source) }
+            }
+            return list
+        }
         var list: [SearchSource] = [
             SearchSource(name: "MangaDex", kind: .mangaDex),
             SearchSource(name: "WeebCentral", kind: .weebCentral),
             SearchSource(name: "WEBTOON", kind: .webtoons),
         ]
         var hosts = Set(list.map(\.host))
-        for site in saved.map({ ($0.name, $0.url) }) + SiteCatalog.popular.map({ ($0.name, $0.url) }) {
-            let source = SearchSource(name: site.0, kind: .site(site.1))
+        for site in visible where site.category != .novels && site.native != true && !searchless.contains(ChapterMerge.site(site.url.host)) {
+            let source = SearchSource(name: site.name, kind: .site(site.url))
             guard !source.host.isEmpty, !source.host.hasSuffix("webtoons.com"), hosts.insert(source.host).inserted else { continue }
             list.append(source)
         }
         return list
     }
+    /// Destinations with no search page the app can read (their search runs inside their own app pages).
+    static let searchless: Set<String> = ["shueisha.co.jp", "j-novel.club", "royalroad.com", "comicbookplus.com", "digitalcomicmuseum.com", "tapas.io"]
 
     func run(_ text: String, sources: [SearchSource]) {
         cancel()

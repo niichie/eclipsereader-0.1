@@ -120,8 +120,9 @@ public struct LinkedSource: Sendable {
         "", "comics", "comic", "manga", "mangas", "manhwa", "manhua", "series", "titles", "title", "browse", "latest",
         "popular", "search", "genre", "genres", "updates", "home", "directory", "list", "library", "trending", "new",
         "webtoons", "originals", "canvas", "top", "ranking", "rankings", "discover", "explore", "catalog", "all", "az-list",
+        "novels", "novel", "novel-list", "light-novels", "fictions",
     ]
-    static let seriesPath = #"(?i)/(?:manga|series|comics?|title|webtoons?|manhwa|manhua|read|book)/[^/?#"']+/?$"#
+    static let seriesPath = #"(?i)/(?:manga|series|comics?|title|webtoons?|manhwa|manhua|read|book|novels?|light-novel|fiction)/[^/?#"']+/?$"#
     /// A home, "latest", genre or search page: it links to many different series rather than being one.
     public static func looksLikeListing(html: String, url: URL, chapters: [Chapter]) -> Bool {
         if Webtoons.handles(url) || MangaDex.handles(url) || WeebCentral.handles(url) { return false }

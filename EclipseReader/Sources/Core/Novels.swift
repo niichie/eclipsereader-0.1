@@ -15,8 +15,12 @@ public struct NovelInfo: Sendable {
     /// The language it's written in ("ja", "zh", "ko", "en"), when the site says.
     public var language: String?
     public var chapters: [Chapter]
-    public init(title: String, author: String? = nil, cover: URL? = nil, summary: String? = nil, language: String? = nil, chapters: [Chapter]) {
-        self.title = title; self.author = author; self.cover = cover; self.summary = summary; self.language = language; self.chapters = chapters
+    /// The novel's own page, when the address given was one of its chapters.
+    public var home: URL?
+    public init(title: String, author: String? = nil, cover: URL? = nil, summary: String? = nil, language: String? = nil,
+                chapters: [Chapter], home: URL? = nil) {
+        self.title = title; self.author = author; self.cover = cover; self.summary = summary; self.language = language
+        self.chapters = chapters; self.home = home
     }
 }
 
@@ -473,18 +477,71 @@ public struct NovelSource: Sendable {
         return try await Self.info(html: page(url), url: url, http: http)
     }
     /// A series page already loaded (by the in-app browser, say): its chapters, title and cover.
-    public static func info(html: String, url: URL, http: any HTTPTransport = WebsiteHTTPClient()) async throws -> NovelInfo {
-        if Kakuyomu.handles(url) { return try Kakuyomu.info(html: html, url: url) }
-        if Wuxiaworld.handles(url), let found = try? Wuxiaworld.info(html: html, url: url) { return found }
-        if Syosetu.handles(url) { return try await Syosetu.info(url, http: http) }
+    public static func info(html: String, url: URL, http: any HTTPTransport = WebsiteHTTPClient(), followIndex: Bool = true) async throws -> NovelInfo {
+        if let id = Kakuyomu.workID(url) {
+            // An episode page carries only part of the table of contents: read the work page.
+            if url.pathComponents.contains("episodes") {
+                let home = URL(string: "https://kakuyomu.jp/works/\(id)")!
+                let data = try await http.fetch(home, referer: nil, image: false)
+                var found = try Kakuyomu.info(html: String(decoding: data, as: UTF8.self), url: home)
+                found.home = home
+                return found
+            }
+            return try Kakuyomu.info(html: html, url: url)
+        }
+        if let slug = Wuxiaworld.novelSlug(url) {
+            if let found = try? Wuxiaworld.info(html: html, url: url) { return found }
+            let home = URL(string: "https://www.wuxiaworld.com/novel/\(slug)")!
+            let data = try await http.fetch(home, referer: nil, image: false)
+            var found = try Wuxiaworld.info(html: String(decoding: data, as: UTF8.self), url: home)
+            found.home = home
+            return found
+        }
+        if let code = Syosetu.ncode(url) {
+            var found = try await Syosetu.info(url, http: http)
+            if url.pathComponents.count > 2 { found.home = Syosetu.workURL(code) }
+            return found
+        }
         var chapters = Webtoons.handles(url) ? [] : LinkedSource.chapterLinks(in: html, base: url)
         let title = LinkedSource.seriesTitle(in: html) ?? url.host ?? "Novel"
-        if chapters.isEmpty, let text = NovelText.extract(html: html, url: url), NovelText.textLength(text.html) >= 400 {
-            // A single chapter (or a one-page story) with no list of others.
+        let text = NovelText.extract(html: html, url: url)
+        let isChapter = text.map { NovelText.textLength($0.html) >= 1000 } ?? false
+        if isChapter && chapters.count < 4 {
+            // A chapter page that only links its neighbours: the novel's own page has the full list.
+            if followIndex, let index = indexLink(in: html, base: url), index != url,
+               let data = try? await http.fetch(index, referer: url, image: false),
+               let page = String(data: data, encoding: .utf8),
+               var found = try? await info(html: page, url: index, http: http, followIndex: false), found.chapters.count > chapters.count {
+                found.home = index
+                return found
+            }
+            if !chapters.contains(where: { LinkedSource.key($0.url) == LinkedSource.key(url) }) {
+                let n = ChapterOrder.number(text?.title ?? "") ?? ChapterOrder.number(url.path)
+                chapters = ChapterOrder.sorted(chapters + [Chapter(url: url, title: text?.title ?? title, number: n.map { LinkedSource.format($0) } ?? "")])
+            }
+        }
+        if chapters.isEmpty, let text, NovelText.textLength(text.html) >= 400 {
+            // A one-page story with no list of others.
             chapters = [Chapter(url: url, title: text.title ?? title, number: "1")]
         }
         guard !chapters.isEmpty else { throw SourceError.unsupportedStructure }
         return NovelInfo(title: title, cover: LinkedSource.cover(in: html, base: url), summary: LinkedSource.synopsis(in: html), chapters: chapters)
+    }
+    /// The link from a chapter back to its novel: "Index", "Table of contents", or the address the chapter sits under.
+    static func indexLink(in html: String, base: URL) -> URL? {
+        let root = LinkedSource.root(base.host ?? "")
+        var parent: URL?
+        for m in LinkedSource.matches(#"(?is)<a\b([^>]*)>(.*?)</a>"#, html) {
+            guard let href = ReadBerserkParser.attributes("<a " + m[0] + ">")["href"], let url = LinkedSource.resolve(href, base: base),
+                  LinkedSource.root(url.host ?? "") == root, url.path.count > 1 else { continue }
+            let label = LinkedSource.plain(m[1]).lowercased()
+            if label.range(of: #"^(?:index|table of contents|toc|chapter list|all chapters|novel info|目次)$"#, options: .regularExpression) != nil { return url }
+            // The page the chapter's address sits under (/novel/name for /novel/name/chapter-3).
+            let path = url.path.hasSuffix("/") ? url.path : url.path + "/"
+            if parent == nil, base.path.hasPrefix(path), base.path.count > path.count + 1,
+               url.path.range(of: LinkedSource.seriesPath, options: .regularExpression) != nil { parent = url }
+        }
+        return parent
     }
     /// One chapter's text.
     public func chapter(_ url: URL) async throws -> NovelChapterText {

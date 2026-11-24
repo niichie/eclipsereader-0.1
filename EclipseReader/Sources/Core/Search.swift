@@ -2,15 +2,22 @@ import Foundation
 
 /// A place global search can look: a built-in connection or any website.
 public struct SearchSource: Identifiable, Hashable, Sendable {
-    public enum Kind: Hashable, Sendable { case mangaDex, weebCentral, webtoons, site(URL) }
+    public enum Kind: Hashable, Sendable { case mangaDex, weebCentral, webtoons, syosetu, kakuyomu, site(URL) }
     public let name: String
     public let kind: Kind
-    public init(name: String, kind: Kind) { self.name = name; self.kind = kind }
+    /// Results are novels (added as text series).
+    public let novels: Bool
+    public init(name: String, kind: Kind, novels: Bool = false) {
+        self.name = name; self.kind = kind
+        self.novels = novels || kind == .syosetu || kind == .kakuyomu
+    }
     public var id: String {
         switch kind {
         case .mangaDex: "mangadex"
         case .weebCentral: "weebcentral"
         case .webtoons: "webtoons"
+        case .syosetu: "syosetu"
+        case .kakuyomu: "kakuyomu"
         case .site(let url): url.host ?? url.absoluteString
         }
     }
@@ -19,6 +26,8 @@ public struct SearchSource: Identifiable, Hashable, Sendable {
         case .mangaDex: "mangadex.org"
         case .weebCentral: "weebcentral.com"
         case .webtoons: "webtoons.com"
+        case .syosetu: "syosetu.com"
+        case .kakuyomu: "kakuyomu.jp"
         case .site(let url): url.host?.replacingOccurrences(of: "www.", with: "") ?? ""
         }
     }
@@ -33,6 +42,10 @@ public enum GlobalSearch {
         switch source.kind {
         case .mangaDex:
             return try await Discover.mangaDex(query: q, limit: 20, http: http)
+        case .syosetu:
+            return try await Syosetu.search(q, http: http)
+        case .kakuyomu:
+            return try await Kakuyomu.search(q, http: http)
         case .weebCentral:
             var parts = URLComponents(string: "https://weebcentral.com/search/data")!
             parts.queryItems = [URLQueryItem(name: "text", value: q), URLQueryItem(name: "sort", value: "Best Match"),

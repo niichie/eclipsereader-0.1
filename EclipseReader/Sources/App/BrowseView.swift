@@ -11,31 +11,18 @@ struct CatalogSite: Identifiable, Hashable {
     var id: String { url.absoluteString }
 }
 
-/// Sites shipped with the app. Anything else can be saved under "Your sites".
+/// Book libraries shown in the Books section. Manga, comic and novel sources live in Resources/DefaultSources.json.
 enum SiteCatalog {
     static func site(_ name: String, _ url: String, _ note: String, _ symbol: String, native: Bool = false) -> CatalogSite {
         CatalogSite(name: name, url: URL(string: url)!, note: note, symbol: symbol, native: native)
     }
-    /// Built-in connections: chapters, covers and pages come from the site's own data.
-    /// Every site here is checked against the live site by the "Probe sources" workflow.
-    static let connected: [CatalogSite] = [
-        site("MangaDex", "https://mangadex.org/", "Huge community library, every language · native", "books.vertical", native: true),
-        site("WeebCentral", "https://weebcentral.com/", "Manga with full chapter lists · native", "square.stack.3d.up", native: true),
-        site("WEBTOON", "https://www.webtoons.com/en/", "Official webtoons and Canvas · native", "iphone.gen3", native: true),
-    ]
-    /// Manga & manhwa sites that search, add and read in the app: open a series and tap Add.
-    static let popular: [CatalogSite] = [
-        site("Asura Scans", "https://asurascans.com/comics", "Action manhwa, fast releases", "flame"),
-        site("MangaDot", "https://mangadot.net/", "Latest ~50 chapters per series (all need an account)", "circle.grid.cross"),
-    ]
-    /// Official publishers whose free chapters add and read in the app.
-    static let official: [CatalogSite] = [
-        site("Tapas", "https://tapas.io/", "Webcomics and novels, many free", "rectangle.stack"),
-    ]
 }
 
 struct BrowseView: View {
     @AppStorage(Features.booksKey) private var booksOn = false
+    /// Redraws Browse when novels are turned on or off.
+    @AppStorage(Features.novelsKey) private var novelsOn = false
+    @AppStorage(Interests.categoriesKey) private var categoriesRaw = ""
     @EnvironmentObject private var model: LibraryModel
     @State private var address = ""
     @State private var browsing: BrowseTarget?
@@ -94,24 +81,30 @@ struct BrowseView: View {
                     }
                     if let discoverError { Text(discoverError).font(.footnote).foregroundStyle(.orange) }
 
-                    section("Your sites", detail: (model.state.sites ?? []).isEmpty ? "Save any site from the browser’s menu" : nil) {
-                        ForEach(model.state.sites ?? []) { site in
-                            SiteRow(name: site.name, host: site.url.host ?? "", note: nil, symbol: "bookmark.fill") { browsing = BrowseTarget(url: site.url) }
-                                .contextMenu {
-                                    Button(role: .destructive) { model.removeSite(site) } label: { Label("Remove", systemImage: "trash") }
-                                }
+                    if novelsOn { NovelBrowseSection(browsing: $browsing, opened: $opened) }
+                    let favorites = model.sources.filter { $0.favorite == true && $0.hidden != true }
+                    if !favorites.isEmpty {
+                        section("Favourite sources", detail: nil) { siteGrid(favorites) }
+                    }
+                    ForEach(SourceCategory.allCases.filter { Interests.categories.contains($0) }) { category in
+                        let sites = model.sources.filter { $0.category == category && $0.hidden != true && $0.favorite != true }
+                        if !sites.isEmpty {
+                            section(category.title, detail: category == .novels ? "Chapters read as text, in the novel reader" : nil) { siteGrid(sites) }
                         }
-                        Button { newSiteName = ""; newSiteURL = ""; addingSite = true } label: {
-                            Label("Add a site", systemImage: "plus.circle").frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(14).eclipseCard(cornerRadius: 14)
-                        }.buttonStyle(.plain)
                     }
-
-                    section("Connected", detail: "Chapters, covers and pages straight from the site") {
-                        siteGrid(SiteCatalog.connected)
-                    }
-                    section("More sites", detail: "Open a series, then tap Add to library") {
-                        siteGrid(SiteCatalog.popular + SiteCatalog.official)
+                    let other = model.sources.filter { $0.category == nil && $0.hidden != true && $0.favorite != true }
+                    section("Your sites", detail: other.isEmpty ? "Save any site from the browser’s menu, or add a whole list" : nil) {
+                        if !other.isEmpty { siteGrid(other) }
+                        HStack(spacing: 10) {
+                            Button { newSiteName = ""; newSiteURL = ""; addingSite = true } label: {
+                                Label("Add a site", systemImage: "plus.circle").frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(14).eclipseCard(cornerRadius: 14)
+                            }.buttonStyle(.plain)
+                            NavigationLink { SourcesPage().environmentObject(model) } label: {
+                                Label("Manage sources", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(14).eclipseCard(cornerRadius: 14)
+                            }.buttonStyle(.plain)
+                        }
                     }
                     if booksOn { BooksBrowseSection(browsing: $browsing, opened: $opened) }
                 }
@@ -200,15 +193,20 @@ struct BrowseView: View {
             content()
         }
     }
-    private func siteGrid(_ sites: [CatalogSite]) -> some View {
+    private func siteGrid(_ sites: [SavedSite]) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
             ForEach(sites) { site in
-                SiteRow(name: site.name, host: site.url.host ?? "", note: site.note, symbol: site.symbol, native: site.native) {
+                SiteRow(name: site.name, host: site.url.host ?? "", note: site.note, symbol: site.category?.symbol ?? "bookmark.fill",
+                        native: site.native == true) {
                     browsing = BrowseTarget(url: site.url)
                 }
                 .contextMenu {
-                    Button { model.saveSite(name: site.name, url: site.url) } label: { Label("Add to Your sites", systemImage: "bookmark") }
+                    Button { var s = site; s.favorite = !(site.favorite ?? false); model.updateSource(s) } label: {
+                        Label(site.favorite == true ? "Unfavourite" : "Favourite", systemImage: "star")
+                    }
+                    Button { var s = site; s.hidden = true; model.updateSource(s) } label: { Label("Hide", systemImage: "eye.slash") }
                     Link(destination: site.url) { Label("Open in Safari", systemImage: "safari") }
+                    Button(role: .destructive) { model.removeSource(site) } label: { Label("Remove", systemImage: "trash") }
                 }
             }
         }

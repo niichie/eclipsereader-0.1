@@ -45,6 +45,15 @@ struct UpdatesView: View {
                         }
                     }
                 }
+                if items.isEmpty && !model.checking {
+                    // A row below the cards (not an overlay), so short screens like the Duo's front one never overlap them.
+                    Section {
+                        ContentUnavailableView("No new chapters", systemImage: "sparkles",
+                                               description: Text("New chapters from the series in your library appear here. eclipsereader checks every few hours when you open it."))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .listRowBackground(Color.clear)
+                }
                 ForEach(order, id: \.self) { seriesID in
                     if let entries = grouped[seriesID], let series = entries.first?.0 {
                         Section {
@@ -72,12 +81,6 @@ struct UpdatesView: View {
                             }
                         }
                     }
-                }
-            }
-            .overlay {
-                if items.isEmpty && !model.checking {
-                    ContentUnavailableView("No new chapters", systemImage: "sparkles",
-                                           description: Text("New chapters from the series in your library appear here. eclipsereader checks every few hours when you open it."))
                 }
             }
             .scrollContentBackground(.hidden).background(EclipseBackground())
@@ -118,6 +121,13 @@ struct HistoryView: View {
                     Label("Incognito is on: nothing new is added to history.", systemImage: "eyeglasses")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
+                if items.isEmpty {
+                    Section {
+                        ContentUnavailableView("No history yet", systemImage: "clock", description: Text("Chapters you read show up here."))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .listRowBackground(Color.clear)
+                }
                 ForEach(order, id: \.self) { day in
                     Section {
                         ForEach(days[day] ?? []) { item in
@@ -129,12 +139,6 @@ struct HistoryView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .overlay {
-                if items.isEmpty {
-                    ContentUnavailableView("No history yet", systemImage: "clock",
-                                           description: Text("Chapters you read show up here."))
-                }
-            }
             .scrollContentBackground(.hidden).background(EclipseBackground())
             .navigationTitle("History")
             .toolbar {

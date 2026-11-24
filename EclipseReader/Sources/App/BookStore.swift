@@ -196,4 +196,7 @@ extension LibraryModel {
 enum Features {
     /// Normal books (EPUB, Kindle…): off unless chosen, or a book is added.
     static let booksKey = "booksEnabled"
+    /// Light novels and web novels: an option (setup, or Settings › Library). The app is a comics reader first.
+    static let novelsKey = "novelsEnabled"
+    static var novelsOn: Bool { UserDefaults.standard.bool(forKey: novelsKey) }
 }

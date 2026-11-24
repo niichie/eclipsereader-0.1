@@ -366,6 +366,8 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
     private(set) var current = 0
     var changed: ((Int) -> Void)?
     var tapped: ((CGFloat) -> Void)?
+    /// A turn past the last page (true) or before the first (false): the novel reader opens the next or previous chapter.
+    var beyondEnd: ((Bool) -> Void)?
     var sectionTitle: ((Int) -> String)?
     private var layoutKey = ""
     /// A page turn is animating (a tap, a key, or a finger mid-curl). UIPageViewController crashes if its
@@ -458,7 +460,7 @@ final class BookPagerController: UIViewController, UIPageViewControllerDataSourc
         guard let book, !animating else { return }
         let step = twoUp && curl ? 2 : 1
         let target = forward ? current - current % step + step : current - current % step - step
-        guard target >= 0, target < book.pages.count else { return }
+        guard target >= 0, target < book.pages.count else { beyondEnd?(forward); return }
         jump(to: target, animated: true)
         changed?(current)
     }
@@ -735,6 +737,25 @@ struct BookReaderView: View {
         lastActivity = now
     }
 
+    // MARK: Bookmarks
+
+    private var bookmarkHere: Bookmark? {
+        guard let typeset, typeset.pages.indices.contains(page), let series else { return nil }
+        let ref = typeset.pages[page]
+        return (library.state.bookmarks ?? []).first { mark in
+            mark.seriesID == series.id && mark.section == ref.section
+                && (mark.offset ?? -1) >= ref.range.location && (mark.offset ?? -1) < ref.range.location + max(1, ref.range.length)
+        }
+    }
+    private func toggleBookmark() {
+        if let existing = bookmarkHere { library.removeBookmark(existing); return }
+        guard let typeset, typeset.pages.indices.contains(page), let series else { return }
+        let ref = typeset.pages[page]
+        guard let part = series.chapters[safe: ref.section] else { return }
+        library.addBookmark(Bookmark(seriesID: series.id, chapterID: part.id, chapterTitle: sectionTitle(ref.section),
+                                     page: page, pageCount: typeset.pages.count, offset: ref.range.location, section: ref.section))
+    }
+
     // MARK: Controls
 
     @ViewBuilder private func controls(pages: Int) -> some View {
@@ -750,6 +771,10 @@ struct BookReaderView: View {
                     }
                 }
                 Spacer(minLength: 4)
+                Button { toggleBookmark() } label: {
+                    Image(systemName: bookmarkHere == nil ? "bookmark" : "bookmark.fill").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel(bookmarkHere == nil ? "Bookmark this page" : "Remove bookmark").disabled(typeset == nil)
                 Button { contents = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
                     .accessibilityLabel("Contents").disabled(typeset == nil)
                 Button { settings = true } label: { Image(systemName: "textformat.size").frame(width: 44, height: 44) }
