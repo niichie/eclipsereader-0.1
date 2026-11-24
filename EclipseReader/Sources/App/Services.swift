@@ -176,18 +176,120 @@ struct CoverTint: Sendable, Equatable {
     }
 }
 
-/// Upscale and clean low-resolution scans (Core Image: Lanczos, light noise reduction, luminance sharpening).
+/// Scan cleanup and upscaling for manga, manhwa and comic pages.
+///
+/// 1. Levels: grey, yellowed paper becomes white and washed-out ink becomes black (measured per page,
+///    and only when the page really has paper and ink, so dark or painted pages are left alone).
+/// 2. JPEG cleanup at the source size (chroma noise dropped on black-and-white pages).
+/// 3. Lanczos upscale toward the size the page is shown at (up to 4×). Upscaling only 2× and letting
+///    the screen stretch the rest left lettering soft.
+/// 4. Edges re-defined at that size: a gentle contrast curve and an unsharp mask scaled to the
+///    enlargement, so lines and lettering come out solid instead of blurred or haloed.
+/// Black-and-white pages are rendered as 8-bit grey, a quarter of the memory of colour.
 enum PageEnhancer {
     nonisolated(unsafe) private static let context = CIContext(options: [.cacheIntermediates: false])
+
+    struct Analysis: Equatable {
+        /// Darkest common tone (ink) and brightest common tone (paper), 0...1.
+        var ink: Double
+        var paper: Double
+        var grayscale: Bool
+    }
+
+    /// Measures a small copy of the page: ink and paper levels, and whether it is black and white.
+    static func analyse(_ image: CGImage) -> Analysis? {
+        let scale = min(1, 256.0 / Double(max(image.width, image.height)))
+        let w = max(1, Int(Double(image.width) * scale)), h = max(1, Int(Double(image.height) * scale))
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+            else { return false }
+            ctx.interpolationQuality = .medium
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else { return nil }
+        var histogram = [Int](repeating: 0, count: 256)
+        var colourful = 0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let r = Int(pixels[i]), g = Int(pixels[i + 1]), b = Int(pixels[i + 2])
+            histogram[(r * 54 + g * 183 + b * 19) >> 8] += 1
+            if max(r, g, b) - min(r, g, b) > 40 { colourful += 1 }
+        }
+        let total = w * h
+        func percentile(_ p: Double) -> Double {
+            let wanted = Int(Double(total) * p)
+            var seen = 0
+            for (value, count) in histogram.enumerated() {
+                seen += count
+                if seen > wanted { return Double(value) / 255 }
+            }
+            return 1
+        }
+        return Analysis(ink: percentile(0.008), paper: percentile(0.96), grayscale: Double(colourful) < Double(total) * 0.04)
+    }
+
+    /// The levels stretch for a page: (scale, bias) so that ink maps to 0 and paper to 1.
+    /// Only real paper (bright) and real ink (dark) are moved, and never by more than 1.6×.
+    static func levels(_ a: Analysis) -> (scale: Double, bias: Double) {
+        let ink = a.ink < 0.35 ? a.ink : 0
+        let paper = a.paper > 0.6 ? a.paper : 1
+        guard paper - ink > 0.2 else { return (1, 0) }
+        let scale = min(1.6, 1 / (paper - ink))
+        return (scale, -ink * scale)
+    }
+
+    /// Returns nil when the page doesn't need to change (already clean and large enough).
     static func enhance(_ image: CGImage, targetLongSide: Double) -> CGImage? {
         let long = Double(max(image.width, image.height))
-        guard long > 0, long < targetLongSide * 0.8 else { return nil }
-        let scale = min(2.0, targetLongSide / long)
-        let input = CIImage(cgImage: image)
-        let scaled = input.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0])
-        let clean = scaled
-            .applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.012, "inputSharpness": 0.5])
-            .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.5, kCIInputRadiusKey: 1.5])
-        return context.createCGImage(clean, from: scaled.extent.integral)
+        guard long > 0, let analysis = analyse(image) else { return nil }
+        let area = Double(image.width) * Double(image.height)
+        // Memory ceiling per page (tall colour webtoon strips are the large ones).
+        let budget = (analysis.grayscale ? 48_000_000.0 : 24_000_000.0) / area
+        let scale = min(4.0, sqrt(budget), max(1.0, targetLongSide / long))
+        let (gain, bias) = levels(analysis)
+        let upscaling = scale > 1.05
+        guard upscaling || gain > 1.02 || bias < -0.005 else { return nil }
+
+        var page = CIImage(cgImage: image)
+        if analysis.grayscale {
+            page = page.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
+        }
+        if gain != 1 || bias != 0 {
+            let g = CGFloat(gain), b = CGFloat(bias)
+            page = page.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: g, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: g, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: g, w: 0),
+                "inputBiasVector": CIVector(x: b, y: b, z: b, w: 0),
+            ]).applyingFilter("CIColorClamp")
+        }
+        // Edge pixels repeat outward so the filters below don't darken the page border.
+        page = page.clampedToExtent()
+        // JPEG blocking and speckle, at the source size where it is one or two pixels wide.
+        page = page.applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.02, "inputSharpness": 0.4])
+        let extent = CIImage(cgImage: image).extent
+        if upscaling {
+            page = page.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0])
+        }
+        let output = extent.applying(CGAffineTransform(scaleX: upscaling ? scale : 1, y: upscaling ? scale : 1)).integral
+        // Solid ink and clean edges: black-and-white pages get a firmer curve than colour art.
+        let curve: [CGFloat] = analysis.grayscale ? [0.05, 0.95] : [0.21, 0.79]
+        page = page.applyingFilter("CIToneCurve", parameters: [
+            "inputPoint0": CIVector(x: 0, y: 0),
+            "inputPoint1": CIVector(x: 0.18, y: curve[0]),
+            "inputPoint2": CIVector(x: 0.5, y: 0.5),
+            "inputPoint3": CIVector(x: 0.82, y: curve[1]),
+            "inputPoint4": CIVector(x: 1, y: 1),
+        ])
+        page = page.applyingFilter("CIUnsharpMask", parameters: [
+            kCIInputRadiusKey: max(0.8, 0.8 * scale),
+            kCIInputIntensityKey: analysis.grayscale ? 0.8 : 0.5,
+        ]).cropped(to: output)
+        if analysis.grayscale {
+            return context.createCGImage(page, from: output, format: .L8, colorSpace: CGColorSpaceCreateDeviceGray())
+        }
+        return context.createCGImage(page, from: output)
     }
 }

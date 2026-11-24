@@ -1659,7 +1659,7 @@ struct ReaderPreferencesForm: View {
             Toggle(isOn: Binding(get: { preferences.enhance ?? false }, set: { preferences.enhance = $0 })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Enhance scanned pages")
-                    Text("Reduces scan noise and enlarges small pages on this device").font(.caption).foregroundStyle(.secondary)
+                    Text("Whiter paper, solid ink and crisp lettering; small pages are upscaled to your screen").font(.caption).foregroundStyle(.secondary)
                 }
             }
             Picker("Image quality", selection: Binding(get: { preferences.quality ?? .automatic }, set: { preferences.quality = $0 })) {

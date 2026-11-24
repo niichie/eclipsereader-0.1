@@ -20,7 +20,7 @@ struct GuideView: View {
                 item("bookmark", "Bookmarks", "The bookmark button marks the page you're on. Find them all in the library's ⋯ menu › Bookmarks.")
                 item("sun.min", "Dim artwork", "Darkens the pages for this reading session, below the phone's own brightness.")
                 item("flame", "Warm filter", "Tints pages amber for reading at night. It stays on until you turn it down, in the reader's settings or Settings › Reader.")
-                item("wand.and.stars", "Enhance scanned pages", "Reduces scan noise and enlarges small pages on this device. Uses more battery; leave it off for clean digital pages.")
+                item("wand.and.stars", "Enhance scanned pages", "Cleans up scans on this device: grey paper turns white, faded ink turns black, JPEG noise is removed and small pages are upscaled to your screen with sharp lettering. Hold two fingers on a page to see the original. Uses more battery; leave it off for clean digital pages.")
                 item("hand.draw", "Compare a scan", "Hold two fingers on the art to compare the original at the same zoom. Choose scan cleanup for this series in reader options.")
                 item("slider.horizontal.3", "Find a page", "Drag the page slider for a preview. Release to jump, or use Return to go back.")
                 item("crop", "Blank borders", "Plain white or black borders around scanned pages are trimmed automatically so the art fills the screen. Switch it off in Settings › Reader if a page ever looks cut.")

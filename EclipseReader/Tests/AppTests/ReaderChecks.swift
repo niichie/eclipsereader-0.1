@@ -169,46 +169,88 @@ final class ReaderChecks: XCTestCase {
         XCTAssertNotNil(book.text(of: 0).attribute(.backgroundColor, at: hit.offset, effectiveRange: nil))
     }
 
-    func testEnhanceMatchesOriginalScanRenderer() throws {
-        let size = 64
-        let gray = CGColorSpaceCreateDeviceGray()
-        func bitmap() throws -> CGContext {
-            try XCTUnwrap(CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
-                                    bytesPerRow: size, space: gray, bitmapInfo: CGImageAlphaInfo.none.rawValue))
-        }
-        let source = try bitmap()
-        let samples = try XCTUnwrap(source.data).assumingMemoryBound(to: UInt8.self)
-        for y in 0..<size {
-            for x in 0..<size {
-                samples[y * size + x] = x == 32 ? 12 : ((x + y).isMultiple(of: 2) ? 244 : 248)
+    /// A low-resolution black-and-white scan: grey paper, washed-out ink, JPEG.
+    private func scanFixture(width: Int = 300, height: Int = 450, quality: CGFloat = 0.5) throws -> CGImage {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let page = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { ctx in
+            UIColor(white: 0.86, alpha: 1).setFill(); ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            let ink = UIColor(white: 0.2, alpha: 1)
+            ink.setStroke()
+            let bubble = UIBezierPath(ovalIn: CGRect(x: 20, y: 30, width: 260, height: 150)); bubble.lineWidth = 3; bubble.stroke()
+            let text = NSAttributedString(string: "THE TIDE\nTURNS AT\nMIDNIGHT.", attributes: [
+                .font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: ink])
+            text.draw(in: CGRect(x: 95, y: 60, width: 180, height: 110))
+            for y in stride(from: 220, to: 430, by: 7) {
+                for x in stride(from: 20, to: 280, by: 7) {
+                    ink.setFill(); UIBezierPath(ovalIn: CGRect(x: x, y: y, width: 3, height: 3)).fill()
+                }
             }
         }
-        let page = UIImage(cgImage: try XCTUnwrap(source.makeImage()))
-        for data in [try XCTUnwrap(page.pngData()), try XCTUnwrap(page.jpegData(compressionQuality: 0.8))] {
-            let decoded = try XCTUnwrap(UIImage(data: data)?.cgImage)
-            XCTAssertNil(PageEnhancer.enhance(decoded, targetLongSide: 64))
-            let enlarged = try XCTUnwrap(PageEnhancer.enhance(decoded, targetLongSide: 256))
-            XCTAssertEqual(enlarged.width, size * 2)
-            let enlargedSize = size * 2
-            let zoom = try XCTUnwrap(CGContext(data: nil, width: enlargedSize, height: enlargedSize,
-                bitsPerComponent: 8, bytesPerRow: enlargedSize, space: gray, bitmapInfo: CGImageAlphaInfo.none.rawValue))
-            zoom.setBlendMode(.copy)
-            zoom.draw(enlarged, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
-            let ink = try XCTUnwrap(zoom.data).assumingMemoryBound(to: UInt8.self)
-            let actual = Data(bytes: ink, count: enlargedSize * enlargedSize)
-            // Reference filter chain from 7c6cd9f, before the scan-cleanup changes.
-            let scaled = CIImage(cgImage: decoded).applyingFilter("CILanczosScaleTransform",
-                parameters: [kCIInputScaleKey: 2.0, kCIInputAspectRatioKey: 1.0])
-            let original = scaled.applyingFilter("CINoiseReduction",
-                parameters: ["inputNoiseLevel": 0.012, "inputSharpness": 0.5])
-                .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.5, kCIInputRadiusKey: 1.5])
-            let expected = try XCTUnwrap(CIContext(options: [.cacheIntermediates: false]).createCGImage(original, from: scaled.extent.integral))
-            zoom.draw(expected, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
-            let reference = Data(bytes: ink, count: enlargedSize * enlargedSize)
-            // Independent Core Image contexts may round an 8-bit luminance sample differently.
-            let largestDelta = zip(actual, reference).map { abs(Int($0.0) - Int($0.1)) }.max() ?? 0
-            XCTAssertLessThanOrEqual(largestDelta, 1)
+        let data = try XCTUnwrap(page.jpegData(compressionQuality: quality))
+        return try XCTUnwrap(UIImage(data: data)?.cgImage)
+    }
+    private func grey(_ image: CGImage, width: Int, height: Int) throws -> [UInt8] {
+        let ctx = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+                                          space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return Array(UnsafeBufferPointer(start: try XCTUnwrap(ctx.data).assumingMemoryBound(to: UInt8.self), count: width * height))
+    }
+    private func sharpness(_ g: [UInt8], width: Int, height: Int) -> Double {
+        var total = 0.0
+        for y in 1..<(height - 1) { for x in 1..<(width - 1) {
+            let i = y * width + x
+            total += abs(Double(g[i + 1]) - Double(g[i - 1])) + abs(Double(g[i + width]) - Double(g[i - width]))
+        } }
+        return total / Double(width * height)
+    }
+
+    /// The enhancer upscales a soft scan to the target, makes paper white and ink black, sharpens
+    /// lettering, keeps black-and-white pages grey (8-bit), and leaves clean full-size pages alone.
+    func testEnhancerCleansAndUpscalesScans() throws {
+        let scan = try scanFixture()
+        let out = try XCTUnwrap(PageEnhancer.enhance(scan, targetLongSide: 1800))
+        XCTAssertEqual(out.height, 1800)
+        XCTAssertEqual(out.width, 1200)
+        XCTAssertEqual(out.bitsPerPixel, 8, "black-and-white pages should be rendered as grey")
+        let w = 1200, h = 1800
+        let after = try grey(out, width: w, height: h)
+        let before = try grey(scan, width: w, height: h)
+        // Paper: a blank strip above the bubble. Ink: the darkest percent.
+        func paper(_ g: [UInt8]) -> Double { (0..<(w * 60)).map { Double(g[$0 + w * 10]) }.reduce(0, +) / Double(w * 60) }
+        func ink(_ g: [UInt8]) -> Double { let s = g.sorted(); return s.prefix(s.count / 100).map(Double.init).reduce(0, +) / Double(s.count / 100) }
+        print("CHECK|enhance|paper \(paper(before)) → \(paper(after)); ink \(ink(before)) → \(ink(after)); sharpness \(sharpness(before, width: w, height: h)) → \(sharpness(after, width: w, height: h))")
+        XCTAssertGreaterThan(paper(after), 245, "grey paper should come out white")
+        XCTAssertLessThan(ink(after), 20, "washed-out ink should come out black")
+        XCTAssertGreaterThan(sharpness(after, width: w, height: h), sharpness(before, width: w, height: h) * 1.3)
+        // A before/after crop of the lettering, for checking by eye in the log.
+        let crop = CGRect(x: 300, y: 150, width: 640, height: 420)
+        for (name, image) in [("before", before), ("after", after)] {
+            let ctx = try XCTUnwrap(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                              space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+            image.withUnsafeBytes { ctx.data?.copyMemory(from: $0.baseAddress!, byteCount: w * h) }
+            let cropped = try XCTUnwrap(ctx.makeImage()?.cropping(to: crop))
+            let png = try XCTUnwrap(UIImage(cgImage: cropped).pngData())
+            print("IMAGE|\(name)|" + png.base64EncodedString())
         }
+
+        // Already clean and big enough: untouched.
+        let clean = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 400, height: 600), format: {
+            let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }()).image { ctx in
+            UIColor.white.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 600))
+            UIColor.black.setFill(); ctx.fill(CGRect(x: 100, y: 100, width: 200, height: 200))
+        }.cgImage)
+        XCTAssertNil(PageEnhancer.enhance(clean, targetLongSide: 600))
+
+        // Colour art keeps its colour.
+        let colour = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 200, height: 300), format: {
+            let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }()).image { ctx in
+            UIColor(red: 0.85, green: 0.3, blue: 0.25, alpha: 1).setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 200, height: 150))
+            UIColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1).setFill(); ctx.fill(CGRect(x: 0, y: 150, width: 200, height: 150))
+        }.cgImage)
+        let colourOut = try XCTUnwrap(PageEnhancer.enhance(colour, targetLongSide: 600))
+        XCTAssertGreaterThan(colourOut.bitsPerPixel, 8, "colour pages must stay in colour")
+        XCTAssertEqual(colourOut.height, 600)
     }
 
     private var windows: [UIWindow] = []
