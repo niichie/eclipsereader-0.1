@@ -48,6 +48,16 @@ final class SourceFixesTests: XCTestCase {
         XCTAssertEqual(FreeBooks.mirrors(for: URL(string: "https://standardebooks.org/x.epub")!), [])
     }
 
+    func testChapterSkipsStartupArtRepeatedInScript() throws {
+        let art = (1...9).map { "/art/device-\($0).png?v=2" }
+        let links = art.map { "<link rel=\"apple-touch-startup-image\" href=\"\($0)\">" }.joined()
+        let pages = (1...7).map { "/chapter/pages/\($0).webp" }
+        let script = (art + pages.reversed()).map { "\"\($0)\"" }.joined(separator: ",")
+        let html = "\(links)<img src=\"\(pages[0])\"><script>let assets=[\(script)]</script>"
+        let result = try LinkedSource.detect(in: html, base: URL(string: "https://example.org/chapter/66")!)
+        XCTAssertEqual(result.map { $0.url.path }, pages)
+    }
+
     func testScriptListedRelativePagesInNumberOrder() throws {
         // MangaDot: a React data stream lists pages newest-first, as site-relative paths.
         let names = (1...12).reversed().map { String(format: "%03d", $0) }

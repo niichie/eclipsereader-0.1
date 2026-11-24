@@ -555,6 +555,13 @@ public struct LinkedSource: Sendable {
     /// by folder or host so the largest consistent set wins.
     static func scriptImages(in html: String, base: URL? = nil) -> [URL] {
         let text = html.replacingOccurrences(of: "\\/", with: "/")
+        // Startup artwork may be repeated in both the document head and its serialized data.
+        let startupImages = Set(ReadBerserkParser.tags("link", html).compactMap { tag -> URL? in
+            let fields = ReadBerserkParser.attributes(tag)
+            guard let rel = fields["rel"], rel.lowercased().split(whereSeparator: \.isWhitespace).contains("apple-touch-startup-image"),
+                  let href = fields["href"] else { return nil }
+            return base.flatMap { resolve(href, base: $0) } ?? URL(string: href)
+        })
         var seen = Set<URL>()
         var urls: [URL] = []
         // Full addresses, and site-relative paths ("/chapters/…/001.webp", common in React and Next.js data).
@@ -564,7 +571,7 @@ public struct LinkedSource: Sendable {
                   WebLink.publicHTTPS(url) else { continue }
             let lower = url.absoluteString.lowercased()
             if junk.contains(where: lower.contains) || lower.contains("cover") { continue }
-            if seen.insert(url).inserted { urls.append(url) }
+            if !startupImages.contains(url), seen.insert(url).inserted { urls.append(url) }
         }
         func group(_ key: (URL) -> String) -> [URL] {
             var g: [String: [URL]] = [:]
