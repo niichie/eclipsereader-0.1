@@ -397,4 +397,16 @@ final class LiveProbeTests: XCTestCase {
         let (_, _, page) = await body("https://mangadot.net/search?q=solo")
         dump("mangadot search page api", around(page, #"/api/[a-z/]+"#, before: 200, after: 300))
     }
+
+    func testQuoteSources() async {
+        for address in ["https://api.animechan.io/v1/quotes/random", "https://animechan.io/api/v1/quotes/random",
+                        "https://api.animechan.io/v1/quotes?anime=Naruto", "https://animechan.xyz/api/random",
+                        "https://yurippe.vercel.app/api/quotes?random=1", "https://katanime.vercel.app/api/getrandom",
+                        "https://kyoko.rei.my.id/api/quotes.php", "https://waifu.it/api/v4/quote"] {
+            for ua in ["app", "iphone"] {
+                let (st, type, text) = await body(address, ua: ua == "app" ? WebsiteHTTPClient.appAgent : "iphone", accept: "application/json")
+                dump("quotes \(ua) \(address)", "\(st) \(type) :: \(text.prefix(500))")
+            }
+        }
+    }
 }
