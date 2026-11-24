@@ -131,7 +131,9 @@ final class ReaderChecks: XCTestCase {
             ("MangaDot", SearchSource(name: "MangaDot", kind: .site(URL(string: "https://mangadot.net/")!)), "Solo Leveling"),
         ]
         for (name, source, query) in sources {
-            guard let hit = try await GlobalSearch.search(source, query: query).first else { XCTFail("\(name): no search results"); continue }
+            let hits: [DiscoverItem]
+            do { hits = try await GlobalSearch.search(source, query: query) } catch { XCTFail("\(name): search failed: \(error)"); continue }
+            guard let hit = hits.first else { XCTFail("\(name): no search results"); continue }
             let found = try await library.inspect(hit.url)
             guard let chapter = found.chapters.first else { XCTFail("\(name): no chapters"); continue }
             let window = show(ReaderView(chapter: chapter).environmentObject(library), size: CGSize(width: 390, height: 844))
@@ -166,8 +168,9 @@ final class ReaderChecks: XCTestCase {
         request.setValue(WebsiteHTTPClient.appAgent, forHTTPHeaderField: "User-Agent")
         let (data, _) = try await URLSession.shared.data(for: request)
         let list = ((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [[String: Any]]) ?? []
+        print("CHECK|licensed|MangaDex titles: " + list.compactMap { ($0["attributes"] as? [String: Any]).flatMap(MangaDex.displayTitle) }.joined(separator: " | "))
         let id = try XCTUnwrap(list.first {
-            ((($0["attributes"] as? [String: Any])?["title"] as? [String: String])?["en"] ?? "") == "Jujutsu Kaisen"
+            ($0["attributes"] as? [String: Any]).flatMap(MangaDex.displayTitle).map { Discover.sameTitle($0, "Jujutsu Kaisen") } ?? false
         }?["id"] as? String)
         let readableHere = await MangaDex.hasReadableChapters(id, http: WebsiteHTTPClient())
         print("CHECK|licensed|MangaDex readable: \(String(describing: readableHere))")
