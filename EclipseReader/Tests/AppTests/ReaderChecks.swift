@@ -231,7 +231,7 @@ final class ReaderChecks: XCTestCase {
             image.withUnsafeBytes { ctx.data?.copyMemory(from: $0.baseAddress!, byteCount: w * h) }
             let cropped = try XCTUnwrap(ctx.makeImage()?.cropping(to: crop))
             let png = try XCTUnwrap(UIImage(cgImage: cropped).pngData())
-            print("IMAGE|\(name)|" + png.base64EncodedString())
+            print("CHECK|image|\(name)|" + png.base64EncodedString())
         }
 
         // Already clean and big enough: untouched.
