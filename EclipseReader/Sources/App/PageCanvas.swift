@@ -58,10 +58,8 @@ private actor PageDecoder {
         guard rect.width > 0, rect.height > 0 else { return nil }
         let scale = min(pixels.width / rect.width, pixels.height / rect.height, 2,
                         sqrt(4_000_000 / (rect.width * rect.height)))
-        var content = source
-        if let strength { content = content.applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": strength, "inputSharpness": 0]) }
+        let output = PageEnhancer.resample(source, scale: scale, strength: strength)
         let transform = CGAffineTransform(scaleX: scale, y: scale)
-        let output = content.transformed(by: transform)
         guard let cg = PageEnhancer.context.createCGImage(output, from: rect.applying(transform).integral) else { return nil }
         return UIImage(cgImage: cg)
     }
@@ -104,7 +102,7 @@ private actor PageDecoder {
                 : limit * 0.66
             final = PageEnhancer.enhance(final, targetLongSide: target, strength: strength) ?? final
         }
-        return DecodedImage(image: UIImage(cgImage: final), sourceRegion: region, needsTiles: width * height > 8_000_000, ratio: Double(final.width) / Double(final.height))
+        return DecodedImage(image: UIImage(cgImage: final), sourceRegion: region, needsTiles: max(width, height) > Double(max(cg.width, cg.height)) * 1.01, ratio: Double(final.width) / Double(final.height))
     }
     /// Removes plain white or black scan margins (the bars beside single pages).
     /// Conservative: an edge row/column is trimmed only when ~98% of it is blank,
@@ -434,7 +432,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { scheduleDetail() }
     func scheduleDetail() {
         detailWork?.cancel()
-        guard let data = originalData, scroll.zoomScale > baseScale * 1.05 || comparing || needsTiles else {
+        guard let data = originalData, comparing || (needsTiles && scroll.zoomScale * traitCollection.displayScale > 1) else {
             detail.image = nil
             return
         }

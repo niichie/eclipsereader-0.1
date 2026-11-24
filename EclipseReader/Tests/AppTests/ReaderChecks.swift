@@ -11,7 +11,7 @@ final class ReaderChecks: XCTestCase {
         ("Pride and Prejudice (Standard Ebooks)", "https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice/downloads/jane-austen_pride-and-prejudice.epub?source=download"),
         ("Alice (Project Gutenberg mirror, pictures)", "https://gutenberg.pglaf.org/cache/epub/11/pg11-images-3.epub"),
     ]
-    func testZoomTileAndRotationOnMangaCanvas() async throws {
+    func testFullResolutionMangaKeepsEnhancedImageAtZoomAndRotation() async throws {
         let window = show(Color.black, size: CGSize(width: 390, height: 844))
         let canvas = ZoomPageView(frame: window.bounds)
         window.addSubview(canvas)
@@ -28,8 +28,9 @@ final class ReaderChecks: XCTestCase {
         canvas.layoutIfNeeded()
         canvas.scroll.setZoomScale(canvas.scroll.minimumZoomScale * 2, animated: false)
         canvas.scheduleDetail()
-        let sharper = await wait(8) { self.all(UIImageView.self, in: canvas).filter { $0.image != nil }.count >= 2 }
-        XCTAssertTrue(sharper)
+        try await Task.sleep(for: .milliseconds(750))
+        XCTAssertEqual(all(UIImageView.self, in: canvas).filter { $0.image != nil }.count, 1,
+                       "Zoom must keep the full-resolution enhanced page visible without a softer overlay")
         canvas.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
         canvas.layoutIfNeeded()
         XCTAssertEqual(canvas.scroll.zoomScale / canvas.scroll.minimumZoomScale, 2, accuracy: 0.1)
@@ -86,6 +87,17 @@ final class ReaderChecks: XCTestCase {
             XCTAssertEqual(native.width, size)
             let enlarged = try XCTUnwrap(PageEnhancer.enhance(decoded, targetLongSide: 256))
             XCTAssertEqual(enlarged.width, size * 2)
+            let enlargedSize = size * 2
+            let zoom = try XCTUnwrap(CGContext(data: nil, width: enlargedSize, height: enlargedSize,
+                bitsPerComponent: 8, bytesPerRow: enlargedSize, space: gray, bitmapInfo: CGImageAlphaInfo.none.rawValue))
+            zoom.draw(enlarged, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
+            let ink = try XCTUnwrap(zoom.data).assumingMemoryBound(to: UInt8.self)
+            let baseline = try XCTUnwrap(PageEnhancer.enhance(decoded, targetLongSide: 256, strength: 0))
+            let center = 64 * enlargedSize + 64
+            let cleanedInk = Int(min(ink[center], ink[center + 1]))
+            zoom.draw(baseline, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
+            XCTAssertLessThanOrEqual(cleanedInk, Int(min(ink[center], ink[center + 1])) + 10,
+                                     "Cleanup must preserve enlarged thin-ink contrast")
             let output = try bitmap()
             output.draw(native, in: CGRect(x: 0, y: 0, width: size, height: size))
             let values = try XCTUnwrap(output.data).assumingMemoryBound(to: UInt8.self)

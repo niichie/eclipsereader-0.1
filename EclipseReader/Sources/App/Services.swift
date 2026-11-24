@@ -180,6 +180,23 @@ struct CoverTint: Sendable, Equatable {
 enum PageEnhancer {
     nonisolated(unsafe) static let context = CIContext(options: [.cacheIntermediates: false])
 
+    static func resample(_ source: CIImage, scale: CGFloat, strength: Double?) -> CIImage {
+        let input = source.clampedToExtent()
+        var image = input
+        if let strength, strength > 0 {
+            let clean = input.applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": strength, "inputSharpness": 0.0])
+            // Protect both sides of fine strokes while cleaning low-contrast paper texture.
+            let edges = input.applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 4.0])
+                .applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: 1.0])
+            image = input.applyingFilter("CIBlendWithMask", parameters: [
+                kCIInputBackgroundImageKey: clean, kCIInputMaskImageKey: edges
+            ])
+        }
+        return scale == 1 ? image : image.applyingFilter("CILanczosScaleTransform", parameters: [
+            kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0
+        ])
+    }
+
     static func enhance(_ image: CGImage, targetLongSide: Double, strength: Double = 0.035) -> CGImage? {
         let width = Double(image.width)
         let height = Double(image.height)
@@ -189,11 +206,7 @@ enum PageEnhancer {
         guard pixels <= 8_000_000, long <= 16_384 else { return nil }
         let scale = min(2, max(1, targetLongSide / long), sqrt(8_000_000 / pixels), 16_384 / long)
         let input = CIImage(cgImage: image)
-        let clean = input.clampedToExtent()
-            .applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": strength, "inputSharpness": 0.0])
-        let output = scale > 1 ? clean.applyingFilter("CILanczosScaleTransform", parameters: [
-            kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0
-        ]) : clean
+        let output = resample(input, scale: scale, strength: strength)
         let bounds = CGRect(x: 0, y: 0, width: floor(width * scale), height: floor(height * scale))
         return context.createCGImage(output, from: bounds)
     }
