@@ -159,6 +159,21 @@ final class LiveProbeTests: XCTestCase {
         }
     }
 
+    func testSimilarSeries() async {
+        for title in ["Berserk", "Solo Leveling", "Frieren"] {
+            _ = await timed("AniList similar to \(title)", { () async throws -> Data in
+                var request = URLRequest(url: AniListAPI.endpoint)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try AniListAPI.body(AniListAPI.similarQuery, variables: ["search": title])
+                return try await URLSession.shared.data(for: request).0
+            }) { data in
+                guard let result = try? AniListAPI.parseSimilar(data) else { return (false, String(data: data.prefix(300), encoding: .utf8) ?? "") }
+                return (result.items.count >= 3, "\(result.matched ?? "?"): \(result.items.count): " + result.items.prefix(5).map { "\($0.title) \($0.score ?? 0)%" }.joined(separator: ", "))
+            }
+        }
+    }
+
     // MARK: Diagnostics: what the broken sources actually send back
 
     private func body(_ address: String, ua: String? = "iphone", accept: String? = nil, headers: [String: String] = [:]) async -> (Int, String, String) {

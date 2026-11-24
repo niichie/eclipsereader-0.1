@@ -184,6 +184,21 @@ final class ReaderChecks: XCTestCase {
         XCTAssertGreaterThan(series.chapters.count, 100)
     }
 
+    /// Neko-style merge: a MangaDex entry with nothing to read gets its chapters filled from another site.
+    func testMissingChaptersAreFilledFromAnotherSite() async throws {
+        let library = model()
+        let series = MangaSeries(id: "check-merge-jjk", url: URL(string: "https://mangadex.org/title/c52b2ce3-7f95-469c-96b0-479524fb7a1a")!,
+                                 title: "Jujutsu Kaisen", kind: .web, chapters: [])
+        library.state.series = (library.state.series ?? []).filter { $0.id != series.id } + [series]
+        defer { library.state.series = library.state.series?.filter { $0.id != series.id } }
+        let result = await library.fillMissing(series)
+        let after = library.state.series?.first { $0.id == series.id }
+        print("CHECK|merge|\(result.map { "\($0.count) from \($0.host)" } ?? "none")|merged \(after?.merged?.absoluteString ?? "-")")
+        XCTAssertGreaterThan(result?.count ?? 0, 100, "no chapters were filled in")
+        XCTAssertNotNil(after?.merged)
+        XCTAssertTrue(after?.chapters.allSatisfy { !($0.url.host ?? "").contains("mangadex") } ?? false)
+    }
+
     /// Discover and "Because you read" only recommend titles MangaDex can actually show.
     func testRecommendationsAreReadable() async throws {
         let http = WebsiteHTTPClient()
