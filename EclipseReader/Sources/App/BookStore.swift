@@ -167,9 +167,10 @@ extension LibraryModel {
         if let downloadURL, let saved = allSeries.first(where: { $0.bookDownloadURL == downloadURL }) {
             if !saved.isCatalogBookPreview {
                 await BookStore.shared.delete(file)
-                return saved
+                return addToShelf ? addToLibrary(saved) : saved
             }
             var downloaded = saved
+            if addToShelf { downloaded.inLibrary = true }
             downloaded.url = series.url
             downloaded.chapters = chapters
             downloaded.summary = document.summary
@@ -205,11 +206,15 @@ extension LibraryModel {
     /// Downloads a free book (Project Gutenberg EPUB) straight into the library.
     /// Downloads a book into the library, trying Project Gutenberg's mirror when gutenberg.org is down.
     func downloadBook(_ url: URL) async throws -> MangaSeries {
-        if let saved = allSeries.first(where: { $0.bookDownloadURL == url && !$0.isCatalogBookPreview }) { return saved }
+        if let saved = allSeries.first(where: { $0.bookDownloadURL == url && !$0.isCatalogBookPreview }) { return addToLibrary(saved) }
         let client = WebsiteHTTPClient()
         var lastError: Error = SourceError.unavailable(0)
         for candidate in [url] + FreeBooks.mirrors(for: url) {
-            do { return try await importBook(try await client.downloadFile(candidate), addToShelf: false, downloadURL: url) }
+            do {
+                let file = try await client.downloadFile(candidate)
+                defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+                return try await importBook(file, downloadURL: url)
+            }
             catch { lastError = error }
         }
         throw lastError

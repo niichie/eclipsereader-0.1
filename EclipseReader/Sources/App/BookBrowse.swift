@@ -17,18 +17,7 @@ final class BookSearchModel: ObservableObject {
             tasks.append(Task { [weak self] in
                 let phase: Phase
                 do { phase = .done(try await withDeadline(14) { try await catalog.search(term) }) }
-                catch {
-                    let siteError = error
-                    switch catalog {
-                    case .anna, .zlibrary, .mobilism, .unglue:
-                        let page = catalog.searchURL(term)
-                        do {
-                            let html = try await PageRenderer.searchHTML(for: page)
-                            phase = .done(try catalog.results(html, page: page, query: term))
-                        } catch { phase = .failed(Self.explain(siteError, site: catalog.rawValue)) }
-                    default: phase = .failed(Self.explain(siteError, site: catalog.rawValue))
-                    }
-                }
+                catch { phase = .failed(Self.explain(error, site: catalog.rawValue)) }
                 guard !Task.isCancelled, self?.query == term else { return }
                 self?.phases[catalog] = phase
             })
@@ -103,7 +92,7 @@ struct BooksBrowseSection: View {
             if externalQuery == nil {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Boring books without pictures").font(.title3.weight(.bold))
-                    Text("Browse and download free books").font(.footnote).foregroundStyle(.secondary)
+                    Text("Download public-domain EPUBs or import a book from Files.").font(.footnote).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -117,9 +106,10 @@ struct BooksBrowseSection: View {
                 }
                 .padding(12).eclipseCard(cornerRadius: 14)
             }
+            BookFileImport { opened = $0 }
             if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
             if !search.query.isEmpty {
-                BookSearchResults(search: search, busyID: busyID, browse: { browsing = BrowseTarget(url: $0) }, pick: open)
+                BookSearchResults(search: search, busyID: busyID, openLocal: { opened = $0 }, browse: { browsing = BrowseTarget(url: $0) }, pick: open)
             } else if !popular.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Popular free classics").font(.headline)
@@ -187,6 +177,7 @@ struct BookSearchResults: View {
     @EnvironmentObject private var model: LibraryModel
     @ObservedObject var search: BookSearchModel
     var busyID: String?
+    let openLocal: (MangaSeries) -> Void
     let browse: (URL) -> Void
     let pick: (FreeBook, Bool) -> Void
     var body: some View {
@@ -195,7 +186,7 @@ struct BookSearchResults: View {
             if !mine.isEmpty {
                 Text("In your library").font(.headline)
                 ForEach(mine) { series in
-                    Text("\(series.title)\(series.author.map { " · \($0)" } ?? "")").font(.subheadline)
+                    Button { openLocal(series) } label: { Text("\(series.title)\(series.author.map { " · \($0)" } ?? "")").font(.subheadline) }
                 }
             }
             ForEach(BookCatalog.allCases.sorted { rank($0) < rank($1) }, id: \.self) { catalog in
@@ -259,8 +250,9 @@ struct BookSearchSheet: View {
                         TextField("Title or author", text: $text).submitLabel(.search).onSubmit { search.run(text) }
                     }
                     .padding(.horizontal, 14).frame(height: 50).eclipseCard(cornerRadius: 14)
+                    BookFileImport { opened = $0 }
                     if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
-                    BookSearchResults(search: search, busyID: busyID, browse: { browsing = BrowseTarget(url: $0) }, pick: open)
+                    BookSearchResults(search: search, busyID: busyID, openLocal: { opened = $0 }, browse: { browsing = BrowseTarget(url: $0) }, pick: open)
                 }
                 .padding(20).frame(maxWidth: 900).frame(maxWidth: .infinity)
             }
@@ -287,5 +279,26 @@ struct BookSearchSheet: View {
         } else if let page = book.page {
             browsing = BrowseTarget(url: page)
         }
+    }
+}
+
+private struct BookFileImport: View {
+    @EnvironmentObject private var model: LibraryModel
+    @State private var choosing = false
+    @State private var error: String?
+    let opened: (MangaSeries) -> Void
+    var body: some View {
+        Button("Import book from Files") { choosing = true }
+            .fileImporter(isPresented: $choosing, allowedContentTypes: BookLink.types) { result in
+                Task {
+                    do {
+                        let url = try result.get()
+                        opened(try await model.importFiles([url], copy: true))
+                    } catch let failure as CocoaError where failure.code == .userCancelled {
+                        return
+                    } catch { self.error = error.localizedDescription }
+                }
+            }
+        if let error { Text(error).font(.footnote).foregroundStyle(.orange) }
     }
 }

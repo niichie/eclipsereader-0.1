@@ -190,10 +190,14 @@ extension WebsiteHTTPClient {
             try? FileManager.default.removeItem(at: file)
             throw BookReaderError.unreadable("The site showed a web page instead of the book. Open it in the browser and download it there.")
         }
-        var name = http.suggestedFilename ?? url.lastPathComponent
-        if (name as NSString).pathExtension.isEmpty {
-            let mime = http.mimeType ?? ""
-            name += mime.contains("epub") ? ".epub" : mime.contains("pdf") ? ".pdf" : mime.contains("mobi") ? ".mobi" : ""
+        var name = ((http.suggestedFilename ?? url.lastPathComponent) as NSString).lastPathComponent
+        if name.isEmpty || name == "." || name == ".." { name = "Book" }
+        let ext = (name as NSString).pathExtension.lowercased()
+        if BookFormat.from(fileExtension: ext) == nil && ext != "pdf" {
+            let sourceExtension = url.pathExtension.lowercased()
+            if http.mimeType == "application/epub+zip" || url.lastPathComponent.contains(".epub3.") { name += ".epub" }
+            else if BookFormat.from(fileExtension: sourceExtension) != nil { name += "." + sourceExtension }
+            else if http.mimeType == "application/pdf" { name += ".pdf" }
         }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("book-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

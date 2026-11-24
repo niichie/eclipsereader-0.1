@@ -2,18 +2,12 @@ import XCTest
 @testable import ReaderCore
 
 final class SearchTests: XCTestCase {
-    func testBookCatalogResultPagesAndBlockedSources() throws {
-        let libgen = BookCatalog.libgen
-        let row = #"<tr><td><a title="2026<br>edition" href="edition.php?id=42">Red Rising <i></i></a></td><td>Pierce Brown</td></tr>"#
-        let books = try libgen.results(row, page: libgen.searchURL("Pierce Brown"), query: "Pierce Brown")
-        XCTAssertEqual(books.first?.title, "Red Rising")
-        XCTAssertEqual(books.first?.author, "Pierce Brown")
-        XCTAssertNil(books.first?.download)
-        let anna = BookCatalog.anna
-        let link = #"<a href="/md5/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">Red Rising</a>"#
-        XCTAssertEqual(try anna.results(link, page: anna.searchURL("Red Rising"), query: "Red Rising").count, 1)
-        XCTAssertThrowsError(try anna.results("<title>Checking your browser</title>", page: anna.home, query: "Pierce Brown"))
-        XCTAssertEqual(Set(BookCatalog.allCases.map { $0.searchURL("Pierce Brown").absoluteString }).count, BookCatalog.allCases.count)
+    func testBookCatalogSearchURLsIncludeQuery() {
+        for catalog in BookCatalog.allCases {
+            let url = catalog.searchURL("Mary Shelley")
+            XCTAssertEqual(url.host, catalog.home.host)
+            XCTAssertTrue(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.value == "Mary Shelley" } == true)
+        }
     }
 
     func testWordPressSearchCards() {

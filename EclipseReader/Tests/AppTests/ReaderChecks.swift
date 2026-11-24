@@ -307,6 +307,49 @@ final class ReaderChecks: XCTestCase {
     // MARK: Books
 
     /// Every page of every section is accounted for: pagination never drops text.
+    func testCatalogDownloadsJoinLibraryAndOpen() async throws {
+        let library = model()
+        let original = library.state
+        defer { library.state = original; library.save() }
+        let samples = [
+            ("Frankenstein", Self.books[0].1),
+            ("Alice", "https://www.gutenberg.org/ebooks/11.epub3.images"),
+            ("Pan Tadeusz", "https://wolnelektury.pl/media/book/epub/pan-tadeusz.epub")
+        ]
+        for (title, address) in samples {
+            let url = try XCTUnwrap(URL(string: address))
+            let book = FreeBook(id: address, title: title, author: nil, cover: nil, download: url, page: url, detail: nil, source: "")
+            let preview = library.previewBook(book, page: url, download: url)
+            let saved = try await library.downloadBook(url)
+            XCTAssertEqual(saved.id, preview.id)
+            XCTAssertTrue(saved.isLibraryMember)
+            let again = try await library.downloadBook(url)
+            XCTAssertEqual(again.id, saved.id)
+            XCTAssertEqual(library.librarySeries.filter { $0.id == saved.id }.count, 1)
+            let chapter = try XCTUnwrap(saved.chapters.first)
+            let window = show(BookReaderView(chapter: chapter).environmentObject(library), size: CGSize(width: 390, height: 844))
+            let readable = await wait(30) { self.all(BookPageView.self, in: window).contains { $0.text.length > 0 } }
+            window.isHidden = true
+            XCTAssertTrue(readable, title)
+        }
+    }
+
+    func testImportedFileJoinsLibraryAndOpens() async throws {
+        let library = model()
+        let original = library.state
+        defer { library.state = original; library.save() }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        try "Once upon a time, a reader opened a book.".write(to: url, atomically: true, encoding: .utf8)
+        let saved = try await library.importFiles([url], copy: true)
+        try FileManager.default.removeItem(at: url)
+        XCTAssertTrue(library.librarySeries.contains { $0.id == saved.id })
+        let chapter = try XCTUnwrap(saved.chapters.first)
+        let window = show(BookReaderView(chapter: chapter).environmentObject(library), size: CGSize(width: 390, height: 844))
+        let readable = await wait(30) { self.all(BookPageView.self, in: window).contains { $0.text.length > 0 } }
+        window.isHidden = true
+        XCTAssertTrue(readable)
+    }
+
     func testRealBooksTypesetCompletely() async throws {
         let library = model()
         for (name, address) in Self.books {

@@ -374,7 +374,7 @@ struct MangaBrowserView: View {
             browser.downloaded = { file in
                 Task {
                     do {
-                        let series = try await model.importFiles([file], copy: true, addToShelf: false)
+                        let series = try await model.importFiles([file], copy: true)
                         lastAdded = series
                         show("Downloaded \(series.title)")
                     } catch {
