@@ -26,11 +26,14 @@ final class ReaderChecks: XCTestCase {
         let loaded = await wait(12) { ready }
         XCTAssertTrue(loaded)
         canvas.layoutIfNeeded()
+        let pageView = try XCTUnwrap(canvas.viewForZooming(in: canvas.scroll) as? UIImageView)
+        let enhancedImage = try XCTUnwrap(pageView.image)
+        let overlay = try XCTUnwrap(pageView.subviews.compactMap { $0 as? UIImageView }.first)
         canvas.scroll.setZoomScale(canvas.scroll.minimumZoomScale * 2, animated: false)
         canvas.scheduleDetail()
         try await Task.sleep(for: .milliseconds(750))
-        XCTAssertEqual(all(UIImageView.self, in: canvas).filter { $0.image != nil }.count, 1,
-                       "Zoom must keep the full-resolution enhanced page visible without a softer overlay")
+        XCTAssertTrue(pageView.image === enhancedImage)
+        XCTAssertNil(overlay.image, "The zoom tile must leave the full-resolution enhanced page visible")
         canvas.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
         canvas.layoutIfNeeded()
         XCTAssertEqual(canvas.scroll.zoomScale / canvas.scroll.minimumZoomScale, 2, accuracy: 0.1)
