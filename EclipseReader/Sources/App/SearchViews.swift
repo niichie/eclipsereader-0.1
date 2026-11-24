@@ -381,3 +381,78 @@ struct GlobalSearchSheet: View {
         }
     }
 }
+
+/// "Similar series": what AniList readers recommend for this one (Neko-style), best rated first.
+/// Tap one to find it on every site.
+struct SimilarSheet: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    @State private var items: [AniListMedia] = []
+    @State private var matched: String?
+    @State private var loading = true
+    @State private var failure: String?
+    @State private var searching: LibraryView.QuoteSearch?
+    var body: some View {
+        NavigationStack {
+            GeometryReader { geometry in
+                let columns = max(2, Int((geometry.size.width - 24) / 128))
+                ScrollView {
+                    if loading {
+                        ProgressView().padding(.top, 60).frame(maxWidth: .infinity)
+                    } else if let failure {
+                        ContentUnavailableView("Couldn’t load recommendations", systemImage: "wifi.exclamationmark", description: Text(failure))
+                    } else if items.isEmpty {
+                        ContentUnavailableView("No recommendations yet", systemImage: "sparkles",
+                                               description: Text("AniList readers haven’t recommended anything for \(matched ?? title) yet."))
+                    } else {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: columns), spacing: 16) {
+                            ForEach(items) { item in
+                                Button { searching = LibraryView.QuoteSearch(query: item.title) } label: { card(item) }
+                                    .buttonStyle(PressableStyle())
+                            }
+                        }
+                        .padding(12)
+                        Text("Recommendations from AniList readers. Tap one to find it on every site.")
+                            .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.bottom, 20)
+                    }
+                }
+            }
+            .background(EclipseBackground())
+            .navigationTitle("Like \(matched ?? title)").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            .sheet(item: $searching) { item in GlobalSearchSheet(query: item.query).environmentObject(model) }
+            .task { await load() }
+        }
+    }
+    private func card(_ item: AniListMedia) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            CoverView(url: item.cover, referer: nil)
+                .aspectRatio(0.7, contentMode: .fill)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .topTrailing) {
+                    if let score = item.score {
+                        Text("\(score)%").font(.caption2.weight(.heavy)).monospacedDigit()
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(.black.opacity(0.7), in: Capsule()).padding(6)
+                    }
+                }
+            Text(item.title).font(.footnote.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+            Text([item.kind, item.year.map(String.init)].compactMap { $0 }.joined(separator: " · "))
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .foregroundStyle(.primary)
+    }
+    private func load() async {
+        defer { loading = false }
+        do {
+            let data = try await AniList.post(AniListAPI.similarQuery, variables: ["search": title], auth: false)
+            let result = try AniListAPI.parseSimilar(data)
+            matched = result.matched
+            items = result.items
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+}

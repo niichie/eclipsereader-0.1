@@ -38,3 +38,30 @@ final class AniListTests: XCTestCase {
         XCTAssertEqual(AniListAPI.update(after: 5, current: AniListEntry(progress: 2, status: "REPEATING"), total: 40)?.status, "REPEATING")
     }
 }
+
+final class SimilarAndMergeTests: XCTestCase {
+    func testSimilarSeriesFromAniList() throws {
+        let json = #"{"data":{"Media":{"id":30002,"title":{"english":null,"romaji":"Berserk"},"recommendations":{"nodes":[{"rating":412,"mediaRecommendation":{"id":30656,"title":{"english":"Vagabond","romaji":"Vagabond"},"coverImage":{"large":"https://s4.anilist.co/v.jpg"},"averageScore":91,"format":"MANGA","countryOfOrigin":"JP","isAdult":false,"startDate":{"year":1998}}},{"rating":3,"mediaRecommendation":{"id":9,"title":{"romaji":"Adult thing"},"isAdult":true}},{"rating":0,"mediaRecommendation":{"id":10,"title":{"romaji":"Unrated"}}}]}}}}"#
+        let result = try AniListAPI.parseSimilar(Data(json.utf8))
+        XCTAssertEqual(result.matched, "Berserk")
+        XCTAssertEqual(result.items.map(\.title), ["Vagabond"])
+        XCTAssertEqual(result.items.first?.score, 91)
+        XCTAssertEqual(result.items.first?.kind, "Manga")
+    }
+
+    func testMergeFillsOnlyTheGaps() {
+        func ch(_ host: String, _ n: String) -> Chapter { Chapter(url: URL(string: "https://\(host)/c/\(n)")!, title: "Chapter \(n)", number: n) }
+        let main = [ch("mangadex.org", "1"), ch("mangadex.org", "2"), ch("mangadex.org", "5")]
+        let other = [ch("weebcentral.com", "1"), ch("weebcentral.com", "2"), ch("weebcentral.com", "3"), ch("weebcentral.com", "4"), ch("weebcentral.com", "5"), ch("weebcentral.com", "5.5")]
+        XCTAssertEqual(ChapterMerge.missing(from: main, in: other).map(\.number), ["3", "4", "5.5"])
+        let merged = ChapterMerge.combine(main: main, filler: other, mainHost: "mangadex.org")
+        XCTAssertEqual(merged.map(\.number), ["1", "2", "3", "4", "5", "5.5"])
+        XCTAssertEqual(merged.filter { $0.url.host == "weebcentral.com" }.count, 3)
+        // MangaDex later posts chapter 3: the filler copy gives way, unless it's being read.
+        let later = merged + [ch("mangadex.org", "3")]
+        XCTAssertEqual(ChapterMerge.combine(main: later, filler: other, mainHost: "mangadex.org")
+            .filter { $0.number == "3" }.map { $0.url.host }, ["mangadex.org"])
+        XCTAssertEqual(ChapterMerge.combine(main: later, filler: other, mainHost: "mangadex.org", keep: { $0.url.host == "weebcentral.com" })
+            .filter { $0.number == "3" }.count, 2)
+    }
+}

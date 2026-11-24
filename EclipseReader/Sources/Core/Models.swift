@@ -316,10 +316,41 @@ public struct MangaSeries: Codable, Hashable, Identifiable, Sendable {
     public var summary: String?
     /// The writer, for books.
     public var author: String?
+    /// A second site that fills in chapters this one is missing (Neko's "merge"), checked on every update.
+    public var merged: URL?
     public init(id: String, url: URL, title: String, cover: URL? = nil, kind: Kind, chapters: [Chapter], added: Date = Date(),
-                summary: String? = nil, author: String? = nil) {
+                summary: String? = nil, author: String? = nil, merged: URL? = nil) {
         self.id = id; self.url = url; self.title = title; self.cover = cover; self.kind = kind; self.chapters = chapters; self.added = added
-        self.summary = summary; self.author = author
+        self.summary = summary; self.author = author; self.merged = merged
+    }
+}
+
+/// Fills the gaps in one site's chapter list with another's (Neko-style merging).
+public enum ChapterMerge {
+    /// A chapter's number as a comparable key ("12", "12.5").
+    public static func key(_ chapter: Chapter) -> String? {
+        let value = Double(chapter.number) ?? ChapterOrder.number(chapter.title) ?? ChapterOrder.number(chapter.url.path)
+        return value.map { $0 == $0.rounded() ? String(Int($0)) : String($0) }
+    }
+    /// The other site's chapters whose numbers the main list doesn't have.
+    public static func missing(from main: [Chapter], in other: [Chapter]) -> [Chapter] {
+        let have = Set(main.compactMap(key))
+        var seen = Set<String>()
+        return other.filter { chapter in
+            guard let k = key(chapter), !have.contains(k) else { return false }
+            return seen.insert(k).inserted
+        }
+    }
+    /// Main chapters, plus filler chapters for numbers the main site lacks, in reading order.
+    /// A filler chapter is dropped once the main site has its number, unless `keep` says otherwise (reading progress).
+    public static func combine(main: [Chapter], filler: [Chapter], mainHost: String?, keep: (Chapter) -> Bool = { _ in false }) -> [Chapter] {
+        let ownHost = mainHost?.lowercased()
+        let mainOnly = main.filter { $0.url.host?.lowercased() == ownHost }
+        let mainNumbers = Set(mainOnly.compactMap(key))
+        let oldFiller = main.filter { $0.url.host?.lowercased() != ownHost }
+        let keptFiller = oldFiller.filter { chapter in key(chapter).map { !mainNumbers.contains($0) } ?? true || keep(chapter) }
+        let newFiller = missing(from: mainOnly + keptFiller, in: filler)
+        return ChapterOrder.sorted(mainOnly + keptFiller + newFiller)
     }
 }
 

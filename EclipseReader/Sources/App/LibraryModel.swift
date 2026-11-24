@@ -373,6 +373,43 @@ final class LibraryModel: ObservableObject {
         }
         return nil
     }
+    // MARK: Merging (fill missing chapters from another site)
+
+    /// Finds the same series on another site and adds the chapters this one is missing.
+    /// Returns how many were added and from where (nil when no site had any).
+    func fillMissing(_ series: MangaSeries) async -> (count: Int, host: String)? {
+        guard series.kind == .web, series.id != Self.berserkID else { return nil }
+        let ownHost = series.url.host?.lowercased()
+        let sources = GlobalSearchModel.sources(saved: state.sites ?? [])
+            .filter { source in ownHost.map { !$0.hasSuffix(source.host) } ?? true }
+        var best: (url: URL, chapters: [Chapter])?
+        for source in sources {
+            guard let hits = try? await GlobalSearch.search(source, query: series.title),
+                  let match = hits.first(where: { Discover.sameTitle($0.title, series.title) }),
+                  let found = try? await inspectAny(match.url) else { continue }
+            let missing = ChapterMerge.missing(from: series.chapters, in: found.chapters)
+            if missing.count > (best.map { ChapterMerge.missing(from: series.chapters, in: $0.chapters).count } ?? 0) {
+                best = (match.url, found.chapters)
+            }
+        }
+        guard let best, var list = state.series, let i = list.firstIndex(where: { $0.id == series.id }) else { return nil }
+        let before = Set(list[i].chapters.map(\.id))
+        list[i].merged = best.url
+        list[i].chapters = ChapterMerge.combine(main: list[i].chapters, filler: best.chapters, mainHost: list[i].url.host,
+                                                keep: { self.state.progress[$0.id] != nil })
+        state.series = list
+        save()
+        return (list[i].chapters.filter { !before.contains($0.id) }.count, best.url.host?.replacingOccurrences(of: "www.", with: "") ?? "another site")
+    }
+    func stopMerging(_ series: MangaSeries) {
+        guard var list = state.series, let i = list.firstIndex(where: { $0.id == series.id }) else { return }
+        let ownHost = list[i].url.host?.lowercased()
+        list[i].merged = nil
+        list[i].chapters = list[i].chapters.filter { $0.url.host?.lowercased() == ownHost || state.progress[$0.id] != nil }
+        state.series = list
+        save()
+    }
+
     // MARK: Migration (a site died or moved)
 
     /// A chapter's number as a comparable key ("12", "12.5"), from its number or its title.
@@ -460,8 +497,15 @@ final class LibraryModel: ObservableObject {
         let found = try await inspectAny(series.url)
         guard var list = state.series, let i = list.firstIndex(where: { $0.id == series.id }) else { return }
         let known = Set(list[i].chapters.map { LinkedSource.key($0.url) })
-        let fresh = found.chapters.filter { !known.contains(LinkedSource.key($0.url)) }
+        var fresh = found.chapters.filter { !known.contains(LinkedSource.key($0.url)) }
         if !fresh.isEmpty { list[i].chapters = ChapterOrder.sorted(list[i].chapters + fresh) }
+        // A merged second site fills the gaps (and filler chapters give way once the main site has them).
+        if let merged = list[i].merged, let other = try? await inspectAny(merged) {
+            let before = Set(list[i].chapters.map(\.id))
+            list[i].chapters = ChapterMerge.combine(main: list[i].chapters, filler: other.chapters, mainHost: list[i].url.host,
+                                                    keep: { self.state.progress[$0.id] != nil })
+            fresh += list[i].chapters.filter { !before.contains($0.id) && !fresh.contains($0) }
+        }
         if list[i].cover == nil { list[i].cover = found.cover }
         if list[i].summary == nil { list[i].summary = found.summary }
         state.series = list

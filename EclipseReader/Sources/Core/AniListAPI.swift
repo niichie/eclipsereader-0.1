@@ -8,8 +8,13 @@ public struct AniListMedia: Identifiable, Hashable, Sendable {
     public let chapters: Int?
     public let format: String?
     public let year: Int?
-    public init(id: Int, title: String, cover: URL?, chapters: Int?, format: String?, year: Int?) {
+    /// AniList readers' average score (0–100).
+    public var score: Int? = nil
+    /// Manga, Manhwa or Manhua.
+    public var kind: String? = nil
+    public init(id: Int, title: String, cover: URL?, chapters: Int?, format: String?, year: Int?, score: Int? = nil, kind: String? = nil) {
         self.id = id; self.title = title; self.cover = cover; self.chapters = chapters; self.format = format; self.year = year
+        self.score = score; self.kind = kind
     }
 }
 
@@ -57,6 +62,36 @@ public enum AniListAPI {
     mutation ($id: Int, $progress: Int, $status: MediaListStatus) {
       SaveMediaListEntry(mediaId: $id, progress: $progress, status: $status) { id progress status } }
     """
+
+    /// Readers' recommendations for a series ("if you liked this…"), best rated first.
+    public static let similarQuery = """
+    query ($search: String) { Media(search: $search, type: MANGA, sort: SEARCH_MATCH) { id title { english romaji }
+      recommendations(sort: RATING_DESC, perPage: 18) { nodes { rating mediaRecommendation {
+        id title { english romaji } coverImage { large } averageScore format countryOfOrigin isAdult startDate { year } } } } } }
+    """
+    /// The recommended series (adult titles left out), and the title AniList matched.
+    public static func parseSimilar(_ data: Data) throws -> (matched: String?, items: [AniListMedia]) {
+        let media = try dataObject(data)["Media"] as? [String: Any]
+        let names = media?["title"] as? [String: Any]
+        let matched = (names?["english"] as? String) ?? (names?["romaji"] as? String)
+        let nodes = ((media?["recommendations"] as? [String: Any])?["nodes"] as? [[String: Any]]) ?? []
+        var seen = Set<Int>()
+        let items = nodes.compactMap { node -> AniListMedia? in
+            guard (node["rating"] as? Int ?? 0) > 0, let item = node["mediaRecommendation"] as? [String: Any],
+                  let id = item["id"] as? Int, item["isAdult"] as? Bool != true, seen.insert(id).inserted else { return nil }
+            let titles = item["title"] as? [String: Any]
+            let title = (titles?["english"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (titles?["romaji"] as? String) ?? "Untitled"
+            let cover = ((item["coverImage"] as? [String: Any])?["large"] as? String).flatMap(URL.init(string:))
+            let kind: String = switch item["countryOfOrigin"] as? String {
+            case "KR": "Manhwa"
+            case "CN", "TW": "Manhua"
+            default: "Manga"
+            }
+            return AniListMedia(id: id, title: title, cover: cover, chapters: nil, format: item["format"] as? String,
+                                year: (item["startDate"] as? [String: Any])?["year"] as? Int, score: item["averageScore"] as? Int, kind: kind)
+        }
+        return (matched, items)
+    }
 
     public static func body(_ query: String, variables: [String: any Sendable] = [:]) throws -> Data {
         try JSONSerialization.data(withJSONObject: ["query": query, "variables": variables])

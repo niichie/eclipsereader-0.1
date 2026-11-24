@@ -1640,6 +1640,7 @@ struct SeriesView: View {
     @State private var newTitle = ""
     @State private var website = false
     @State private var pickingCover = false
+    @State private var similar = false
     @State private var migrating = false
     @State private var tracking = false
     /// The chapter list has been fetched at least once since this page opened (or earlier this session).
@@ -1805,7 +1806,17 @@ struct SeriesView: View {
                                 Button { website = true } label: { Label("Open website", systemImage: "safari") }
                                 ShareLink(item: series.url) { Label("Share link", systemImage: "square.and.arrow.up") }
                             }
+                            if series.kind != .book {
+                                Button { similar = true } label: { Label("Similar series…", systemImage: "sparkles.rectangle.stack") }
+                            }
                             if series.kind == .web && !builtIn {
+                                if let merged = series.merged {
+                                    Button { model.stopMerging(series); message = "Stopped filling in chapters from \(merged.host ?? "the other site")." } label: {
+                                        Label("Stop filling from \(merged.host?.replacingOccurrences(of: "www.", with: "") ?? "other site")", systemImage: "square.stack.3d.down.forward")
+                                    }
+                                } else {
+                                    Button { fillMissing(series) } label: { Label("Fill missing chapters…", systemImage: "square.stack.3d.up.badge.automatic") }
+                                }
                                 Button { migrating = true } label: { Label("Migrate to another site…", systemImage: "arrow.triangle.swap") }
                             }
                             if series.kind != .book {
@@ -1829,6 +1840,7 @@ struct SeriesView: View {
             .sheet(isPresented: $pickingCover) { CoverPicker(series: series).environmentObject(model) }
             .sheet(isPresented: $migrating) { MigrateSheet(series: series).environmentObject(model) }
             .sheet(isPresented: $tracking) { AniListLinkSheet(series: series).environmentObject(model) }
+            .sheet(isPresented: $similar) { SimilarSheet(title: series.title).environmentObject(model) }
             .alert("Rename", isPresented: $renaming) {
                 TextField("Title", text: $newTitle)
                 Button("Save") { model.rename(series, to: newTitle) }
@@ -1840,6 +1852,21 @@ struct SeriesView: View {
             }
         } else {
             ContentUnavailableView("Removed", systemImage: "books.vertical")
+        }
+    }
+    /// Neko-style merge: the same series on another site fills in the chapters this one lacks.
+    private func fillMissing(_ series: MangaSeries) {
+        updating = true
+        message = "Looking for the missing chapters on other sites…"
+        Task {
+            defer { updating = false }
+            if let result = await model.fillMissing(series) {
+                message = result.count > 0
+                    ? "Added \(result.count) missing chapter\(result.count == 1 ? "" : "s") from \(result.host). New ones are filled in on every update."
+                    : "\(result.host) has nothing this site is missing right now. It's checked again on every update."
+            } else {
+                message = "No other site has chapters this one is missing."
+            }
         }
     }
     private func update(_ series: MangaSeries) async {
