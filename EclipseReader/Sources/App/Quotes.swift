@@ -6,9 +6,7 @@ import SwiftUI
 final class SpotlightStore: ObservableObject {
     static let shared = SpotlightStore()
     @Published private(set) var manga: Spotlight?
-    @Published private(set) var book: Spotlight?
     @Published private(set) var loadingManga = false
-    @Published private(set) var loadingBook = false
     private var mangaQueue: [Spotlight] = []
 
     private static let recentKey = "spotlightRecent"
@@ -73,38 +71,12 @@ final class SpotlightStore: ObservableObject {
         UserDefaults.standard.set(calls + [now], forKey: Self.animeChanKey)
         return true
     }
-
-    // MARK: Books
-
-    func loadBook(owned: Set<String>) async {
-        guard book == nil, !loadingBook else { return }
-        await nextBook(owned: owned)
-    }
-    func nextBook(owned: Set<String>) async {
-        loadingBook = true
-        defer { loadingBook = false }
-        let skip = Set(recent).union(owned).union([book.map { QuoteFeed.workKey($0.quote.work) }].compactMap { $0 })
-        let pool = CuratedQuotes.shuffled(CuratedQuotes.books)
-        guard let quote = pool.first(where: { !skip.contains(QuoteFeed.workKey($0.work)) }) ?? pool.first else { return }
-        remember(quote.work)
-        // Free classics come from Standard Ebooks (one tap to download); others get a cover to look at.
-        let found = try? await withDeadline(8) { try await FreeBooks.standardEbooks(query: quote.work) }
-        if let free = found?.first(where: { Discover.sameTitle($0.title, quote.work) }) {
-            book = Spotlight(quote: quote, media: SpotlightMedia(id: 0, title: free.title, cover: free.cover, score: nil,
-                                                                 detail: [free.author, "Free from Standard Ebooks"].compactMap { $0 }.joined(separator: " · ")),
-                             download: free.download)
-            return
-        }
-        let cover = await BookCovers.candidates(title: quote.work, author: nil, isbn: nil).first
-        book = Spotlight(quote: quote, media: cover.map { SpotlightMedia(id: 0, title: quote.work, cover: $0, score: nil, detail: "Book") })
-    }
 }
 
 /// The launch card: a line from a top-rated series, its cover and score, and a button to start reading it.
 /// Sized to the screen: compact on phones (and the Duo's front screen), roomier on iPad.
 struct SpotlightCard: View {
     let spotlight: Spotlight
-    var isBook = false
     let width: CGFloat
     var owned = false
     var busy = false
@@ -114,9 +86,7 @@ struct SpotlightCard: View {
 
     private var compact: Bool { width < 520 }
     private var actionTitle: String {
-        if owned { return "Open \(spotlight.work)" }
-        if isBook { return spotlight.download != nil ? "Get it free" : "Find \(spotlight.work)" }
-        return "Read \(spotlight.work)"
+        owned ? "Open \(spotlight.work)" : "Read \(spotlight.work)"
     }
     private var meta: String? {
         guard let media = spotlight.media else { return nil }
@@ -149,20 +119,20 @@ struct SpotlightCard: View {
                     Button(action: read) {
                         HStack(spacing: 5) {
                             if busy { ProgressView().controlSize(.mini).tint(.black) }
-                            else { Image(systemName: isBook && spotlight.download != nil && !owned ? "arrow.down" : "book.fill") }
+                            else { Image(systemName: "book.fill") }
                             Text(actionTitle).lineLimit(1)
                         }
                         .font(.caption.weight(.bold)).padding(.horizontal, 12).frame(height: 30)
                         .background(Eclipse.highlight, in: Capsule()).foregroundStyle(.black)
                     }
                     .buttonStyle(PressableStyle()).disabled(busy)
-                    .accessibilityIdentifier(isBook ? "bookSpotlightRead" : "quoteRead")
+                    .accessibilityIdentifier("quoteRead")
                     Button(action: next) {
                         Image(systemName: "shuffle").font(.caption.weight(.bold))
                             .frame(width: 30, height: 30).background(Color.white.opacity(0.1), in: Circle())
                     }
                     .buttonStyle(PressableStyle())
-                    .accessibilityLabel(isBook ? "Another book" : "Another series")
+                    .accessibilityLabel("Another series")
                 }
                 .padding(.top, 2)
             }
@@ -183,7 +153,7 @@ struct SpotlightCard: View {
         .transition(.opacity)
         .contextMenu {
             Button(action: read) { Label(actionTitle, systemImage: "book") }
-            Button(action: next) { Label(isBook ? "Another book" : "Another series", systemImage: "shuffle") }
+            Button(action: next) { Label("Another series", systemImage: "shuffle") }
             Button(action: close) { Label("Close for now", systemImage: "xmark") }
         }
     }
@@ -211,6 +181,7 @@ struct HomeSetupSheet: View {
     @AppStorage("libraryShowDiscover") private var showDiscover = false
     @AppStorage("libraryShowBecause") private var showBecause = false
     @AppStorage("homeSetupDone") private var done = false
+    @AppStorage(Features.booksKey) private var books = false
     var body: some View {
         NavigationStack {
             Form {
@@ -228,6 +199,11 @@ struct HomeSetupSheet: View {
                     option($showContinue, "Continue reading", "Pick up where you left off in one tap.", "play.circle")
                     option($showDiscover, "Popular on MangaDex", "A row of what everyone's reading right now.", "flame")
                     option($showBecause, "Because you read…", "Series like the one you read last.", "sparkles")
+                }
+                Section {
+                    option($books, "Books too", "eclipsereader can also read normal books (EPUB, Kindle, FB2, TXT…), set like a printed book. Adds a Books tab and free classics in Browse.", "text.book.closed")
+                } footer: {
+                    Text("Manga, manhwa, manhua, webtoons and comics are always on.")
                 }
             }
             .scrollContentBackground(.hidden).background(Eclipse.surface)

@@ -53,6 +53,5 @@ final class LaunchQuoteTests: XCTestCase {
         // One line per series in a shuffle, whatever the series' quote count.
         let round = CuratedQuotes.shuffled(CuratedQuotes.manga)
         XCTAssertEqual(round.count, works.count)
-        XCTAssertGreaterThanOrEqual(Set(CuratedQuotes.books.map(\.work)).count, 25)
     }
 }

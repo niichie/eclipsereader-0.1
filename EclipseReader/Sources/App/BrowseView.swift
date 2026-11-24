@@ -35,6 +35,7 @@ enum SiteCatalog {
 }
 
 struct BrowseView: View {
+    @AppStorage(Features.booksKey) private var booksOn = false
     @EnvironmentObject private var model: LibraryModel
     @State private var address = ""
     @State private var browsing: BrowseTarget?
@@ -112,7 +113,7 @@ struct BrowseView: View {
                     section("More sites", detail: "Open a series, then tap Add to library") {
                         siteGrid(SiteCatalog.popular + SiteCatalog.official)
                     }
-                    BooksBrowseSection(browsing: $browsing, opened: $opened)
+                    if booksOn { BooksBrowseSection(browsing: $browsing, opened: $opened) }
                 }
                 .padding(20)
                 .frame(maxWidth: 900)

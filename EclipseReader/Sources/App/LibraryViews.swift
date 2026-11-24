@@ -43,7 +43,13 @@ struct RootView: View {
             }
             model.requestedChapter = chapter
         }
-        .onAppear { ControllerInput.shared.start() }
+        .onAppear {
+            ControllerInput.shared.start()
+            // Libraries that already hold books keep the Books tab when books became an option.
+            if UserDefaults.standard.object(forKey: Features.booksKey) == nil {
+                UserDefaults.standard.set(model.hasBooks, forKey: Features.booksKey)
+            }
+        }
         .task(id: model.allSeries.count) {
             SpotlightIndex.update(model.allSeries, hidden: Set(model.state.hiddenSeries ?? []))
         }
@@ -95,7 +101,6 @@ struct LibraryView: View {
     @AppStorage("libraryShowQuote") private var showQuote = true
     @State private var searchingEverywhere = false
     @State private var categoryID: String?
-    @State private var bookPickBusy = false
     @AppStorage("libraryShowBecause") private var showBecause = false
     @State private var selecting = false
     @State private var selection = Set<String>()
@@ -104,7 +109,8 @@ struct LibraryView: View {
     @State private var newCategoryName = ""
     /// Closed with × for this launch (turn it off for good in sort & display options).
     @State private var quoteClosed = false
-    @State private var bookQuoteClosed = false
+    /// Normal books are an option (Settings › Library, or the first-launch setup).
+    @AppStorage(Features.booksKey) private var booksOn = false
     @AppStorage("libraryShowDiscover") private var showDiscover = false
     @AppStorage("homeSetupDone") private var setupDone = false
     @State private var settingUp = false
@@ -134,7 +140,8 @@ struct LibraryView: View {
     private var visible: [MangaSeries] {
         let shelf = categoryID.flatMap { id in model.categories.first { $0.id == id } }.map { Set($0.seriesIDs) }
         let list = model.librarySeries.filter { series in
-            (query.isEmpty || series.title.localizedCaseInsensitiveContains(query)) && matches(series, filter)
+            (booksOn || series.kind != .book)
+                && (query.isEmpty || series.title.localizedCaseInsensitiveContains(query)) && matches(series, filter)
                 && (shelf?.contains(series.id) ?? true)
         }
         switch sort {
@@ -150,6 +157,7 @@ struct LibraryView: View {
     /// Tabs with something in them (All always shows), with counts like Mihon's categories.
     private var tabs: [(LibraryFilter, Int)] {
         LibraryFilter.allCases.compactMap { item in
+            if item == .books && !booksOn { return nil }
             let count = model.librarySeries.filter { matches($0, item) }.count
             return item == .all || count > 0 || item == filter ? (item, count) : nil
         }
@@ -180,14 +188,6 @@ struct LibraryView: View {
                                 SpotlightPlaceholder(width: contentWidth)
                             }
                         }
-                        // Books get one card too, once there are books in the library.
-                        if query.isEmpty, showQuote, !bookQuoteClosed, model.hasBooks, categoryID == nil, filter == .all || filter == .books,
-                           let spotlight = spotlights.book {
-                            SpotlightCard(spotlight: spotlight, isBook: true, width: contentWidth, owned: ownedBook(spotlight) != nil,
-                                          busy: bookPickBusy, read: { readBookSpotlight(spotlight) },
-                                          next: { Task { await spotlights.nextBook(owned: ownedKeys) } },
-                                          close: { withAnimation(.snappy) { bookQuoteClosed = true } })
-                        }
                         if query.isEmpty, showContinue, filter == .all, categoryID == nil, let chapter = model.lastChapter {
                             ContinueBar(chapter: chapter, resume: { reader = chapter },
                                         open: { openSeries = model.series(id: model.seriesID(for: chapter)) })
@@ -211,13 +211,13 @@ struct LibraryView: View {
                             }
                             .buttonStyle(PressableStyle())
                             .accessibilityIdentifier("searchEverywhere")
-                            if model.hasBooks || filter == .books {
+                            if booksOn {
                                 Button { bookSearch = QuoteSearch(query: query) } label: {
                                     HStack(spacing: 12) {
                                         Image(systemName: "text.book.closed").foregroundStyle(Eclipse.highlight)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text("Find the book “\(query)”").font(.subheadline.weight(.semibold))
-                                            Text("Project Gutenberg, Open Library and free libraries").font(.caption).foregroundStyle(.secondary)
+                                            Text("Standard Ebooks and Project Gutenberg").font(.caption).foregroundStyle(.secondary)
                                         }
                                         Spacer()
                                         Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
@@ -302,10 +302,6 @@ struct LibraryView: View {
                 guard showQuote, !ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
                 await spotlights.loadManga(owned: ownedKeys)
             }
-            .task(id: showQuote && model.hasBooks) {
-                guard showQuote, model.hasBooks, !ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
-                await spotlights.loadBook(owned: ownedKeys)
-            }
             .sheet(isPresented: $settingUp, onDismiss: { setupDone = true }) {
                 HomeSetupSheet().presentationDetents([.medium, .large])
             }
@@ -334,24 +330,10 @@ struct LibraryView: View {
         let keys = [spotlight.work, spotlight.quote.work].map(QuoteFeed.workKey)
         return model.librarySeries.first { $0.kind != .book && keys.contains(QuoteFeed.workKey($0.title)) }
     }
-    private func ownedBook(_ spotlight: Spotlight) -> MangaSeries? {
-        let keys = [spotlight.work, spotlight.quote.work].map(QuoteFeed.workKey)
-        return model.librarySeries.first { $0.kind == .book && keys.contains(QuoteFeed.workKey($0.title)) }
-    }
     /// The launch card's series: open it if it's yours, otherwise search every site for it.
     private func readSpotlight(_ spotlight: Spotlight) {
         if let owned = ownedSeries(spotlight) { openSeries = owned }
         else { quoteSearch = QuoteSearch(query: spotlight.work) }
-    }
-    /// The launch card's book: open your copy, download it when it's free, or look for it.
-    private func readBookSpotlight(_ spotlight: Spotlight) {
-        if let owned = ownedBook(spotlight) { openSeries = owned; return }
-        guard let link = spotlight.download else { readBook(spotlight.work); return }
-        bookPickBusy = true
-        Task {
-            defer { bookPickBusy = false }
-            do { openSeries = try await model.downloadBook(link) } catch { bookSearch = QuoteSearch(query: spotlight.work) }
-        }
     }
     /// A book from a quote or pick: open your copy, or look for it in the free libraries.
     private func readBook(_ title: String) {
@@ -1029,6 +1011,7 @@ struct LibrarySettingsPage: View {
     @AppStorage("libraryShowDiscover") private var showDiscover = false
     @AppStorage("libraryShowBecause") private var showBecause = false
     @AppStorage("homeSetupDone") private var setupDone = false
+    @AppStorage(Features.booksKey) private var booksOn = false
     @AppStorage("libraryTitlesOnCovers") private var titlesOnCovers = true
     @State private var alertMessage: String?
     var body: some View {
@@ -1050,6 +1033,15 @@ struct LibrarySettingsPage: View {
                 Toggle("“Because you read…” recommendations", isOn: $showBecause)
                 Button("Show the home setup again") { setupDone = false }
             }
+            Section {
+                Toggle(isOn: $booksOn) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Books too")
+                        Text("Read normal books (EPUB, Kindle, FB2, TXT and more), set like a printed book. Adds a Books tab and free classics in Browse.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } header: { Text("Books") }
             Section {
                 NavigationLink { CategoriesPage() } label: {
                     LabeledContent("Categories", value: model.categories.isEmpty ? "None" : "\(model.categories.count)")

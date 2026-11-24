@@ -28,6 +28,7 @@ actor BookStore {
 
     /// Copies a book in and reads it once (to check it opens and to learn its title and chapters).
     func importBook(_ source: URL) throws -> (file: String, document: BookDocument) {
+        UserDefaults.standard.set(true, forKey: Features.booksKey)
         let ext = source.pathExtension.lowercased()
         guard BookFormat.from(fileExtension: ext) != nil else { throw BookReaderError.unreadable("That file type can't be read as a book.") }
         let scoped = source.startAccessingSecurityScopedResource()
@@ -136,7 +137,7 @@ enum GeneratedCover {
 }
 
 extension LibraryModel {
-    /// Adds a book file to the library under "Boring books without pictures".
+    /// Adds a book file to the library under "Boring books without pictures" (and turns books on).
     func importBook(_ source: URL) async throws -> MangaSeries {
         let (file, document) = try await BookStore.shared.importBook(source)
         let id = "book-" + (file as NSString).deletingPathExtension
@@ -189,4 +190,10 @@ extension LibraryModel {
         state.bookPositions = map
     }
     var hasBooks: Bool { allSeries.contains { $0.kind == .book } }
+}
+
+/// Optional parts of the app.
+enum Features {
+    /// Normal books (EPUB, Kindle…): off unless chosen, or a book is added.
+    static let booksKey = "booksEnabled"
 }

@@ -50,40 +50,6 @@ public enum CuratedQuotes {
         q("Because I'm a genius!", "Hanamichi Sakuragi", "Slam Dunk"),
     ]
 
-    public static let books: [LaunchQuote] = [
-        q("It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.", "Jane Austen", "Pride and Prejudice"),
-        q("Call me Ishmael.", "Ishmael", "Moby-Dick"),
-        q("It was the best of times, it was the worst of times.", "Charles Dickens", "A Tale of Two Cities"),
-        q("All happy families are alike; each unhappy family is unhappy in its own way.", "Leo Tolstoy", "Anna Karenina"),
-        q("Whatever our souls are made of, his and mine are the same.", "Catherine Earnshaw", "Wuthering Heights"),
-        q("I am no bird; and no net ensnares me.", "Jane Eyre", "Jane Eyre"),
-        q("Beware; for I am fearless, and therefore powerful.", "The Creature", "Frankenstein"),
-        q("Listen to them, the children of the night. What music they make!", "Count Dracula", "Dracula"),
-        q("The only way to get rid of a temptation is to yield to it.", "Lord Henry", "The Picture of Dorian Gray"),
-        q("It's no use going back to yesterday, because I was a different person then.", "Alice", "Alice's Adventures in Wonderland"),
-        q("When you have eliminated the impossible, whatever remains, however improbable, must be the truth.", "Sherlock Holmes", "The Sign of the Four"),
-        q("All human wisdom is contained in these two words: wait and hope.", "Edmond Dantès", "The Count of Monte Cristo"),
-        q("So we beat on, boats against the current, borne back ceaselessly into the past.", "Nick Carraway", "The Great Gatsby"),
-        q("I'm not afraid of storms, for I'm learning how to sail my ship.", "Amy March", "Little Women"),
-        q("Tomorrow is always fresh, with no mistakes in it yet.", "Anne Shirley", "Anne of Green Gables"),
-        q("To be, or not to be, that is the question.", "Hamlet", "Hamlet"),
-        q("All we have to decide is what to do with the time that is given us.", "Gandalf", "The Fellowship of the Ring"),
-        q("In a hole in the ground there lived a hobbit.", "J.R.R. Tolkien", "The Hobbit"),
-        q("Fear is the mind-killer.", "Paul Atreides", "Dune"),
-        q("Live for more.", "Eo", "Red Rising"),
-        q("Break the chains.", "Darrow", "Red Rising"),
-        q("Life before death. Strength before weakness. Journey before destination.", "The First Ideal", "The Way of Kings"),
-        q("There's always another secret.", "Kelsier", "Mistborn"),
-        q("Fist my bump.", "Rocky", "Project Hail Mary"),
-        q("Don't Panic.", "Douglas Adams", "The Hitchhiker's Guide to the Galaxy"),
-        q("So it goes.", "Kurt Vonnegut", "Slaughterhouse-Five"),
-        q("It was a bright cold day in April, and the clocks were striking thirteen.", "George Orwell", "1984"),
-        q("It was a pleasure to burn.", "Ray Bradbury", "Fahrenheit 451"),
-        q("The man in black fled across the desert, and the gunslinger followed.", "Stephen King", "The Gunslinger"),
-        q("May the odds be ever in your favor.", "Effie Trinket", "The Hunger Games"),
-        q("It is our choices that show what we truly are, far more than our abilities.", "Albus Dumbledore", "Harry Potter and the Chamber of Secrets"),
-    ]
-
     /// A random line from each series, series in random order.
     public static func shuffled(_ list: [LaunchQuote]) -> [LaunchQuote] {
         Dictionary(grouping: list, by: \.work).values.shuffled().compactMap { $0.randomElement() }
