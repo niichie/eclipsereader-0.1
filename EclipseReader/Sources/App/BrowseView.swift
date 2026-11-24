@@ -134,7 +134,8 @@ struct BrowseView: View {
             // Words: search every source at once, with a web search one tap away.
             withAnimation { searchingText = trimmed }
             discoverError = nil
-            search.run(trimmed, sources: GlobalSearchModel.sources(saved: model.state.sites ?? []))
+            let sites = model.state.sites ?? []
+            search.run(trimmed, sources: GlobalSearchModel.sources(saved: sites) + (novelsOn ? GlobalSearchModel.sources(saved: sites, novels: true) : []))
         }
     }
     private func webSearch(_ text: String) {
