@@ -152,3 +152,13 @@ final class MangaDexTitleTests: XCTestCase {
         XCTAssertEqual(MangaDex.displayTitle(romaji), "Kage no Jitsuryokusha ni Naritakute!")
     }
 }
+
+final class MangaDotSearchTests: XCTestCase {
+    func testSearchAPIResults() throws {
+        let json = #"{"manga_list":[{"id":118,"title":"Solo Leveling","title_romanized":"Na Honjaman Level Up","photo":"/uploads/cover_9494d20d2f1e108e.webp","country_of_origin":"KR","chapter_count":201},{"id":5,"title":"Solo Leveling: Ragnarok","photo":"/uploads/x.webp","country_of_origin":"KR","chapter_count":40}],"pagination":{"total_results":2}}"#
+        let items = try GlobalSearch.mangaDotResults(Data(json.utf8))
+        XCTAssertEqual(items.first?.url.absoluteString, "https://mangadot.net/manga/118")
+        XCTAssertEqual(items.first?.cover?.absoluteString, "https://mangadot.net/uploads/cover_9494d20d2f1e108e.webp")
+        XCTAssertEqual(items.first?.detail, "Manhwa · 201 ch")
+    }
+}

@@ -45,6 +45,12 @@ public enum GlobalSearch {
             parts.queryItems = [URLQueryItem(name: "keyword", value: q)]
             guard let url = parts.url else { return [] }
             return strictCanvas(relevant(webtoonsResults(in: try await text(url, http: http), base: url), to: q), query: q)
+        case .site(let root) where (root.host ?? "").lowercased().hasSuffix("mangadot.net"):
+            // MangaDot builds its search page with scripts; its own search API answers directly.
+            var parts = URLComponents(string: "https://mangadot.net/api/search")!
+            parts.queryItems = [URLQueryItem(name: "search", value: q)]
+            guard let url = parts.url else { return [] }
+            return relevant(try mangaDotResults(try await http.fetch(url, referer: nil, image: false)), to: q)
         case .site(let root):
             var lastError: Error?
             for url in searchURLs(root: root, query: q) {
@@ -144,6 +150,25 @@ public enum GlobalSearch {
         }.prefix(limit).map { $0 }
     }
 
+    /// MangaDot's search API: {"manga_list":[{"id":118,"title":"Solo Leveling","photo":"/uploads/….webp",…}]}.
+    static func mangaDotResults(_ data: Data) throws -> [DiscoverItem] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = object["manga_list"] as? [[String: Any]] else { throw SourceError.unsupportedStructure }
+        return list.compactMap { entry -> DiscoverItem? in
+            guard let id = entry["id"] as? Int, let title = entry["title"] as? String,
+                  let url = URL(string: "https://mangadot.net/manga/\(id)") else { return nil }
+            let cover = (entry["photo"] as? String).flatMap { URL(string: $0.hasPrefix("/") ? "https://mangadot.net" + $0 : $0) }
+            let kind: String? = switch entry["country_of_origin"] as? String {
+            case "KR": "Manhwa"
+            case "CN", "TW": "Manhua"
+            case "JP": "Manga"
+            default: nil
+            }
+            let count = (entry["chapter_count"] as? Int).map { "\($0) ch" }
+            return DiscoverItem(id: "mangadot-\(id)", title: title, url: url, cover: cover,
+                                detail: [kind, count].compactMap { $0 }.joined(separator: " · "))
+        }
+    }
     static func weebCentralResults(in html: String) -> [DiscoverItem] {
         var seen = Set<String>()
         var items: [DiscoverItem] = []
