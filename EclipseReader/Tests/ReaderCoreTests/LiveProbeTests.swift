@@ -326,6 +326,55 @@ final class LiveProbeTests: XCTestCase {
         dump("jnc login page", "\(js) \(LinkedSource.title(in: jnc) ?? "-")")
     }
 
+    func testNovelDiagnostics3() async {
+        let app = "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"
+        for slug in ["martial-world", "ready-set-apocalypse", "beyond-the-zenith"] {
+            let (status, _, novel) = await body("https://www.wuxiaworld.com/novel/\(slug)", ua: "desktop")
+            dump("ww \(slug)", "\(status) " + links(novel, "^/novel/\(slug)/", limit: 6))
+            dump("ww \(slug) info", around(novel, #""chapterInfo":\{"#, before: 0, after: 300) + " … " + around(novel, #"firstChapter|latestChapter|"abbreviation""#, before: 50, after: 600))
+        }
+        let (_, _, chapter) = await body("https://www.wuxiaworld.com/novel/martial-world/mw-chapter-2", ua: "desktop")
+        dump("ww related", around(chapter, #"relatedChapterInfo|nextChapter"#, before: 50, after: 900))
+        dump("ww chapter flags", around(chapter, #""isTeaser"|"canRead"|"pricingInfo""#, before: 300, after: 300))
+        let (_, _, locked) = await body("https://www.wuxiaworld.com/novel/martial-world/mw-chapter-900", ua: "desktop")
+        dump("ww locked", around(locked, #"class="chapter-content"#, before: 50, after: 700) + " … " + around(locked, #""pricingInfo""#, before: 50, after: 200))
+        // J-Novel Club parts and part text
+        let (vs, _, volumes) = await body("https://labs.j-novel.club/app/v2/series/ascendance-of-a-bookworm/volumes?format=json&limit=1", ua: app, accept: "application/json")
+        if vs == 200, let volume = LinkedSource.firstMatch(#""id"\s*:\s*"(VOL-[^"]+)""#, volumes) {
+            let (ps, pt, parts) = await body("https://labs.j-novel.club/app/v2/volumes/\(volume)/parts?format=json", ua: app, accept: "application/json")
+            dump("jnc volume parts", "\(ps) \(pt) \(parts.prefix(1500))")
+            if let part = LinkedSource.firstMatch(#""id"\s*:\s*"(PRT-[^"]+)""#, parts) ?? LinkedSource.firstMatch(#""legacyId"\s*:\s*"([^"]+)""#, parts) {
+                for address in ["https://labs.j-novel.club/embed/\(part)/data.xhtml", "https://labs.j-novel.club/app/v2/parts/\(part)?format=json",
+                                "https://labs.j-novel.club/app/v2/parts/\(part)/data.xhtml"] {
+                    let (status, type, text) = await body(address, ua: app)
+                    dump("jnc part \(address.replacingOccurrences(of: "https://labs.j-novel.club", with: ""))", "\(status) \(type) \(text.prefix(900))")
+                }
+            }
+        }
+        let (cs, _, catalog) = await body("https://labs.j-novel.club/app/v2/series?format=json&limit=3&skip=0&type=NOVEL", ua: app, accept: "application/json")
+        dump("jnc series fields", "\(cs) " + around(catalog, #""cover""#, before: 100, after: 400) + " … pagination: " + around(catalog, #""pagination""#, before: 0, after: 200))
+        let (ss, _, search) = await body("https://labs.j-novel.club/app/v2/series?format=json&limit=3&q=bookworm", ua: app, accept: "application/json")
+        dump("jnc search", "\(ss) " + String(search.prefix(300)))
+        // Kakuyomu work object
+        let (_, _, ksearch) = await body("https://kakuyomu.jp/search?q=%E8%BB%A2%E7%94%9F", ua: "desktop")
+        if let id = LinkedSource.firstMatch(#"href="/works/([0-9]+)""#, ksearch) {
+            let (_, _, work) = await body("https://kakuyomu.jp/works/\(id)", ua: "desktop")
+            dump("kakuyomu work object", around(work, "\"Work:\(id)\":\\{", before: 0, after: 1800))
+            dump("kakuyomu search work", around(ksearch, "\"Work:\(id)\":\\{", before: 0, after: 600))
+        }
+        // Syosetu: second index page and a short story
+        let (_, _, page2) = await body("https://ncode.syosetu.com/n9669bk/?p=3", ua: "desktop")
+        dump("syosetu p3", around(page2, "p-eplist__subtitle", before: 0, after: 300) + " … next: " + around(page2, "c-pager__item--next", before: 80, after: 40))
+        let (_, _, shortAPI) = await body("https://api.syosetu.com/novelapi/api/?out=json&lim=1&type=t&order=hyperpoint&of=t-n-nt-ga", ua: "desktop")
+        dump("syosetu short api", String(shortAPI.prefix(300)))
+        if let code = LinkedSource.firstMatch(#""ncode":"([A-Za-z0-9]+)""#, shortAPI) {
+            let (st, _, short) = await body("https://ncode.syosetu.com/\(code.lowercased())/", ua: "desktop")
+            dump("syosetu short", "\(st) " + around(short, "js-novel-text|p-novel__title", before: 50, after: 500))
+        }
+        let (pa, _, popular) = await body("https://api.syosetu.com/novelapi/api/?out=json&lim=3&order=hyperpoint&of=t-n-w-ga-nt-g", ua: "desktop")
+        dump("syosetu popular", "\(pa) " + String(popular.prefix(500)))
+    }
+
     func testDiagnostics() async {
         for (label, ua) in [("iphone", "iphone"), ("app", "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"), ("none", nil)] as [(String, String?)] {
             let (status, type, text) = await body("https://api.mangadex.org/manga?limit=1&title=chainsaw", ua: ua, accept: "application/json")
