@@ -156,4 +156,43 @@ final class ReaderChecks: XCTestCase {
             XCTAssertNotNil(UIImage(data: data), "\(item.title): cover isn't a picture")
         }
     }
+
+    // MARK: Series with nothing to read
+
+    /// Jujutsu Kaisen on MangaDex only links to the publisher: adding it must bring the chapters from another site.
+    func testLicensedMangaDexSeriesIsAddedFromAnotherSite() async throws {
+        let library = model()
+        var request = URLRequest(url: URL(string: "https://api.mangadex.org/manga?title=Jujutsu%20Kaisen&limit=10&order%5Brelevance%5D=desc")!)
+        request.setValue(WebsiteHTTPClient.appAgent, forHTTPHeaderField: "User-Agent")
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let list = ((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [[String: Any]]) ?? []
+        let id = try XCTUnwrap(list.first {
+            ((($0["attributes"] as? [String: Any])?["title"] as? [String: String])?["en"] ?? "") == "Jujutsu Kaisen"
+        }?["id"] as? String)
+        let readableHere = await MangaDex.hasReadableChapters(id, http: WebsiteHTTPClient())
+        print("CHECK|licensed|MangaDex readable: \(String(describing: readableHere))")
+        guard case .series(let series, _) = try await library.addLink("https://mangadex.org/title/\(id)") else {
+            return XCTFail("Jujutsu Kaisen wasn't added as a series")
+        }
+        print("CHECK|licensed|added from \(series.url.absoluteString)|\(series.chapters.count) chapters|\(library.notice?.text ?? "-")")
+        if readableHere == false {
+            XCTAssertFalse(series.url.host?.contains("mangadex") ?? true, "a series with nothing to read was added from MangaDex")
+        }
+        XCTAssertGreaterThan(series.chapters.count, 100)
+    }
+
+    /// Discover and "Because you read" only recommend titles MangaDex can actually show.
+    func testRecommendationsAreReadable() async throws {
+        let http = WebsiteHTTPClient()
+        let popular = try await Discover.mangaDex(limit: 12)
+        let similar = try await Discover.similar(to: "Vinland Saga", limit: 8)
+        print("CHECK|recommend|popular: \(popular.map(\.title).joined(separator: ", "))")
+        print("CHECK|recommend|because: \(similar.map(\.title).joined(separator: ", "))")
+        XCTAssertFalse(popular.isEmpty)
+        for item in popular + similar {
+            let readable = await MangaDex.hasReadableChapters(item.id, http: http)
+            XCTAssertNotEqual(readable, false, "\(item.title) has nothing to read but was recommended")
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
 }

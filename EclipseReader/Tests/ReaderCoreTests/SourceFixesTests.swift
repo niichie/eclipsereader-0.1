@@ -140,3 +140,15 @@ final class CoverAndTextTests: XCTestCase {
         XCTAssertFalse(LinkedSource.isSocialCard(URL(string: "https://example.com/wp-content/uploads/cover-logo.jpg")!))
     }
 }
+
+final class MangaDexTitleTests: XCTestCase {
+    func testLongRomanisedTitlesUseTheShortEnglishForm() {
+        let long: [String: Any] = ["title": ["en": "Jujutsu Kaisen 0: Toukyou Toritsu Jujutsu Koutou Senmon Gakkou"],
+                                   "altTitles": [["ja": "呪術廻戦 0"], ["en": "Jujutsu Kaisen 0"], ["en": "JJK0"]]]
+        XCTAssertEqual(MangaDex.displayTitle(long), "Jujutsu Kaisen 0")
+        let plain: [String: Any] = ["title": ["en": "Jujutsu Kaisen"], "altTitles": [["en": "Sorcery Fight"], ["en": "JJK"]]]
+        XCTAssertEqual(MangaDex.displayTitle(plain), "Jujutsu Kaisen")
+        let romaji: [String: Any] = ["title": ["en": "Kage no Jitsuryokusha ni Naritakute!"], "altTitles": [["en": "The Eminence in Shadow"]]]
+        XCTAssertEqual(MangaDex.displayTitle(romaji), "Kage no Jitsuryokusha ni Naritakute!")
+    }
+}

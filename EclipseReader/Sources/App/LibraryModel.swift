@@ -14,6 +14,8 @@ final class LibraryModel: ObservableObject {
     private var downloadQueue: [Chapter] = []
     /// A page sent to the app (eclipsereader://open?url=…) to open in the browser.
     @Published var incoming: BrowseTarget?
+    /// A note for the series page that opens next ("added from WeebCentral instead"), keyed by series.
+    @Published var notice: (seriesID: String, text: String)?
     /// A chapter to open right away (Siri "Continue reading", Handoff from another device).
     @Published var requestedChapter: Chapter?
     /// A series to show (Spotlight).
@@ -275,7 +277,14 @@ final class LibraryModel: ObservableObject {
     func inspect(_ url: URL) async throws -> LinkInspection { try await inspectAny(url) }
     enum AddLinkError: LocalizedError {
         case invalid
-        var errorDescription: String? { "Enter a full link (https://…) to a manga series page, a chapter, or an image." }
+        case noChapters(title: String, host: String)
+        var errorDescription: String? {
+            switch self {
+            case .invalid: "Enter a full link (https://…) to a manga series page, a chapter, or an image."
+            case .noChapters(let title, let host):
+                "\(host) has no chapters you can read for “\(title)”, and it wasn’t found on the other sites either. Licensed series often only link to the official app."
+            }
+        }
     }
     enum LinkResult { case open(Chapter), series(MangaSeries, open: Chapter?) }
     /// Adds a whole series from a pasted link. A series page adds every chapter; a chapter
@@ -332,8 +341,32 @@ final class LibraryModel: ObservableObject {
     func addLink(_ text: String, html: String? = nil) async throws -> LinkResult {
         switch try await preview(text, html: html) {
         case .existing(let result): return result
-        case .fresh(let url, let found): return commit(url, found)
+        case .fresh(let url, let found):
+            guard found.chapters.isEmpty && found.pages.isEmpty else { return commit(url, found) }
+            // Nothing to read here (MangaDex only links licensed series to the publisher's app):
+            // add the same series from a site that has its chapters.
+            let host = url.host?.replacingOccurrences(of: "www.", with: "") ?? "This site"
+            if let (other, otherFound) = await readableElsewhere(found.title, avoiding: url.host) {
+                let result = commit(other, otherFound)
+                if case .series(let series, _) = result {
+                    notice = (series.id, "\(host) has no chapters to read for \(found.title), so it was added from \(other.host?.replacingOccurrences(of: "www.", with: "") ?? "another site") instead.")
+                }
+                return result
+            }
+            throw AddLinkError.noChapters(title: found.title, host: host)
         }
+    }
+    /// The same series on another connected or popular site, with chapters to read.
+    func readableElsewhere(_ title: String, avoiding host: String?) async -> (URL, LinkInspection)? {
+        let sources = GlobalSearchModel.sources(saved: state.sites ?? [])
+            .filter { source in host.map { !$0.lowercased().hasSuffix(source.host) } ?? true }
+        for source in sources {
+            guard let hits = try? await GlobalSearch.search(source, query: title),
+                  let match = hits.first(where: { Discover.sameTitle($0.title, title) }),
+                  let found = try? await inspectAny(match.url), !found.chapters.isEmpty else { continue }
+            return (match.url, found)
+        }
+        return nil
     }
     // MARK: Migration (a site died or moved)
 

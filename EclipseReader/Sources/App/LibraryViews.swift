@@ -1626,6 +1626,8 @@ struct SeriesView: View {
     @State private var pickingCover = false
     @State private var migrating = false
     @State private var tracking = false
+    /// The chapter list has been fetched at least once since this page opened (or earlier this session).
+    @State private var checked = false
     @FocusState private var searchFocused: Bool
     var body: some View {
         if let series = model.series(id: seriesID) {
@@ -1641,7 +1643,7 @@ struct SeriesView: View {
             }
             List {
                 Section {
-                    SeriesHeader(series: series, reader: $reader, website: $website)
+                    SeriesHeader(series: series, reader: $reader, website: $website, checking: series.kind == .web && !checked)
                         .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
                     if let message {
                         Label(message, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
@@ -1663,9 +1665,14 @@ struct SeriesView: View {
                         }
                     }
                     if series.chapters.isEmpty {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text(model.loading ? "Loading chapters…" : "No chapters yet. Pull to refresh.").foregroundStyle(.secondary)
+                        if builtIn || (series.kind == .web && (!checked || updating)) {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text(builtIn && !model.loading ? "No chapters yet. Pull to refresh." : "Loading chapters…").foregroundStyle(.secondary)
+                            }
+                        } else {
+                            NoChaptersCard(series: series) { migrating = true }
+                                .listRowBackground(Color.clear)
                         }
                     } else if list.isEmpty {
                         Text(query.isEmpty ? "No \(filter.title.lowercased()) chapters." : "No chapters match “\(query)”.")
@@ -1739,11 +1746,13 @@ struct SeriesView: View {
             .toolbarBackground(.hidden, for: .navigationBar)
             .refreshable { await update(series) }
             .task {
+                if let notice = model.notice, notice.seriesID == seriesID { message = notice.text; model.notice = nil }
                 if builtIn && series.chapters.isEmpty { await model.refresh() }
                 // Fresh chapter list the first time a website series is opened each session.
                 if series.kind == .web && !builtIn && model.sessionRefreshed.insert(series.id).inserted {
                     try? await model.update(series)
                 }
+                checked = true
             }
             .toolbar {
                 ToolbarItem(placement: .principal) { Text("") }
@@ -1824,10 +1833,36 @@ struct SeriesView: View {
         do {
             try await model.update(series)
             let after = model.series(id: series.id)?.chapters.count ?? before
-            message = after > before ? "\(after - before) new chapter\(after - before == 1 ? "" : "s")" : "No new chapters."
+            // An empty list explains itself below; "No new chapters" would only confuse.
+            message = after > before ? "\(after - before) new chapter\(after - before == 1 ? "" : "s")" : after == 0 ? nil : "No new chapters."
         } catch {
             message = error.localizedDescription + (series.kind == .web ? " If the site moved or closed, use ⋯ › Migrate." : "")
         }
+    }
+}
+
+/// A series with no chapters to read where it was added from: says why, and finds it elsewhere.
+struct NoChaptersCard: View {
+    let series: MangaSeries
+    let findElsewhere: () -> Void
+    var body: some View {
+        let host = series.url.host?.replacingOccurrences(of: "www.", with: "") ?? "this site"
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Nothing to read on \(host)", systemImage: "books.vertical").font(.headline)
+            Text(host.hasSuffix("mangadex.org")
+                 ? "MangaDex doesn’t host English chapters of this series (it’s licensed, so MangaDex only links to the official app)."
+                 : "\(host) isn’t listing any chapters for this series right now.")
+                .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Button(action: findElsewhere) {
+                Label("Find it on another site", systemImage: "arrow.triangle.swap")
+                    .font(.subheadline.weight(.bold)).frame(maxWidth: .infinity).frame(height: 44)
+                    .background(Eclipse.highlight, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(.black)
+            }
+            .buttonStyle(PressableStyle())
+            Text("Your place carries over to the site you pick.").font(.caption).foregroundStyle(.tertiary)
+        }
+        .padding(16).eclipseCard(cornerRadius: 16)
+        .padding(.vertical, 6)
     }
 }
 
@@ -1837,6 +1872,8 @@ struct SeriesHeader: View {
     let series: MangaSeries
     @Binding var reader: Chapter?
     @Binding var website: Bool
+    /// The chapter list is still being fetched.
+    var checking = false
     /// Colour from the cover; the page glows with it.
     @State private var tint: Color = Eclipse.accent
     /// Pale cover colours (cream, sand, pastel) need dark lettering on the button.
@@ -1850,9 +1887,9 @@ struct SeriesHeader: View {
         let started = resume.map { model.state.progress[$0.id] != nil } ?? false
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .bottom, spacing: 16) {
+                // A fixed size: a long title must not squash the cover.
                 CoverView(url: cover, referer: series.chapters.first)
-                    .aspectRatio(0.7, contentMode: .fit)
-                    .frame(width: 116)
+                    .frame(width: 116, height: 166)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.08)))
                     .shadow(color: .black.opacity(0.6), radius: 16, y: 8)
@@ -1866,7 +1903,7 @@ struct SeriesHeader: View {
                         if series.kind == .book { chip("Book", symbol: "text.book.closed") } else { chip(style.title, symbol: style.symbol) }
                         if model.downloadedCount(series) > 0 { chip("\(model.downloadedCount(series))", symbol: "arrow.down.circle.fill") }
                     }
-                    Text(series.chapters.isEmpty ? "Loading chapters…"
+                    Text(series.chapters.isEmpty ? (checking ? "Loading chapters…" : "No chapters to read")
                          : series.kind == .book ? (read == 0 ? "Not started" : read >= series.chapters.count ? "Finished" : "\(Int(Double(read) / Double(series.chapters.count) * 100))% read")
                          : "\(read) of \(series.chapters.count) read")
                         .font(.footnote).foregroundStyle(.secondary)

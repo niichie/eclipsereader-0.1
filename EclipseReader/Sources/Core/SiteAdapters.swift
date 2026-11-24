@@ -57,7 +57,7 @@ struct MangaDex {
         let info = try await json(URL(string: "https://api.mangadex.org/manga/\(mangaID)?includes[]=cover_art")!)
         let data = info["data"] as? [String: Any] ?? [:]
         let attributes = data["attributes"] as? [String: Any] ?? [:]
-        let title = Self.localized(attributes["title"]) ?? Self.altTitle(attributes["altTitles"]) ?? "MangaDex"
+        let title = Self.displayTitle(attributes) ?? "MangaDex"
         let relations = data["relationships"] as? [[String: Any]] ?? []
         let coverFile = (relations.first { $0["type"] as? String == "cover_art" }?["attributes"] as? [String: Any])?["fileName"] as? String
         let cover = coverFile.flatMap { URL(string: "https://uploads.mangadex.org/covers/\(mangaID)/\($0).512.jpg") }
@@ -144,6 +144,27 @@ struct MangaDex {
     }
     static func altTitle(_ value: Any?) -> String? {
         (value as? [[String: String]])?.compactMap { $0["en"] }.first
+    }
+    /// The series' name, shortened when MangaDex lists a short English form of a long romanised title
+    /// ("Jujutsu Kaisen 0: Toukyou Toritsu Jujutsu Koutou Senmon Gakkou" → "Jujutsu Kaisen 0").
+    static func displayTitle(_ attributes: [String: Any]) -> String? {
+        guard let main = localized(attributes["title"]) else { return altTitle(attributes["altTitles"]) }
+        let english = (attributes["altTitles"] as? [[String: String]])?.compactMap { $0["en"] } ?? []
+        let lower = main.lowercased()
+        if main.count > 24, let short = english.filter({ $0.count >= 4 && $0.count < main.count && lower.hasPrefix($0.lowercased()) })
+            .max(by: { $0.count < $1.count }) {
+            return short
+        }
+        return main
+    }
+    /// Whether MangaDex hosts any English chapter of a title (nil when it couldn't be checked).
+    static func hasReadableChapters(_ id: String, http: any HTTPTransport) async -> Bool? {
+        let ratings = ["safe", "suggestive", "erotica", "pornographic"].map { "contentRating[]=\($0)" }.joined(separator: "&")
+        guard let url = URL(string: "https://api.mangadex.org/manga/\(id)/feed?translatedLanguage[]=en&includeExternalUrl=0&limit=1&\(ratings)"),
+              let data = try? await http.fetch(url, referer: nil, image: false),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let total = object["total"] as? Int else { return nil }
+        return total > 0
     }
     static func day(_ iso: String) -> String? {
         let parser = ISO8601DateFormatter()
@@ -246,6 +267,32 @@ public enum Discover {
          URLQueryItem(name: "hasAvailableChapters", value: "true")]
             + ratings.map { URLQueryItem(name: "contentRating[]", value: $0) }
     }
+    /// Keeps titles that have at least one English chapter MangaDex itself hosts. Licensed series
+    /// (Jujutsu Kaisen, Solo Leveling…) often only link out to the publisher, so nothing can be read here.
+    /// Checks a few at a time to stay inside MangaDex's rate limit; a title that can't be checked is kept.
+    public static func readable(_ items: [DiscoverItem], http: any HTTPTransport = WebsiteHTTPClient()) async -> [DiscoverItem] {
+        guard !items.isEmpty else { return [] }
+        var keep = [Bool](repeating: true, count: items.count)
+        await withTaskGroup(of: (Int, Bool).self) { group in
+            var next = 0
+            while next < min(2, items.count) {
+                let index = next, id = items[index].id
+                group.addTask { (index, await MangaDex.hasReadableChapters(id, http: http) ?? true) }
+                next += 1
+            }
+            // About four requests a second, inside MangaDex's limit of five.
+            while let result = await group.next() {
+                keep[result.0] = result.1
+                if next < items.count {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    let index = next, id = items[index].id
+                    group.addTask { (index, await MangaDex.hasReadableChapters(id, http: http) ?? true) }
+                    next += 1
+                }
+            }
+        }
+        return items.indices.filter { keep[$0] }.map { items[$0] }
+    }
     /// MangaDex titles with English chapters: popular ones, or matches for a search.
     public static func mangaDex(query: String? = nil, limit: Int = 24, http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [DiscoverItem] {
         var parts = URLComponents(string: "https://api.mangadex.org/manga")!
@@ -258,7 +305,7 @@ public enum Discover {
         }
         parts.queryItems = items
         guard let url = parts.url else { return [] }
-        return try parse(try await http.fetch(url, referer: nil, image: false)).map(\.item)
+        return await readable(try parse(try await http.fetch(url, referer: nil, image: false)).map(\.item), http: http)
     }
 
     /// "Because you read …": finds the series on MangaDex, then the best-rated titles sharing its genres.
@@ -280,9 +327,8 @@ public enum Discover {
         guard let url = parts.url else { return [] }
         let list = try parse(try await http.fetch(url, referer: nil, image: false)).map(\.item)
         let skip = excluding.map { $0.lowercased() }
-        return Array(list.filter { item in
-            item.id != source.item.id && !skip.contains { Self.sameTitle($0, item.title) }
-        }.prefix(limit))
+        let fresh = list.filter { item in item.id != source.item.id && !skip.contains { Self.sameTitle($0, item.title) } }
+        return Array(await readable(Array(fresh.prefix(limit + 4)), http: http).prefix(limit))
     }
 
     /// Up to two genre tags (themes fill in when a series has fewer), most specific first.
@@ -314,7 +360,7 @@ public enum Discover {
         return list.compactMap { entry -> (item: DiscoverItem, tags: Any?)? in
             guard let id = entry["id"] as? String, let a = entry["attributes"] as? [String: Any],
                   let page = URL(string: "https://mangadex.org/title/\(id)") else { return nil }
-            let title = MangaDex.localized(a["title"]) ?? MangaDex.altTitle(a["altTitles"]) ?? "Untitled"
+            let title = MangaDex.displayTitle(a) ?? "Untitled"
             let relations = entry["relationships"] as? [[String: Any]] ?? []
             let file = (relations.first { $0["type"] as? String == "cover_art" }?["attributes"] as? [String: Any])?["fileName"] as? String
             let cover = file.flatMap { URL(string: "https://uploads.mangadex.org/covers/\(id)/\($0).256.jpg") }
