@@ -190,6 +190,7 @@ final class ReaderChecks: XCTestCase {
             let enlargedSize = size * 2
             let zoom = try XCTUnwrap(CGContext(data: nil, width: enlargedSize, height: enlargedSize,
                 bitsPerComponent: 8, bytesPerRow: enlargedSize, space: gray, bitmapInfo: CGImageAlphaInfo.none.rawValue))
+            zoom.setBlendMode(.copy)
             zoom.draw(enlarged, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
             let ink = try XCTUnwrap(zoom.data).assumingMemoryBound(to: UInt8.self)
             let actual = Data(bytes: ink, count: enlargedSize * enlargedSize)
@@ -201,7 +202,10 @@ final class ReaderChecks: XCTestCase {
                 .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.5, kCIInputRadiusKey: 1.5])
             let expected = try XCTUnwrap(CIContext(options: [.cacheIntermediates: false]).createCGImage(original, from: scaled.extent.integral))
             zoom.draw(expected, in: CGRect(x: 0, y: 0, width: enlargedSize, height: enlargedSize))
-            XCTAssertEqual(actual, Data(bytes: ink, count: enlargedSize * enlargedSize))
+            let reference = Data(bytes: ink, count: enlargedSize * enlargedSize)
+            // Independent Core Image contexts may round an 8-bit luminance sample differently.
+            let largestDelta = zip(actual, reference).map { abs(Int($0.0) - Int($0.1)) }.max() ?? 0
+            XCTAssertLessThanOrEqual(largestDelta, 1)
         }
     }
 
