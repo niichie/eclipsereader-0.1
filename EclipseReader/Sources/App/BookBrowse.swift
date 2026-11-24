@@ -191,12 +191,31 @@ struct BookSearchResults: View {
             }
             ForEach(BookCatalog.allCases.sorted { rank($0) < rank($1) }, id: \.self) { catalog in
                 let phase = search.phases[catalog] ?? .idle
-                row(catalog.rawValue, "Tap a cover for details", phase)
-                if case .failed = phase {
-                    Button("Search \(catalog.rawValue) in browser") { browse(catalog.searchURL(search.query)) }
+                if !Self.isFailed(phase) { row(catalog.rawValue, "Tap a cover for details", phase) }
+            }
+            // Catalogs that couldn't be read: one line, their browser searches in a dropdown.
+            let failed = BookCatalog.allCases.filter { Self.isFailed(search.phases[$0] ?? .idle) }
+            if !failed.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("\(failed.count) catalog\(failed.count == 1 ? "" : "s") couldn’t be read")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    Menu {
+                        ForEach(failed, id: \.self) { catalog in
+                            Button(catalog.rawValue, systemImage: "safari") { browse(catalog.searchURL(search.query)) }
+                        }
+                    } label: {
+                        Label("Try in browser", systemImage: "chevron.down").labelStyle(TrailingIconLabel())
+                            .font(.footnote.weight(.semibold))
+                    }
                 }
+                .padding(.horizontal, 14).padding(.vertical, 11).eclipseCard(cornerRadius: 12)
             }
         }
+    }
+    private static func isFailed(_ phase: BookSearchModel.Phase) -> Bool {
+        if case .failed = phase { return true }
+        return false
     }
     private func rank(_ catalog: BookCatalog) -> Int {
         if case .done(let books) = search.phases[catalog], !books.isEmpty { return 0 }

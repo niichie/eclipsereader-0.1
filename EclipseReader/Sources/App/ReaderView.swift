@@ -47,8 +47,8 @@ struct ReaderView: View {
         var style = library.style(for: seriesID)
         if webtoon && (library.preferences.autoWebtoon ?? true) && library.styleOverride(seriesID) == .automatic && !style.scrolls { style = .webtoon }
         var prefs = library.preferences.applying(style)
-        if let strength = library.state.seriesCleanup?[seriesID] {
-            prefs.enhance = strength > 0
+        if let choice = library.state.seriesEnhance?[seriesID] {
+            prefs.enhance = choice
         }
         return prefs
     }
@@ -364,13 +364,18 @@ struct ReaderView: View {
                     Button("Return to " + previous.title) { open(previous); returnChapter = nil }
                 }
                 Menu("Enhance scans for this series") {
-                    ForEach(["Use global setting", "Off", "On"], id: \.self) { label in
-                        Button(label) {
-                            var overrides = library.state.seriesCleanup ?? [:]
-                            let levels = ["Off": 0.0, "On": 1.0]
-                            overrides[library.seriesID(for: chapter)] = levels[label]
-                            library.state.seriesCleanup = overrides
+                    let seriesID = library.seriesID(for: chapter)
+                    let current = library.state.seriesEnhance?[seriesID]
+                    let choices: [(label: String, value: Bool?)] = [("Use global setting", nil), ("Off", false), ("On", true)]
+                    ForEach(choices.indices, id: \.self) { i in
+                        let label = choices[i].label, value = choices[i].value
+                        Button {
+                            var overrides = library.state.seriesEnhance ?? [:]
+                            overrides[seriesID] = value
+                            library.state.seriesEnhance = overrides
                             library.save()
+                        } label: {
+                            if current == value { Label(label, systemImage: "checkmark") } else { Text(label) }
                         }
                     }
                 }

@@ -279,8 +279,12 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                     let data = try await pipeline.data(for: page, chapter: chapter)
                     try Task.checkCancellation()
                     let half = page.half
-                    let decoded = try await PageDecoder.shared.render(data, trim: trim, limit: limit, enhance: enhance,
-                                                                      half: half)
+                    // Decode (and enhance) in parallel, as the handoff build did. Routing every page through
+                    // one actor made neighbours queue behind each other and pages appear slowly.
+                    let decoded = try await Task.detached(priority: .userInitiated) { [trim, limit, enhance, half] in
+                        try Task.checkCancellation()
+                        return try PageDecoder.decode(data, trim: trim, limit: limit, enhance: enhance, half: half)
+                    }.value
                     let repeated = page.half == nil && page.url.scheme == "https"
                     let duplicate = repeated ? await PageDecoder.shared.isRepeated(data, chapter: chapter.id, index: index) : false
                     try Task.checkCancellation()
@@ -321,7 +325,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         guard preference.guided == true, preference.mode == .paged, let cg = imageView.image?.cgImage else { return }
         let box = PanelSource(image: cg)
         panelWork = Task { [weak self] in
-            let found = (try? await PageDecoder.shared.panels(box, rtl: rightToLeft)) ?? []
+            let found = await Task.detached(priority: .utility) { PanelSource.detect(box, rightToLeft: rightToLeft) }.value
             guard !Task.isCancelled, let self else { return }
             self.panels = found
         }

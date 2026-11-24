@@ -309,27 +309,68 @@ public enum Discover {
     }
 
     /// "Because you read …": finds the series on MangaDex, then the best-rated titles sharing its genres.
-    public static func similar(to title: String, excluding: Set<String> = [], limit: Int = 16,
+    /// `style` is the medium you read it as (manga, manhwa, manhua, webtoon, comic). Results stay in that
+    /// medium even when MangaDex files the seed differently, and a seed MangaDex spells differently is
+    /// still found (alternative and partial titles), so non-Japanese series get recommendations too.
+    public static func similar(to title: String, excluding: Set<String> = [], limit: Int = 16, style: ReadingStyle? = nil,
                                http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [DiscoverItem] {
         var lookup = URLComponents(string: "https://api.mangadex.org/manga")!
-        lookup.queryItems = base(limit: 5, ratings: ["safe", "suggestive", "erotica"]) + [
+        lookup.queryItems = base(limit: 10, ratings: ["safe", "suggestive", "erotica"]) + [
             URLQueryItem(name: "title", value: title), URLQueryItem(name: "order[relevance]", value: "desc")]
         guard let lookupURL = lookup.url else { return [] }
         let found = try parse(try await http.fetch(lookupURL, referer: nil, image: false))
-        guard let source = found.first(where: { Self.sameTitle($0.item.title, title) }) else { return [] }
+        let wanted = style.flatMap { $0 == .automatic ? nil : $0 }
+        let source = found.first { Self.sameTitle($0.item.title, title) }
+            ?? found.first { Self.looselySameTitle($0.item.title, title) && (wanted.map { w in mediumMatches($0.style, w) } ?? true) }
+        guard let source else { return [] }
+        let medium = wanted ?? source.style
         let tags = pickTags(source.tags)
-        guard !tags.isEmpty else { return [] }
         var parts = URLComponents(string: "https://api.mangadex.org/manga")!
-        parts.queryItems = base(limit: limit + 8)
-            + [URLQueryItem(name: "originalLanguage[]", value: source.language)]
-            + tags.map { URLQueryItem(name: "includedTags[]", value: $0) }
-            + [URLQueryItem(name: "includedTagsMode", value: "AND"),
-               URLQueryItem(name: "order[rating]", value: "desc")]
+        var query = base(limit: limit + 12)
+        // The language that defines the medium; webtoons can be Korean, Chinese or English, so keep the seed's.
+        let language = Self.language(for: medium) ?? source.language
+        if !language.isEmpty { query.append(URLQueryItem(name: "originalLanguage[]", value: language)) }
+        query += tags.map { URLQueryItem(name: "includedTags[]", value: $0) }
+        if !tags.isEmpty { query.append(URLQueryItem(name: "includedTagsMode", value: "AND")) }
+        query.append(URLQueryItem(name: "order[rating]", value: "desc"))
+        parts.queryItems = query
         guard let url = parts.url else { return [] }
-        let list = try parse(try await http.fetch(url, referer: nil, image: false)).filter { $0.style == source.style }.map(\.item)
+        let list = try parse(try await http.fetch(url, referer: nil, image: false))
+            .filter { mediumMatches($0.style, medium) }.map(\.item)
         let skip = excluding.map { $0.lowercased() }
         let fresh = list.filter { item in item.id != source.item.id && !skip.contains { Self.sameTitle($0, item.title) } }
         return Array(await readable(Array(fresh.prefix(limit + 4)), http: http).prefix(limit))
+    }
+
+    /// Same medium for recommendations. Manhwa and webtoons are both vertical Korean-style strips, so
+    /// they count as one family; manga, manhua and comics stay separate.
+    public static func mediumMatches(_ found: ReadingStyle, _ wanted: ReadingStyle) -> Bool {
+        if found == wanted { return true }
+        let vertical: Set<ReadingStyle> = [.manhwa, .webtoon]
+        return vertical.contains(found) && vertical.contains(wanted)
+    }
+    static func language(for style: ReadingStyle) -> String? {
+        switch style {
+        case .manga: "ja"
+        case .manhwa: "ko"
+        case .manhua: "zh"
+        case .comic: "en"
+        case .webtoon, .automatic: nil
+        }
+    }
+    /// "Solo Leveling" vs "Solo Leveling (Official)", "The Beginning After the End" vs "Beginning After the End".
+    static func looselySameTitle(_ a: String, _ b: String) -> Bool {
+        func clean(_ s: String) -> String {
+            var t = s.lowercased()
+            if let paren = t.firstIndex(where: { $0 == "(" || $0 == "[" }) { t = String(t[..<paren]) }
+            for article in ["the ", "a "] where t.hasPrefix(article) { t.removeFirst(article.count) }
+            return t.filter { $0.isLetter || $0.isNumber }
+        }
+        let x = clean(a), y = clean(b)
+        guard min(x.count, y.count) >= 5 else { return x == y && !x.isEmpty }
+        // A prefix only counts when it is most of the title, so "Bleach" doesn't match a long spin-off.
+        let (short, long) = x.count <= y.count ? (x, y) : (y, x)
+        return x == y || (long.hasPrefix(short) && Double(short.count) >= Double(long.count) * 0.7)
     }
 
     /// Up to two genre tags (themes fill in when a series has fewer), most specific first.

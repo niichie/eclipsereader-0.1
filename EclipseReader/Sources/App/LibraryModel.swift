@@ -223,6 +223,14 @@ final class LibraryModel: ObservableObject {
         if let found = state.detectedStyles?[seriesID], found != .automatic { return found }
         return .manga
     }
+    /// The medium chosen or detected for a series, or nil when nothing is known yet
+    /// (unlike `style(for:)`, which falls back to manga for reading).
+    func knownStyle(for seriesID: String) -> ReadingStyle? {
+        if let chosen = state.styleOverrides?[seriesID], chosen != .automatic { return chosen }
+        if seriesID == Self.berserkID { return .manga }
+        if let found = state.detectedStyles?[seriesID], found != .automatic { return found }
+        return nil
+    }
     func rememberDetected(_ style: ReadingStyle, for seriesID: String) {
         guard state.detectedStyles?[seriesID] != style else { return }
         var map = state.detectedStyles ?? [:]

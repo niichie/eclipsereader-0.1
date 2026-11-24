@@ -318,7 +318,11 @@ public struct LibraryState: Codable, Sendable {
     public var hiddenHistoryDates: [String: Date]?
     public var ignoredRecommendationSeries: Set<String>?
     public var hiddenRecommendationTitles: Set<String>?
+    /// Legacy per-series cleanup strengths from an earlier filter experiment. No longer read:
+    /// values left over from that build forced enhancement off for some series.
     public var seriesCleanup: [String: Double]?
+    /// Per-series "Enhance scans" choice (true on, false off). Missing means the global setting.
+    public var seriesEnhance: [String: Bool]?
     /// Covers the user picked (a page or a photo); these win over automatic ones.
     public var customCovers: [String: URL]?
     /// Chapters that appeared since the last check and have not been opened yet.

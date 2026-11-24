@@ -11,7 +11,16 @@ final class GlobalSearchModel: ObservableObject {
     }
     @Published private(set) var sections: [Section] = []
     @Published private(set) var query = ""
-    private var tasks: [Task<Void, Never>] = []
+    /// Every site this search could use; the ones switched off in the Sites menu are not queried.
+    @Published private(set) var candidates: [SearchSource] = []
+    @Published private(set) var excluded: Set<String> = GlobalSearchModel.storedExclusions()
+    private var queries: [String: String] = [:]
+    private var tasks: [String: Task<Void, Never>] = [:]
+
+    nonisolated static let exclusionsKey = "globalSearchExcludedSources"
+    nonisolated private static func storedExclusions() -> Set<String> {
+        Set((UserDefaults.standard.string(forKey: exclusionsKey) ?? "").split(separator: "\n").map(String.init))
+    }
 
     /// Use the installed catalog for membership; native adapters only choose how a site is searched.
     static func sources(saved: [SavedSite], novels: Bool = false) -> [SearchSource] {
@@ -36,26 +45,51 @@ final class GlobalSearchModel: ObservableObject {
     func run(_ text: String, sources: [SearchSource], queries: [String: String] = [:]) {
         cancel()
         query = text
-        sections = sources.map { Section(source: $0, phase: .loading) }
-        for source in sources {
-            let wanted = queries[source.id] ?? text
-            tasks.append(Task { [weak self] in
-                let phase: Phase
-                do {
-                    phase = .done(try await GlobalSearch.search(source, query: wanted))
-                } catch {
-                    // Sites that only answer browsers: read their search page the way Safari would.
-                    if case .site = source.kind {
-                        let found = await Self.rendered(source, query: wanted)
-                        phase = found.isEmpty ? .failed : .done(found)
-                    } else {
-                        phase = .failed
-                    }
+        candidates = sources
+        self.queries = queries
+        let active = sources.filter { !excluded.contains($0.id) }
+        sections = active.map { Section(source: $0, phase: .loading) }
+        for source in active { start(source) }
+    }
+    /// Switches one site in or out of every search. Turning a site on searches it now; the others keep their results.
+    func setIncluded(_ source: SearchSource, _ on: Bool) {
+        if on { excluded.remove(source.id) } else { excluded.insert(source.id) }
+        UserDefaults.standard.set(excluded.sorted().joined(separator: "\n"), forKey: Self.exclusionsKey)
+        if on {
+            guard !query.isEmpty, !sections.contains(where: { $0.id == source.id }) else { return }
+            let order = candidates.map(\.id)
+            sections.append(Section(source: source, phase: .loading))
+            sections.sort { (order.firstIndex(of: $0.id) ?? .max) < (order.firstIndex(of: $1.id) ?? .max) }
+            start(source)
+        } else {
+            tasks[source.id]?.cancel(); tasks[source.id] = nil
+            sections.removeAll { $0.id == source.id }
+        }
+    }
+    func setAll(_ on: Bool) {
+        excluded = on ? [] : Set(candidates.map(\.id))
+        UserDefaults.standard.set(excluded.sorted().joined(separator: "\n"), forKey: Self.exclusionsKey)
+        if !query.isEmpty { run(query, sources: candidates, queries: queries) }
+    }
+    private func start(_ source: SearchSource) {
+        let text = query
+        let wanted = queries[source.id] ?? text
+        tasks[source.id] = Task { [weak self] in
+            let phase: Phase
+            do {
+                phase = .done(try await GlobalSearch.search(source, query: wanted))
+            } catch {
+                // Sites that only answer browsers: read their search page the way Safari would.
+                if case .site = source.kind {
+                    let found = await Self.rendered(source, query: wanted)
+                    phase = found.isEmpty ? .failed : .done(found)
+                } else {
+                    phase = .failed
                 }
-                guard let self, !Task.isCancelled, self.query == text,
-                      let i = self.sections.firstIndex(where: { $0.id == source.id }) else { return }
-                self.sections[i].phase = phase
-            })
+            }
+            guard let self, !Task.isCancelled, self.query == text,
+                  let i = self.sections.firstIndex(where: { $0.id == source.id }) else { return }
+            self.sections[i].phase = phase
         }
     }
     private static func rendered(_ source: SearchSource, query: String) async -> [DiscoverItem] {
@@ -64,8 +98,8 @@ final class GlobalSearchModel: ObservableObject {
         return GlobalSearch.relevant(GlobalSearch.results(in: html, base: url), to: query)
     }
     func cancel() {
-        tasks.forEach { $0.cancel() }
-        tasks = []
+        tasks.values.forEach { $0.cancel() }
+        tasks = [:]
     }
     var finished: Bool { !sections.contains { $0.phase == .loading } }
 }
@@ -105,7 +139,7 @@ struct GlobalSearchResults: View {
                 case .done(let items) where !items.isEmpty:
                     row(title: section.source.name, host: section.source.host, count: items.count) {
                         ForEach(items) { item in
-                            card(title: item.title, cover: item.cover, detail: item.detail,
+                            card(title: item.title, cover: cover(for: item), detail: item.detail,
                                  owned: library.libraryMembers.contains { $0.url == item.url }, busy: busyID == item.id, referer: nil) {
                                 pick(item)
                             }
@@ -117,16 +151,29 @@ struct GlobalSearchResults: View {
             }
             let empty = search.sections.filter { if case .done(let items) = $0.phase { return items.isEmpty } else { return false } }
             let failed = search.sections.filter { $0.phase == .failed }
-            ForEach(failed) { section in
-                if case .site(let root) = section.source.kind {
-                    Button("Search \(section.source.name) in browser") {
-                        browser = BrowseTarget(url: GlobalSearch.searchURLs(root: root, query: search.query).first ?? root)
+            // One compact line for sites that didn't answer, with their browser searches in a menu,
+            // instead of a separate button per site.
+            if !failed.isEmpty && search.finished {
+                let browsable = failed.compactMap { section -> (String, URL)? in
+                    guard case .site(let root) = section.source.kind else { return nil }
+                    return (section.source.name, GlobalSearch.searchURLs(root: root, query: search.query).first ?? root)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("\(failed.count) site\(failed.count == 1 ? "" : "s") didn’t answer")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    if !browsable.isEmpty {
+                        Menu {
+                            ForEach(browsable.indices, id: \.self) { i in
+                                Button(browsable[i].0, systemImage: "safari") { browser = BrowseTarget(url: browsable[i].1) }
+                            }
+                        } label: {
+                            Label("Try in browser", systemImage: "chevron.down").labelStyle(TrailingIconLabel())
+                                .font(.footnote.weight(.semibold))
+                        }
                     }
                 }
-            }
-            if !failed.isEmpty && search.finished {
-                Text("Couldn’t search " + failed.map(\.source.name).joined(separator: ", ") + " (the site didn’t answer).")
-                    .font(.footnote).foregroundStyle(.secondary)
+                .padding(.horizontal, 14).padding(.vertical, 11).eclipseCard(cornerRadius: 12)
             }
             if !empty.isEmpty && search.finished {
                 Text("No matches on " + empty.map(\.source.name).joined(separator: ", ") + ".")
@@ -134,6 +181,12 @@ struct GlobalSearchResults: View {
             }
         }
         .fullScreenCover(item: $browser) { target in MangaBrowserView(start: target.url).environmentObject(library) }
+    }
+    /// A result's own cover, or the one already known for that series (the built-in Berserk, things in your library).
+    private func cover(for item: DiscoverItem) -> URL? {
+        if let cover = item.cover { return cover }
+        guard let known = library.series(id: item.id) ?? library.allSeries.first(where: { $0.url == item.url }) else { return nil }
+        return library.cover(for: known)
     }
     private func row<Content: View>(title: String, host: String?, count: Int?, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -157,7 +210,7 @@ struct GlobalSearchResults: View {
                       action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 5) {
-                CoverView(url: cover, referer: referer)
+                CoverView(url: cover, referer: referer, title: title)
                     .frame(width: 108, height: 154)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .overlay {
@@ -373,6 +426,7 @@ struct GlobalSearchSheet: View {
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                     .padding(.horizontal, 14).frame(height: 50).eclipseCard(cornerRadius: 14)
+                    HStack { Spacer(); SearchSitesMenu(search: search) }
                     if let error { Text(error).font(.footnote).foregroundStyle(.orange) }
                     if !novels, booksOn, !search.query.isEmpty {
                         BooksBrowseSection(browsing: $browsing, opened: $opened, externalQuery: search.query)
@@ -485,5 +539,46 @@ struct SimilarSheet: View {
         } catch {
             failure = error.localizedDescription
         }
+    }
+}
+
+
+/// The one place to choose which sites a search uses: a checklist in a dropdown beside the results.
+struct SearchSitesMenu: View {
+    @ObservedObject var search: GlobalSearchModel
+    var body: some View {
+        let total = search.candidates.count
+        let on = search.candidates.filter { !search.excluded.contains($0.id) }.count
+        Menu {
+            Button("All sites", systemImage: "checkmark.circle") { search.setAll(true) }
+            Button("No sites", systemImage: "circle") { search.setAll(false) }
+            Divider()
+            ForEach(search.candidates) { source in
+                Toggle(isOn: Binding(get: { !search.excluded.contains(source.id) },
+                                     set: { search.setIncluded(source, $0) })) {
+                    Text(source.name)
+                    Text(source.host)
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                Text(on == total ? "All \(total) sites" : "\(on) of \(total) sites")
+                Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+            }
+            .font(.footnote.weight(.semibold))
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Eclipse.surfaceHigh, in: Capsule())
+        }
+        .menuActionDismissBehavior(.disabled)
+        .disabled(total == 0)
+        .accessibilityLabel("Sites to search")
+    }
+}
+
+/// Text first, icon after it (for "Try in browser ▾").
+struct TrailingIconLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) { configuration.title; configuration.icon.font(.caption2.weight(.bold)) }
     }
 }

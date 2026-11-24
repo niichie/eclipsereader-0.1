@@ -275,7 +275,8 @@ struct LibraryView: View {
                                 TextRecommendationStrip(series: recent, width: contentWidth, openSeries: $openSeries)
                                     .id(recent.id)
                             } else {
-                                DiscoverStrip(openSeries: $openSeries, width: contentWidth, similarTo: recent.title, seedID: recent.id)
+                                DiscoverStrip(openSeries: $openSeries, width: contentWidth, similarTo: recent.title, seedID: recent.id,
+                                              style: model.knownStyle(for: recent.id))
                                     .id(recent.id)
                             }
                         }
@@ -588,6 +589,7 @@ struct LibraryOptionsSheet: View {
 }
 
 /// "Find something new" under a small library: popular MangaDex titles, one tap to add.
+/// With `similarTo`, it is "Because you read …" for the series you read last, in that series' medium.
 struct DiscoverStrip: View {
     @EnvironmentObject private var model: LibraryModel
     @Binding var openSeries: MangaSeries?
@@ -595,76 +597,164 @@ struct DiscoverStrip: View {
     /// nil: popular on MangaDex. A title: "Because you read …" that series.
     var similarTo: String? = nil
     var seedID: String? = nil
+    /// The medium of the series you read (manga, manhwa, manhua, webtoon, comic); recommendations stay in it.
+    var style: ReadingStyle? = nil
+    private enum Phase: Equatable { case loading, loaded, failed }
     @State private var items: [DiscoverItem] = []
+    @State private var phase: Phase = .loading
     @State private var adding: String?
     @State private var error: String?
+    @State private var search: LibraryView.QuoteSearch?
+    /// Results per seed for this launch, so coming back to the library shows them at once
+    /// instead of the shelf vanishing while it reloads.
+    @MainActor private static var memory: [String: [DiscoverItem]] = [:]
+    private var memoryKey: String { "\(seedID ?? similarTo ?? "popular")|\(style?.rawValue ?? "")" }
     var body: some View {
         let cardWidth = min(150, max(104, width / 3.6))
+        let shown = items.filter { item in (similarTo == nil || model.state.hiddenRecommendationTitles?.contains(QuoteFeed.workKey(item.title)) != true) && !model.libraryMembers.contains { $0.url == item.url } }
         VStack(alignment: .leading, spacing: 10) {
-            if !items.isEmpty {
+            if similarTo != nil || !items.isEmpty {
                 HStack(alignment: .firstTextBaseline) {
                     if let similarTo {
                         Text("\(Text("Because you read ").foregroundStyle(.secondary))\(similarTo)")
                             .font(.title3.weight(.bold)).lineLimit(1)
                             .contextMenu { if let seedID { Button("Ignore this series for recommendations") { model.ignoreRecommendationSeed(seedID) } } }
+                        if let style, style != .automatic {
+                            Text(style.title).font(.caption2.weight(.heavy)).foregroundStyle(.secondary)
+                                .padding(.horizontal, 6).padding(.vertical, 2).background(Eclipse.surfaceHigh, in: Capsule())
+                        }
                     } else {
                         Text("Discover").font(.title3.weight(.bold))
                         Text("Popular on MangaDex").font(.footnote).foregroundStyle(.secondary)
                     }
                     Spacer()
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 12) {
-                        ForEach(items.filter { item in (similarTo == nil || model.state.hiddenRecommendationTitles?.contains(QuoteFeed.workKey(item.title)) != true) && !model.libraryMembers.contains { $0.url == item.url } }) { item in
-                            VStack(alignment: .leading, spacing: 5) {
-                                Button { select(item, add: false) } label: {
-                                    CoverView(url: item.cover, referer: nil)
-                                        .aspectRatio(0.7, contentMode: .fit)
-                                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                                        .overlay {
-                                            if adding == item.id {
-                                                ZStack { Color.black.opacity(0.5); ProgressView().tint(.white) }
-                                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                            }
-                                        }
-                                }.buttonStyle(PressableStyle())
-                                .overlay(alignment: .bottomTrailing) {
-                                    Button { select(item, add: true) } label: {
-                                        Image(systemName: "plus").font(.caption.weight(.heavy)).foregroundStyle(.black)
-                                            .frame(width: 24, height: 24).background(Eclipse.highlight, in: Circle()).padding(6)
-                                    }.buttonStyle(.plain).accessibilityLabel("Add to Library")
-                                }
-                                Button { select(item, add: false) } label: {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(item.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
-                                        if let detail = item.detail { Text(detail).font(.caption2).foregroundStyle(.secondary) }
-                                    }
-                                }.buttonStyle(PressableStyle())
-                            }
-                            .frame(width: cardWidth)
-                            .contextMenu { if similarTo != nil { Button("Less like this") { model.hideSuggestion(item.title) } } }
-                            .disabled(adding != nil)
+                if !shown.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 12) {
+                            ForEach(shown) { item in card(item, width: cardWidth) }
                         }
                     }
+                } else if phase == .loading {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(0..<4, id: \.self) { _ in
+                                RoundedRectangle(cornerRadius: 10).fill(Eclipse.surfaceHigh)
+                                    .overlay(ShimmerView().clipShape(RoundedRectangle(cornerRadius: 10)))
+                                    .frame(width: cardWidth, height: cardWidth / 0.7)
+                            }
+                        }
+                    }.disabled(true)
+                } else if similarTo != nil {
+                    HStack(spacing: 10) {
+                        Text(phase == .failed ? "Couldn’t reach the recommendation services." : "Nothing close to this one yet.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Retry") { Task { await load(force: true) } }.font(.footnote.weight(.semibold))
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 11).eclipseCard(cornerRadius: 12)
                 }
                 if let error { Text(error).font(.footnote).foregroundStyle(.orange) }
             }
         }
         .padding(.top, 8)
-        .task(id: similarTo ?? "") {
+        .sheet(item: $search) { item in GlobalSearchSheet(query: item.query).environmentObject(model) }
+        .task(id: memoryKey) {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
             #endif
-            if let similarTo {
-                let results = (try? await Discover.similar(to: similarTo, excluding: Set(model.libraryMembers.map(\.title)))) ?? []
-                guard !Task.isCancelled else { return }
-                items = results
-            } else if items.isEmpty {
-                items = (try? await Discover.mangaDex(limit: 24)) ?? []
-            }
+            await load(force: false)
         }
     }
+    private func card(_ item: DiscoverItem, width cardWidth: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Button { select(item, add: false) } label: {
+                CoverView(url: item.cover, referer: nil, title: item.title)
+                    .aspectRatio(0.7, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay {
+                        if adding == item.id {
+                            ZStack { Color.black.opacity(0.5); ProgressView().tint(.white) }
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+            }.buttonStyle(PressableStyle())
+            .overlay(alignment: .bottomTrailing) {
+                if !Self.isAniList(item) {
+                    Button { select(item, add: true) } label: {
+                        Image(systemName: "plus").font(.caption.weight(.heavy)).foregroundStyle(.black)
+                            .frame(width: 24, height: 24).background(Eclipse.highlight, in: Circle()).padding(6)
+                    }.buttonStyle(.plain).accessibilityLabel("Add to Library")
+                }
+            }
+            Button { select(item, add: false) } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(item.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                    if let detail = item.detail { Text(detail).font(.caption2).foregroundStyle(.secondary) }
+                }
+            }.buttonStyle(PressableStyle())
+        }
+        .frame(width: cardWidth)
+        .contextMenu { if similarTo != nil { Button("Less like this") { model.hideSuggestion(item.title) } } }
+        .disabled(adding != nil)
+    }
+    private func load(force: Bool) async {
+        let key = memoryKey
+        if !force, let cached = Self.memory[key] { items = cached; phase = .loaded; return }
+        guard let similarTo else {
+            if items.isEmpty { items = (try? await Discover.mangaDex(limit: 24)) ?? [] }
+            phase = .loaded
+            return
+        }
+        phase = .loading
+        let skip = Set(model.libraryMembers.map(\.title))
+        var reached = false
+        var found: [DiscoverItem] = []
+        // A busy MangaDex (rate limit, slow network) used to empty the shelf until a manual refresh.
+        for delay in [0, 2, 5] {
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            guard !Task.isCancelled else { return }
+            do {
+                found = try await Discover.similar(to: similarTo, excluding: skip, style: style)
+                reached = true
+                break
+            } catch {}
+        }
+        // Not on MangaDex (or nothing there in this medium): AniList readers' recommendations, same medium.
+        if found.isEmpty, let fallback = await aniList(similarTo, skip: skip) {
+            reached = true
+            found = fallback
+        }
+        guard !Task.isCancelled else { return }
+        items = found
+        phase = reached ? .loaded : .failed
+        if reached { Self.memory[key] = found }
+    }
+    private func aniList(_ title: String, skip: Set<String>) async -> [DiscoverItem]? {
+        let medium = style ?? .automatic
+        guard medium != .comic,
+              let data = try? await AniList.post(AniListAPI.similarQuery, variables: ["search": title], auth: false),
+              let parsed = try? AniListAPI.parseSimilar(data) else { return nil }
+        let kind: String? = switch medium {
+        case .manga: "Manga"
+        case .manhwa, .webtoon: "Manhwa"
+        case .manhua: "Manhua"
+        case .comic, .automatic: nil
+        }
+        return parsed.items
+            .filter { item in item.format != "NOVEL" && (kind == nil || item.kind == kind) && !skip.contains { Discover.sameTitle($0, item.title) } }
+            .prefix(16)
+            .compactMap { item in
+                URL(string: "https://anilist.co/manga/\(item.id)").map {
+                    DiscoverItem(id: "anilist-\(item.id)", title: item.title, url: $0, cover: item.cover,
+                                 detail: [item.kind, item.year.map(String.init)].compactMap { $0 }.joined(separator: " · "))
+                }
+            }
+    }
+    private static func isAniList(_ item: DiscoverItem) -> Bool { item.url.host == "anilist.co" }
     private func select(_ item: DiscoverItem, add: Bool) {
+        // AniList knows the work but not where to read it: find it on your sources.
+        if Self.isAniList(item) { search = LibraryView.QuoteSearch(query: item.title); return }
         adding = item.id; error = nil
         Task {
             defer { adding = nil }
@@ -1701,8 +1791,14 @@ struct CoverView: View {
     let referer: Chapter?
     /// Called when the cover can't be loaded, so the library can pick another one.
     var onFail: (() -> Void)? = nil
+    /// When given, a missing or broken cover shows a designed title card instead of the empty mark.
+    var title: String? = nil
     @State private var image: UIImage?
     @MainActor private static let cache = NSCache<NSURL, UIImage>()
+    /// Covers that just failed are not retried for a few minutes, so scrolling back doesn't spin again.
+    @MainActor private static var recentFailures: [URL: Date] = [:]
+    /// A cover that hasn't arrived by then is treated as missing; slow sites can't spin forever.
+    private static let timeout: Duration = .seconds(10)
     @State private var failed = false
     var body: some View {
         // The base shape takes the size it is offered; the artwork is an overlay so it can never
@@ -1714,8 +1810,12 @@ struct CoverView: View {
                     Image(uiImage: image).resizable().scaledToFill()
                         .transition(.opacity)
                 } else if failed || url == nil {
-                    EclipseMark(size: 30).opacity(0.55)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if let title, !title.isEmpty {
+                        TitleCover(title: title)
+                    } else {
+                        EclipseMark(size: 30).opacity(0.55)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 } else {
                     ShimmerView()
                 }
@@ -1726,9 +1826,25 @@ struct CoverView: View {
             guard let url else { return }
             failed = false
             if let hit = Self.cache.object(forKey: url as NSURL) { image = hit; return }
+            if let when = Self.recentFailures[url], Date().timeIntervalSince(when) < 300 { failed = true; return }
             let chapter = referer ?? Chapter(url: url, title: "", number: "")
-            guard let data = try? await model.pipeline.data(for: MangaPage(url: url, label: "Cover"), chapter: chapter) else {
-                if !Task.isCancelled { failed = true; onFail?() }
+            let pipeline = model.pipeline, timeout = Self.timeout
+            // nil means it timed out; .some(nil) means the site really failed.
+            let fetched: Data?? = await withTaskGroup(of: Data??.self) { group in
+                group.addTask { .some(try? await pipeline.data(for: MangaPage(url: url, label: "Cover"), chapter: chapter)) }
+                group.addTask { try? await Task.sleep(for: timeout); return nil }
+                let first = await group.next() ?? nil
+                group.cancelAll()
+                return first
+            }
+            guard !Task.isCancelled else { return }
+            guard let result = fetched else {
+                // Slow, not broken: show the title card now; a later appearance tries again.
+                failed = true
+                return
+            }
+            guard let data = result else {
+                Self.recentFailures[url] = Date(); failed = true; onFail?()
                 return
             }
             let thumb = await Task.detached(priority: .utility) { () -> CoverThumb? in
@@ -1745,12 +1861,39 @@ struct CoverView: View {
             }.value
             guard !Task.isCancelled else { return }
             if let thumb { Self.cache.setObject(thumb.image, forKey: url as NSURL); image = thumb.image }
-            else { failed = true; onFail?() }
+            else { Self.recentFailures[url] = Date(); failed = true; onFail?() }
         }
     }
 }
 
 private struct CoverThumb: @unchecked Sendable { let image: UIImage }
+
+/// A designed cover for works whose site publishes no artwork (most web novels) or whose cover
+/// failed: the title set in type on a tint chosen from the title, so each work looks distinct.
+struct TitleCover: View {
+    let title: String
+    var body: some View {
+        let hue = Double(UInt(bitPattern: title.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) }) % 360) / 360
+        ZStack(alignment: .bottomLeading) {
+            LinearGradient(colors: [Color(hue: hue, saturation: 0.55, brightness: 0.42),
+                                    Color(hue: (hue + 0.08).truncatingRemainder(dividingBy: 1), saturation: 0.6, brightness: 0.16)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            Circle().strokeBorder(Color.white.opacity(0.08), lineWidth: 10)
+                .frame(width: 120, height: 120).offset(x: 40, y: -90)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            VStack(alignment: .leading, spacing: 6) {
+                Rectangle().fill(Eclipse.highlight.opacity(0.85)).frame(width: 22, height: 2)
+                Text(title)
+                    .font(.system(.subheadline, design: .serif).weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(5).minimumScaleFactor(0.6)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(10)
+        }
+        .accessibilityHidden(true)
+    }
+}
 
 /// A series' details and full chapter list. Works for Berserk and anything added.
 enum ChapterFilter: String, CaseIterable, Identifiable {

@@ -71,4 +71,29 @@ final class BecauseYouReadTests: XCTestCase {
         XCTAssertTrue(search.contains("originalLanguage[]=ja"), search)
         XCTAssertTrue(asked.contains { $0.path.hasSuffix("/feed") }, "results weren't checked for readable chapters")
     }
+
+    private func series(_ id: String, _ title: String, language: String, tags: String = "[]") -> String {
+        #"{"id":"\#(id)","attributes":{"title":{"en":"\#(title)"},"originalLanguage":"\#(language)","year":2018,"tags":\#(tags)},"relationships":[]}"#
+    }
+
+    func testManhwaSeedFoundUnderAnotherSpellingGetsManhwaOnly() async throws {
+        let tags = #"[{"id":"g-fantasy","attributes":{"group":"genre","name":{"en":"Fantasy"}}}]"#
+        let transport = RoutedTransport([
+            ("title=Solo Leveling", #"{"data":[\#(series("s1", "Solo Leveling (Official)", language: "ko", tags: tags))]}"#),
+            ("includedTags", #"{"data":[\#(series("k1", "Omniscient Reader", language: "ko")),\#(series("j1", "A Manga", language: "ja")),\#(series("c1", "A Manhua", language: "zh"))]}"#),
+        ])
+        let items = try await Discover.similar(to: "Solo Leveling", style: .manhwa, http: transport)
+        XCTAssertEqual(items.map(\.title), ["Omniscient Reader"])
+        let asked = await transport.asked.map { $0.absoluteString.removingPercentEncoding ?? $0.absoluteString }
+        XCTAssertTrue(asked.contains { $0.contains("includedTags") && $0.contains("originalLanguage[]=ko") }, "\(asked)")
+    }
+
+    func testMediumFamiliesAndLooseTitles() {
+        XCTAssertTrue(Discover.mediumMatches(.webtoon, .manhwa))
+        XCTAssertFalse(Discover.mediumMatches(.manga, .manhwa))
+        XCTAssertFalse(Discover.mediumMatches(.comic, .manga))
+        XCTAssertTrue(Discover.looselySameTitle("The Beginning After the End", "Beginning After The End"))
+        XCTAssertTrue(Discover.looselySameTitle("Solo Leveling (Official)", "Solo Leveling"))
+        XCTAssertFalse(Discover.looselySameTitle("Bleach", "Bleach Fan Colored Edition Extra"))
+    }
 }

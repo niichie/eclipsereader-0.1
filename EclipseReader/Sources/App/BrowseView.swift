@@ -54,9 +54,10 @@ struct BrowseView: View {
                             HStack(alignment: .firstTextBaseline) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Results for “\(searchingText)”").font(.title3.weight(.bold)).lineLimit(2)
-                                    Text("Every connected and saved site · tap to add").font(.footnote).foregroundStyle(.secondary)
+                                    Text("Tap a cover to add it").font(.footnote).foregroundStyle(.secondary)
                                 }
                                 Spacer()
+                                SearchSitesMenu(search: search)
                                 Button("Clear") { withAnimation { self.searchingText = nil; search.cancel(); address = "" } }
                                     .font(.subheadline.weight(.semibold))
                             }
