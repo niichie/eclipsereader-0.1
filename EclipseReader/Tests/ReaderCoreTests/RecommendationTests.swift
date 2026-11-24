@@ -57,7 +57,9 @@ final class BecauseYouReadTests: XCTestCase {
         let items = try await Discover.similar(to: "Berserk", excluding: ["claymore"], http: transport)
         XCTAssertEqual(items.map(\.title), ["Vinland Saga"])
         let asked = await transport.asked
-        let last = asked.last.map { $0.absoluteString.removingPercentEncoding ?? $0.absoluteString } ?? ""
-        XCTAssertTrue(last.contains("includedTags[]=g-dark"), last)
+        // The genre search, then one readability check per result.
+        let search = asked.map { $0.absoluteString.removingPercentEncoding ?? $0.absoluteString }.first { $0.contains("includedTags") } ?? ""
+        XCTAssertTrue(search.contains("includedTags[]=g-dark"), search)
+        XCTAssertTrue(asked.contains { $0.path.hasSuffix("/feed") }, "results weren't checked for readable chapters")
     }
 }
