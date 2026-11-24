@@ -280,6 +280,52 @@ final class LiveProbeTests: XCTestCase {
         dump("mangadex follows anon", "\(ms) \(me.prefix(300))")
     }
 
+    func testNovelDiagnostics2() async {
+        let app = "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"
+        for (label, ua) in [("iphone", "iphone"), ("app", app), ("desktop", "desktop")] as [(String, String)] {
+            let (status, _, text) = await body("https://www.royalroad.com/fiction/21220/mother-of-learning/chapter/301781/2-lifes-little-problems", ua: ua)
+            dump("rr chapter ua=\(label)", "\(status) \(LinkedSource.title(in: text) ?? "-") " + around(text, "chapter-inner|chapter-content", before: 50, after: 500))
+            if status == 200 { dump("rr hidden", around(text, #"display:\s*none|speak:\s*never"#, before: 400, after: 200)) }
+            try? await Task.sleep(for: .seconds(2))
+        }
+        let (rs, _, search) = await body("https://www.royalroad.com/fictions/search?title=mother+of+learning", ua: "iphone")
+        dump("rr search iphone", "\(rs) " + around(search, "fiction-list-item|fiction-title", before: 50, after: 1200))
+        // Wuxiaworld: the chapter body and where the chapter list lives
+        let (_, _, chapter) = await body("https://www.wuxiaworld.com/novel/martial-world/mw-chapter-1", ua: "desktop")
+        dump("ww chapter body", around(chapter, #"class="chapter-content|<div[^>]*chapter-content"#, before: 100, after: 1500))
+        dump("ww chapter state", around(chapter, #""queryKey":\["chapter""#, before: 1500, after: 300))
+        dump("ww chapter paragraphs", around(chapter, "<p[^>]*>[A-Z]", before: 100, after: 800))
+        let (_, _, novel) = await body("https://www.wuxiaworld.com/novel/martial-world", ua: "desktop")
+        var keys: [String] = []
+        for m in LinkedSource.matches(#""queryKey":(\[[^\]]{0,160}\])"#, novel) { keys.append(m[0]) }
+        dump("ww novel query keys", keys.joined(separator: " | "))
+        dump("ww novel chapters", around(novel, #"chapterGroups|"chapterList"|"chapters":\["#, before: 100, after: 1500))
+        // J-Novel Club public API
+        for address in ["https://labs.j-novel.club/app/v2/series?format=json&limit=2",
+                        "https://labs.j-novel.club/app/v1/series?format=json&limit=2",
+                        "https://labs.j-novel.club/app/v2/series/ascendance-of-a-bookworm?format=json",
+                        "https://labs.j-novel.club/app/v2/series/ascendance-of-a-bookworm/volumes?format=json&limit=2",
+                        "https://labs.j-novel.club/app/v2/series/ascendance-of-a-bookworm/parts?format=json&limit=3"] {
+            let (status, type, text) = await body(address, ua: app, accept: "application/json")
+            dump("jnc \(address.replacingOccurrences(of: "https://labs.j-novel.club", with: ""))", "\(status) \(type) \(text.prefix(1200))")
+        }
+        let (ps, _, parts) = await body("https://labs.j-novel.club/app/v2/series/ascendance-of-a-bookworm/parts?format=json&limit=3", ua: app, accept: "application/json")
+        if ps == 200, let id = LinkedSource.firstMatch(#""legacyId"\s*:\s*"([^"]+)""#, parts) ?? LinkedSource.firstMatch(#""id"\s*:\s*"([^"]+)""#, parts) {
+            for address in ["https://labs.j-novel.club/embed/\(id)/data.xhtml", "https://labs.j-novel.club/app/v2/parts/\(id)/data.xhtml",
+                            "https://labs.j-novel.club/app/v2/parts/\(id)/token?format=json"] {
+                let (status, type, text) = await body(address, ua: app)
+                dump("jnc part \(address.replacingOccurrences(of: "https://labs.j-novel.club", with: ""))", "\(status) \(type) \(text.prefix(800))")
+            }
+        }
+        // WEBTOON sign-in address
+        for address in ["https://www.webtoons.com/member/login", "https://www.webtoons.com/en/member/login?loginType=EMAIL", "https://m.webtoons.com/en/member/login"] {
+            let (status, _, text) = await body(address, ua: "iphone")
+            dump("webtoon \(address)", "\(status) \(LinkedSource.title(in: text) ?? "-")")
+        }
+        let (js, _, jnc) = await body("https://j-novel.club/login", ua: "iphone")
+        dump("jnc login page", "\(js) \(LinkedSource.title(in: jnc) ?? "-")")
+    }
+
     func testDiagnostics() async {
         for (label, ua) in [("iphone", "iphone"), ("app", "EclipseReader/1.0 (iOS; +https://github.com/niichie/eclipsereader-0.1)"), ("none", nil)] as [(String, String?)] {
             let (status, type, text) = await body("https://api.mangadex.org/manga?limit=1&title=chainsaw", ua: ua, accept: "application/json")
