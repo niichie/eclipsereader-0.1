@@ -206,6 +206,7 @@ final class LiveProbeTests: XCTestCase {
             CharacterSet.controlCharacters.contains($0) ? " " : $0
         }))
         print("DUMP|\(name)|\(clean)")
+        fflush(stdout)
     }
     private func links(_ html: String, _ pattern: String, limit: Int = 25) -> String {
         var seen = Set<String>()
@@ -350,8 +351,7 @@ final class LiveProbeTests: XCTestCase {
             let (ps, pt, parts) = await body("https://labs.j-novel.club/app/v2/volumes/\(volume)/parts?format=json", ua: app, accept: "application/json")
             dump("jnc volume parts", "\(ps) \(pt) \(parts.prefix(1500))")
             if let part = LinkedSource.firstMatch(#""id"\s*:\s*"(PRT-[^"]+)""#, parts) ?? LinkedSource.firstMatch(#""legacyId"\s*:\s*"([^"]+)""#, parts) {
-                for address in ["https://labs.j-novel.club/embed/\(part)/data.xhtml", "https://labs.j-novel.club/app/v2/parts/\(part)?format=json",
-                                "https://labs.j-novel.club/app/v2/parts/\(part)/data.xhtml"] {
+                for address in ["https://labs.j-novel.club/app/v2/parts/\(part)/data.xhtml", "https://labs.j-novel.club/embed/\(part)/data.xhtml"] {
                     let (status, type, text) = await body(address, ua: app)
                     dump("jnc part \(address.replacingOccurrences(of: "https://labs.j-novel.club", with: ""))", "\(status) \(type) \(text.prefix(900))")
                 }
