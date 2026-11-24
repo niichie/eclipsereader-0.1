@@ -417,8 +417,10 @@ struct MangaBrowserView: View {
     }
     /// Book libraries (Gutenberg, Standard Ebooks, Wikisource): the guide talks about books, not series.
     private var onBookSite: Bool {
+        if BooksBrowseSection.libraries.contains(where: { $0.url.host == start.host }) { return true }
         guard let host = browser.currentURL?.host?.lowercased() else { return false }
-        return BookLinks.libraryHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+        return BooksBrowseSection.libraries.contains { $0.url.host == host }
+            || BookLinks.libraryHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
     /// Downloads the page's book through the browser itself (so any site check it passed still counts);
     /// the finished file goes straight into the library.
@@ -515,7 +517,8 @@ private struct BrowserToolbar: View {
     let guide: () -> Void
     let read: () -> Void
     private var addable: Bool {
-        switch summary { case .series, .chapter: true; default: false }
+        guard !bookSite else { return false }
+        switch summary { case .series, .chapter: return true; default: return false }
     }
     var body: some View {
         HStack(spacing: 2) {
@@ -568,7 +571,7 @@ private struct BrowserToolbar: View {
                         }
                     }
                     .buttonStyle(PressableStyle())
-                    .accessibilityLabel("How to add a series")
+                    .accessibilityLabel(bookSite ? "How to add a book" : "How to add a series")
                     .accessibilityIdentifier("browserAddGuide")
                     .transition(.opacity)
                 }

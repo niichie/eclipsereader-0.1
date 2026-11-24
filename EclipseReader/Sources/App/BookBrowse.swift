@@ -95,12 +95,15 @@ struct BooksBrowseSection: View {
     @State private var popular: [FreeBook] = []
     @State private var busyID: String?
     @State private var message: String?
-    /// Libraries whose books download straight into eclipsereader (tap Add book on a book's page).
-    /// Lending libraries (Open Library, Internet Archive) are left out: their books are borrow-only.
+    /// Catalogs open in the book browser so sign-in and file downloads share the site's session.
     static let libraries: [CatalogSite] = [
         SiteCatalog.site("Standard Ebooks", "https://standardebooks.org/ebooks", "Beautifully made free classics", "text.book.closed"),
         SiteCatalog.site("Project Gutenberg", "https://www.gutenberg.org/", "70,000+ free public-domain books", "books.vertical"),
         SiteCatalog.site("Wikisource", "https://en.wikisource.org/", "Public-domain texts · EPUB downloads", "doc.text"),
+        SiteCatalog.site("Library Genesis", "https://libgen.li/", "Search titles, authors, or ISBNs", "books.vertical"),
+        SiteCatalog.site("Z-Library", "https://z-library.gy/", "Browse books and sign in on the site", "book"),
+        SiteCatalog.site("Anna’s Archive", "https://annas-archive.gl/", "Search titles, authors, or ISBNs", "archivebox"),
+        SiteCatalog.site("Mobilism", "https://forum.mobilism.org/viewforum.php?f=120", "Browse the ebook forum", "text.bubble"),
     ]
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -137,7 +140,7 @@ struct BooksBrowseSection: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
                 ForEach(Self.libraries) { site in
-                    Button { browsing = BrowseTarget(url: site.url) } label: {
+                    Button { browsing = BrowseTarget(url: catalogURL(site)) } label: {
                         HStack(spacing: 12) {
                             Image(systemName: site.symbol).foregroundStyle(Eclipse.highlight)
                                 .frame(width: 42, height: 42).background(Eclipse.accent.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
@@ -164,6 +167,21 @@ struct BooksBrowseSection: View {
             }
         }
     }
+    private func catalogURL(_ site: CatalogSite) -> URL {
+        let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, var url = URLComponents(url: site.url, resolvingAgainstBaseURL: false) else { return site.url }
+        switch url.host {
+        case "libgen.li":
+            url.path = "/index.php"
+            url.queryItems = [URLQueryItem(name: "req", value: query)]
+        case "annas-archive.gl":
+            url.path = "/search"
+            url.queryItems = [URLQueryItem(name: "q", value: query)]
+        default: return site.url
+        }
+        return url.url ?? site.url
+    }
+
     private func open(_ book: FreeBook, downloadFile: Bool) {
         message = nil
         if !downloadFile, let page = book.page, let download = book.download {
