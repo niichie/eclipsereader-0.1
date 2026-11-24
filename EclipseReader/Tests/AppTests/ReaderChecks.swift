@@ -11,6 +11,38 @@ final class ReaderChecks: XCTestCase {
         ("Pride and Prejudice (Standard Ebooks)", "https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice/downloads/jane-austen_pride-and-prejudice.epub?source=download"),
         ("Alice (Project Gutenberg mirror, pictures)", "https://gutenberg.pglaf.org/cache/epub/11/pg11-images-3.epub"),
     ]
+    func testQuoteArtworkIsVisibleAtCompactAndOpenWidths() async throws {
+        let art = UIGraphicsImageRenderer(size: CGSize(width: 60, height: 85)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 60, height: 85))
+        }
+        let page = ReaderTestFixture.chapter
+        let work = "One-Punch Man"
+        let item = Spotlight(quote: LaunchQuote(text: "A quote", who: "Saitama", work: work), media: nil)
+        let info = LinkInspection(title: work, cover: nil, pages: [], chapters: [page])
+        let card = VerifiedQuote(item: item, destination: .manga(page.url, info), pageThumbnail: try XCTUnwrap(art.pngData()))
+        for width: CGFloat in [300, 650] {
+            let view = SpotlightCard(card: card, width: width, read: {}, next: {}, close: {}).frame(width: width)
+            let window = show(view, size: CGSize(width: width, height: 360))
+            let visible = await wait(5) {
+                let shot = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                guard let image = shot.cgImage,
+                      let bitmap = CGContext(data: nil, width: 64, height: 48, bitsPerComponent: 8, bytesPerRow: 256,
+                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue),
+                      let data = bitmap.data else { return false }
+                bitmap.draw(image, in: CGRect(x: 0, y: 0, width: 64, height: 48))
+                let rgb = data.assumingMemoryBound(to: UInt8.self)
+                return stride(from: 0, to: 64 * 48 * 4, by: 4).filter {
+                    rgb[$0] > 220 && rgb[$0 + 1] < 30 && rgb[$0 + 2] < 30
+                }.count > 12
+            }
+            XCTAssertTrue(visible, "Missing page artwork at width \(width)")
+            window.isHidden = true
+        }
+    }
+
     func testQuoteCoversSurviveMissingMetadataAndCacheRoundTrip() throws {
         let series = URL(string: "https://example.org/series")!
         let cover = series.appendingPathComponent("cover.jpg")
