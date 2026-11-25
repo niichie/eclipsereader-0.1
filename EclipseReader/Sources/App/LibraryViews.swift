@@ -2172,20 +2172,12 @@ struct SeriesView: View {
                             }
                         } label: { Label("Mark all as read", systemImage: "checkmark.circle") }
                         }
-                        if series.isOnline && !series.chapters.isEmpty {
+                        // Downloading is the header's download button; only removing them lives here.
+                        if series.isOnline && model.downloadedCount(series) > 0 {
                             Section("Offline") {
-                                Button {
-                                    let start = model.resume(series).flatMap { series.chapters.firstIndex(of: $0) } ?? 0
-                                    model.download(Array(series.chapters.dropFirst(start).prefix(5)))
-                                } label: { Label("Download next 5 chapters", systemImage: "arrow.down.circle") }
-                                Button {
-                                    model.download(series.chapters.filter { model.state.progress[$0.id]?.completed != true })
-                                } label: { Label("Download all unread", systemImage: "arrow.down.circle.dotted") }
-                                if model.downloadedCount(series) > 0 {
-                                    Button(role: .destructive) {
-                                        for chapter in series.chapters where model.isDownloaded(chapter) { model.removeDownload(chapter) }
-                                    } label: { Label("Remove downloads", systemImage: "trash") }
-                                }
+                                Button(role: .destructive) {
+                                    for chapter in series.chapters where model.isDownloaded(chapter) { model.removeDownload(chapter) }
+                                } label: { Label("Remove downloads", systemImage: "trash") }
                             }
                         }
                         Section {
@@ -2409,7 +2401,7 @@ struct SeriesHeader: View {
                     } label: { squareButton(style.symbol) }
                         .accessibilityLabel("Reads as \(style.title)")
                 }
-                if series.kind == .web {
+                if series.isOnline && !series.chapters.isEmpty {
                     Menu {
                         Button {
                             let start = resume.flatMap { series.chapters.firstIndex(of: $0) } ?? 0
