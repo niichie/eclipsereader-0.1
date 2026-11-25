@@ -76,7 +76,7 @@ struct BrowseView: View {
 
                     if !popular.isEmpty {
                         section("Popular on MangaDex", detail: nil) {
-                            ScrollView(.horizontal, showsIndicators: false) {
+                            FadingRow {
                                 LazyHStack(alignment: .top, spacing: 12) {
                                     ForEach(popular) { item in discoverCard(item).frame(width: Eclipse.cardWidth(regular: sizeClass == .regular)) }
                                 }.padding(.vertical, 2)

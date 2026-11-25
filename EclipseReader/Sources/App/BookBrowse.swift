@@ -113,7 +113,7 @@ struct BooksBrowseSection: View {
             } else if !popular.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Popular free classics").font(.headline)
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    FadingRow {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(popular) { book in
                                 FreeBookCard(book: book, busy: busyID == book.id, open: { open(book, downloadFile: false) }, download: { open(book, downloadFile: true) })
@@ -235,7 +235,7 @@ struct BookSearchResults: View {
                     Text(books.isEmpty ? "No matches" : detail).font(.caption).foregroundStyle(.secondary)
                 }
                 if !books.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    FadingRow {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(books) { book in
                                 FreeBookCard(book: book, busy: busyID == book.id, open: { pick(book, false) }, download: { pick(book, true) })

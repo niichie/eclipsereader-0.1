@@ -805,7 +805,7 @@ struct NovelBrowseSection: View {
                     Text("Popular on Syosetu").font(.title3.weight(.bold))
                     Text("English edition titles · chapters in Japanese").font(.footnote).foregroundStyle(.secondary)
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
+                FadingRow {
                     LazyHStack(alignment: .top, spacing: 12) {
                         ForEach(popular) { item in
                             Button { add(item) } label: {

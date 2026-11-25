@@ -76,7 +76,7 @@ struct ShimmerView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         GeometryReader { g in
-            LinearGradient(colors: [.clear, Color.white.opacity(0.07), .clear], startPoint: .leading, endPoint: .trailing)
+            LinearGradient(colors: [.clear, Color.white.opacity(0.12), .clear], startPoint: .leading, endPoint: .trailing)
                 .frame(width: g.size.width * 0.8)
                 .offset(x: phase * g.size.width * 1.4)
         }
@@ -86,6 +86,23 @@ struct ShimmerView: View {
             withAnimation(.linear(duration: 1.3).repeatForever(autoreverses: false)) { phase = 1 }
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// A sideways-scrolling row of covers. Its trailing edge fades out, so a row that runs past the
+/// screen (or into the Duo front screen's side column) looks deliberate rather than chopped off.
+struct FadingRow<Content: View>: View {
+    private let content: Content
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) { content }
+            .mask {
+                HStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 36)
+                }
+            }
     }
 }
 

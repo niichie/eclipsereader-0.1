@@ -216,7 +216,7 @@ struct GlobalSearchResults: View {
                 Spacer()
                 if let host { Text(host).font(.caption).foregroundStyle(.secondary) }
             }
-            ScrollView(.horizontal, showsIndicators: false) {
+            FadingRow {
                 LazyHStack(alignment: .top, spacing: 12) { content() }.padding(.vertical, 2)
             }
         }

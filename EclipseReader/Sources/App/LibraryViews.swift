@@ -616,13 +616,18 @@ struct DiscoverStrip: View {
             if similarTo != nil || !items.isEmpty {
                 HStack(alignment: .firstTextBaseline) {
                     if let similarTo {
-                        Text("\(Text("Because you read ").foregroundStyle(.secondary))\(similarTo)")
-                            .font(.title3.weight(.bold)).lineLimit(1)
-                            .contextMenu { if let seedID { Button("Ignore this series for recommendations") { model.ignoreRecommendationSeed(seedID) } } }
-                        if let style, style != .automatic {
-                            Text(style.title).font(.caption2.weight(.heavy)).foregroundStyle(.secondary)
-                                .padding(.horizontal, 6).padding(.vertical, 2).background(Eclipse.surfaceHigh, in: Capsule())
+                        // Two lines, so narrow screens (the Duo's front screen) show the whole title.
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text("BECAUSE YOU READ").font(.caption.weight(.heavy)).tracking(1).foregroundStyle(.secondary)
+                                if let style, style != .automatic {
+                                    Text(style.title).font(.caption2.weight(.heavy)).foregroundStyle(.secondary)
+                                        .padding(.horizontal, 6).padding(.vertical, 2).background(Eclipse.surfaceHigh, in: Capsule())
+                                }
+                            }
+                            Text(similarTo).font(.title3.weight(.bold)).lineLimit(2)
                         }
+                        .contextMenu { if let seedID { Button("Ignore this series for recommendations") { model.ignoreRecommendationSeed(seedID) } } }
                     } else {
                         Text("Discover").font(.title3.weight(.bold))
                         Text("Popular on MangaDex").font(.footnote).foregroundStyle(.secondary)
@@ -630,18 +635,24 @@ struct DiscoverStrip: View {
                     Spacer()
                 }
                 if !shown.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    FadingRow {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(shown) { item in card(item, width: cardWidth) }
                         }
                     }
                 } else if phase == .loading {
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    FadingRow {
                         HStack(spacing: 12) {
+                            // Loading: the same shape as a real card (cover, title, year), gently shimmering.
                             ForEach(0..<4, id: \.self) { _ in
-                                RoundedRectangle(cornerRadius: 10).fill(Eclipse.surfaceHigh)
-                                    .overlay(ShimmerView().clipShape(RoundedRectangle(cornerRadius: 10)))
-                                    .frame(width: cardWidth, height: cardWidth / 0.7)
+                                VStack(alignment: .leading, spacing: 7) {
+                                    RoundedRectangle(cornerRadius: Eclipse.cardRadius).fill(Eclipse.surfaceHigh)
+                                        .overlay(EclipseMark(size: 26).opacity(0.25))
+                                        .frame(width: cardWidth, height: cardWidth / 0.7)
+                                    Capsule().fill(Eclipse.surfaceHigh).frame(width: cardWidth * 0.85, height: 10)
+                                    Capsule().fill(Eclipse.surfaceHigh.opacity(0.7)).frame(width: cardWidth * 0.45, height: 8)
+                                }
+                                .overlay(ShimmerView())
                             }
                         }
                     }.disabled(true)
@@ -794,7 +805,7 @@ private struct TextRecommendationStrip: View {
                     Text("\(Text("Because you read ").foregroundStyle(.secondary))\(series.title)")
                         .font(.title3.weight(.bold)).lineLimit(1)
                         .contextMenu { Button("Ignore this series for recommendations") { model.ignoreRecommendationSeed(series.id) } }
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    FadingRow {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(suggestions) { item in
                                 card(item.title, cover: item.cover, detail: "Novel") {
