@@ -10,6 +10,8 @@ final class GlobalSearchModel: ObservableObject {
         var id: String { source.id }
     }
     @Published private(set) var sections: [Section] = []
+    /// Sites with results, in the order their results arrived (shown in that order, so rows never jump).
+    @Published private(set) var arrived: [String] = []
     @Published private(set) var query = ""
     /// Every site this search could use; the ones switched off in the Sites menu are not queried.
     @Published private(set) var candidates: [SearchSource] = []
@@ -48,6 +50,7 @@ final class GlobalSearchModel: ObservableObject {
         candidates = sources
         self.queries = queries
         let active = sources.filter { !excluded.contains($0.id) }
+        arrived = []
         sections = active.map { Section(source: $0, phase: .loading) }
         for source in active { start(source) }
     }
@@ -64,6 +67,7 @@ final class GlobalSearchModel: ObservableObject {
         } else {
             tasks[source.id]?.cancel(); tasks[source.id] = nil
             sections.removeAll { $0.id == source.id }
+            arrived.removeAll { $0 == source.id }
         }
     }
     func setAll(_ on: Bool) {
@@ -75,21 +79,30 @@ final class GlobalSearchModel: ObservableObject {
         let text = query
         let wanted = queries[source.id] ?? text
         tasks[source.id] = Task { [weak self] in
-            let phase: Phase
-            do {
-                phase = .done(try await GlobalSearch.search(source, query: wanted))
-            } catch {
-                // Sites that only answer browsers: read their search page the way Safari would.
-                if case .site = source.kind {
-                    let found = await Self.rendered(source, query: wanted)
-                    phase = found.isEmpty ? .failed : .done(found)
-                } else {
-                    phase = .failed
+            // A site gets 20 seconds; after that it counts as not answering (and goes in the
+            // "Try in browser" menu), so one slow site can't keep the search running for minutes.
+            let phase: Phase = await withTaskGroup(of: Phase?.self) { group in
+                group.addTask {
+                    do {
+                        return .done(try await GlobalSearch.search(source, query: wanted))
+                    } catch {
+                        // Sites that only answer browsers: read their search page the way Safari would.
+                        guard case .site = source.kind else { return .failed }
+                        let found = await Self.rendered(source, query: wanted)
+                        return found.isEmpty ? .failed : .done(found)
+                    }
                 }
+                group.addTask { try? await Task.sleep(for: .seconds(20)); return nil }
+                let first = await group.next() ?? nil
+                group.cancelAll()
+                return first ?? .failed
             }
             guard let self, !Task.isCancelled, self.query == text,
                   let i = self.sections.firstIndex(where: { $0.id == source.id }) else { return }
             self.sections[i].phase = phase
+            if case .done(let items) = phase, !items.isEmpty, !self.arrived.contains(source.id) {
+                withAnimation(.easeOut(duration: 0.25)) { self.arrived.append(source.id) }
+            }
         }
     }
     private static func rendered(_ source: SearchSource, query: String) async -> [DiscoverItem] {
@@ -128,16 +141,15 @@ struct GlobalSearchResults: View {
                     }
                 }
             }
-            ForEach(search.sections) { section in
+            // Only sites that found something, in the order they answered; the rest keep searching in
+            // the background behind one progress line instead of a row of placeholders each.
+            if !search.finished && !search.sections.isEmpty {
+                SearchProgressLine(total: search.sections.count,
+                                   done: search.sections.filter { $0.phase != .loading }.count,
+                                   found: search.arrived.count)
+            }
+            ForEach(search.arrived.compactMap { id in search.sections.first { $0.id == id } }) { section in
                 switch section.phase {
-                case .loading:
-                    row(title: section.source.name, host: section.source.host, count: nil) {
-                        ForEach(0..<4, id: \.self) { _ in
-                            RoundedRectangle(cornerRadius: 10).fill(Eclipse.surfaceHigh)
-                                .overlay(ShimmerView().clipShape(RoundedRectangle(cornerRadius: 10)))
-                                .frame(width: cardWidth, height: cardWidth / 0.7)
-                        }
-                    }
                 case .done(let items) where !items.isEmpty:
                     row(title: section.source.name, host: section.source.host, count: items.count) {
                         ForEach(items) { item in
@@ -151,6 +163,7 @@ struct GlobalSearchResults: View {
                     EmptyView()
                 }
             }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
             let empty = search.sections.filter { if case .done(let items) = $0.phase { return items.isEmpty } else { return false } }
             let failed = search.sections.filter { $0.phase == .failed }
             // One compact line for sites that didn't answer, with their browser searches in a menu,
@@ -191,7 +204,7 @@ struct GlobalSearchResults: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(16).eclipseCard(cornerRadius: 14)
             } else if !empty.isEmpty && search.finished {
-                Text("No matches on " + empty.map(\.source.name).joined(separator: ", ") + ".")
+                Text("\(empty.count) other site\(empty.count == 1 ? "" : "s") had no matches.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -595,5 +608,28 @@ struct SearchSitesMenu: View {
 struct TrailingIconLabel: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 4) { configuration.title; configuration.icon.font(.caption2.weight(.bold)) }
+    }
+}
+
+
+/// "Searching 51 sites… 14 done", with a thin bar: what's still running, without a placeholder row per site.
+struct SearchProgressLine: View {
+    let total: Int
+    let done: Int
+    let found: Int
+    var noun = "site"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Searching \(total) \(noun)\(total == 1 ? "" : "s")… \(done) done").font(.subheadline.weight(.semibold))
+                Spacer()
+                if found > 0 { Text("\(found) with results").font(.footnote).foregroundStyle(.secondary) }
+            }
+            ProgressView(value: Double(done), total: Double(max(total, 1))).tint(Eclipse.highlight)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12).eclipseCard(cornerRadius: 12)
+        .animation(.easeOut(duration: 0.2), value: done)
+        .accessibilityElement(children: .combine)
     }
 }

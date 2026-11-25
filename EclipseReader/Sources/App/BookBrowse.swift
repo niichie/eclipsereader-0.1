@@ -189,9 +189,22 @@ struct BookSearchResults: View {
                     Button { openLocal(series) } label: { Text("\(series.title)\(series.author.map { " · \($0)" } ?? "")").font(.subheadline) }
                 }
             }
-            ForEach(BookCatalog.allCases.sorted { rank($0) < rank($1) }, id: \.self) { catalog in
-                let phase = search.phases[catalog] ?? .idle
-                if !Self.isFailed(phase) { row(catalog.rawValue, "Tap a cover for details", phase) }
+            // Only catalogs that found books; the others search behind one progress line.
+            let running = BookCatalog.allCases.filter { search.phases[$0] == .loading }
+            let started = BookCatalog.allCases.filter { (search.phases[$0] ?? .idle) != .idle }
+            if !running.isEmpty {
+                SearchProgressLine(total: started.count, done: started.count - running.count,
+                                   found: BookCatalog.allCases.filter { Self.hasBooks(search.phases[$0]) }.count, noun: "catalog")
+            }
+            ForEach(BookCatalog.allCases.filter { Self.hasBooks(search.phases[$0]) }, id: \.self) { catalog in
+                row(catalog.rawValue, "Tap a cover for details", search.phases[catalog] ?? .idle)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            let none = BookCatalog.allCases.filter { if case .done(let books) = search.phases[$0] { return books.isEmpty } else { return false } }
+            if running.isEmpty && !none.isEmpty {
+                Text(none.count == started.count ? "No books found for “\(search.query)”."
+                                                 : "\(none.count) other catalog\(none.count == 1 ? "" : "s") had no matches.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             // Catalogs that couldn't be read: one line, their browser searches in a dropdown.
             let failed = BookCatalog.allCases.filter { Self.isFailed(search.phases[$0] ?? .idle) }
@@ -213,13 +226,13 @@ struct BookSearchResults: View {
             }
         }
     }
+    private static func hasBooks(_ phase: BookSearchModel.Phase?) -> Bool {
+        if case .done(let books) = phase { return !books.isEmpty }
+        return false
+    }
     private static func isFailed(_ phase: BookSearchModel.Phase) -> Bool {
         if case .failed = phase { return true }
         return false
-    }
-    private func rank(_ catalog: BookCatalog) -> Int {
-        if case .done(let books) = search.phases[catalog], !books.isEmpty { return 0 }
-        return 1
     }
     @ViewBuilder private func row(_ title: String, _ detail: String, _ phase: BookSearchModel.Phase) -> some View {
         switch phase {
