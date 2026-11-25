@@ -117,10 +117,6 @@ actor PageDecoder {
         try Task.checkCancellation()
         return try Self.decode(data, trim: trim, limit: limit, enhance: enhance, half: half)
     }
-    func panels(_ source: PanelSource, rtl: Bool) throws -> [PanelRect] {
-        try Task.checkCancellation()
-        return PanelSource.detect(source, rightToLeft: rtl)
-    }
     private let tileContext = CIContext(options: [.cacheIntermediates: false])
     func tile(_ data: Data, region: CGRect, pixels: CGSize) throws -> UIImage? {
         try Task.checkCancellation()
