@@ -393,11 +393,14 @@ public enum Discover {
     static func lookupQueries(_ title: String) -> [String] {
         var queries = [title]
         if let cut = title.range(of: #"\s*[:~(\[–—]|\s+-\s+"#, options: .regularExpression) {
+            // A title with a subtitle: the part before it is the series name.
             let head = String(title[..<cut.lowerBound]).trimmingCharacters(in: .whitespaces)
             if head.count >= 3 { queries.append(head) }
+        } else {
+            // A long run-on title ("Gurren Lagann Tengen Toppa Gurren Lagann"): its first two words.
+            let words = title.split(separator: " ")
+            if words.count >= 4 { queries.append(words.prefix(2).joined(separator: " ")) }
         }
-        let words = title.split(separator: " ")
-        if words.count >= 4 { queries.append(words.prefix(2).joined(separator: " ")) }
         var seen = Set<String>()
         return queries.filter { seen.insert($0.lowercased()).inserted }
     }
