@@ -96,4 +96,38 @@ final class BecauseYouReadTests: XCTestCase {
         XCTAssertTrue(Discover.looselySameTitle("Solo Leveling (Official)", "Solo Leveling"))
         XCTAssertFalse(Discover.looselySameTitle("Bleach", "Bleach Fan Colored Edition Extra"))
     }
+
+    func testReworkedTitlesStillMatch() {
+        XCTAssertTrue(Discover.titleMatches("Tengen Toppa Gurren Lagann", "Gurren Lagann Tengen Toppa Gurren Lagann"))
+        XCTAssertTrue(Discover.titleMatches("Jujutsu Kaisen", "JUJUTSU KAISEN"))
+        XCTAssertFalse(Discover.titleMatches("Chainsaw Man", "Jujutsu Kaisen"))
+        XCTAssertFalse(Discover.titleMatches("One Piece", "One Punch Man"))
+        XCTAssertEqual(Discover.lookupQueries("Gurren Lagann Tengen Toppa Gurren Lagann"), ["Gurren Lagann Tengen Toppa Gurren Lagann", "Gurren Lagann"])
+        XCTAssertEqual(Discover.lookupQueries("Kaguya-sama: Love Is War"), ["Kaguya-sama: Love Is War", "Kaguya-sama"])
+    }
+
+    func testOneEntryPerSeriesPreferringThePlainEdition() {
+        func item(_ id: String, _ title: String) -> DiscoverItem {
+            DiscoverItem(id: id, title: title, url: URL(string: "https://mangadex.org/title/\(id)")!, cover: nil, detail: nil)
+        }
+        let picked = Discover.onePerFranchise([
+            item("1", "JoJo no Kimyou na Bouken: Part 7 - Steel Ball Run"),
+            item("2", "JoJo no Kimyou na Bouken: Part 8 - JoJolion"),
+            item("3", "Chainsaw Man (Official Colored)"),
+            item("4", "Chainsaw Man"),
+            item("5", "Dandadan"),
+        ])
+        XCTAssertEqual(picked.map(\.id), ["1", "4", "5"])
+    }
+
+    func testRecommendationsSkipTheSeriesItselfAndItsSpinOffs() async throws {
+        let tags = #"[{"id":"g-action","attributes":{"group":"genre","name":{"en":"Action"}}}]"#
+        let transport = RoutedTransport([
+            ("title=Gurren Lagann Tengen", #"{"data":[]}"#),
+            ("title=Gurren Lagann&", #"{"data":[\#(series("g1", "Tengen Toppa Gurren Lagann", language: "ja", tags: tags))]}"#),
+            ("includedTags", #"{"data":[\#(series("g2", "Tengen Toppa Gurren Lagann: Lagann-hen", language: "ja")),\#(series("d1", "Dandadan", language: "ja"))]}"#),
+        ])
+        let items = try await Discover.similar(to: "Gurren Lagann Tengen Toppa Gurren Lagann", style: .manga, http: transport)
+        XCTAssertEqual(items.map(\.title), ["Dandadan"])
+    }
 }

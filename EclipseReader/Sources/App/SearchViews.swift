@@ -142,7 +142,7 @@ struct GlobalSearchResults: View {
                     row(title: section.source.name, host: section.source.host, count: items.count) {
                         ForEach(items) { item in
                             card(title: item.title, cover: cover(for: item), detail: item.detail,
-                                 owned: library.libraryMembers.contains { $0.url == item.url }, busy: busyID == item.id, referer: nil) {
+                                 owned: library.ownsWork(title: item.title, url: item.url), busy: busyID == item.id, referer: nil) {
                                 pick(item)
                             }
                         }

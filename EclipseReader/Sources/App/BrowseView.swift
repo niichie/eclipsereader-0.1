@@ -160,7 +160,7 @@ struct BrowseView: View {
                         }
                     }
                     .overlay(alignment: .topTrailing) {
-                        if model.libraryMembers.contains(where: { $0.url == item.url }) {
+                        if model.ownsWork(title: item.title, url: item.url) {
                             Image(systemName: "checkmark.circle.fill").font(.callout).foregroundStyle(Eclipse.highlight)
                                 .background(Circle().fill(.black)).padding(5)
                         }

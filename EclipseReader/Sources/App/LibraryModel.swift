@@ -152,6 +152,14 @@ final class LibraryModel: ObservableObject {
 
     var libraryMembers: [MangaSeries] { allSeries.filter(\.isLibraryMember) }
 
+    /// Already in your library: the same link, or the same work under another wording, so a series
+    /// added from one site isn't suggested again from another ("JUJUTSU KAISEN" from MangaDex vs
+    /// "Jujutsu Kaisen" from WeebCentral).
+    func ownsWork(title: String, url: URL) -> Bool {
+        let shelf = (state.showsBerserk == true ? [berserk] : []) + libraryMembers
+        return shelf.contains { $0.url == url || Discover.titleMatches($0.title, title) }
+    }
+
     @discardableResult
     func addToLibrary(_ series: MangaSeries) -> MangaSeries {
         if series.id == Self.berserkID { state.showsBerserk = true; save(); return berserk }

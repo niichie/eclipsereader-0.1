@@ -611,7 +611,7 @@ struct DiscoverStrip: View {
     private var memoryKey: String { "\(seedID ?? similarTo ?? "popular")|\(style?.rawValue ?? "")" }
     var body: some View {
         let cardWidth = Eclipse.cardWidth(available: width)
-        let shown = items.filter { item in (similarTo == nil || model.state.hiddenRecommendationTitles?.contains(QuoteFeed.workKey(item.title)) != true) && !model.libraryMembers.contains { $0.url == item.url } }
+        let shown = items.filter { item in (similarTo == nil || model.state.hiddenRecommendationTitles?.contains(QuoteFeed.workKey(item.title)) != true) && !model.ownsWork(title: item.title, url: item.url) }
         VStack(alignment: .leading, spacing: 10) {
             if similarTo != nil || !items.isEmpty {
                 HStack(alignment: .firstTextBaseline) {
@@ -707,7 +707,7 @@ struct DiscoverStrip: View {
             return
         }
         phase = .loading
-        let skip = Set(model.libraryMembers.map(\.title))
+        let skip = Set(model.librarySeries.map(\.title))
         var reached = false
         var found: [DiscoverItem] = []
         // A busy MangaDex (rate limit, slow network) used to empty the shelf until a manual refresh.
@@ -732,24 +732,34 @@ struct DiscoverStrip: View {
     }
     private func aniList(_ title: String, skip: Set<String>) async -> [DiscoverItem]? {
         let medium = style ?? .automatic
-        guard medium != .comic,
-              let data = try? await AniList.post(AniListAPI.similarQuery, variables: ["search": title], auth: false),
-              let parsed = try? AniListAPI.parseSimilar(data) else { return nil }
+        guard medium != .comic else { return nil }
+        // The library title can be worded differently from AniList's: try shorter forms too.
+        var parsed: (matched: String?, items: [AniListMedia])?
+        for query in Discover.lookupQueries(title) {
+            if let data = try? await AniList.post(AniListAPI.similarQuery, variables: ["search": query], auth: false),
+               let found = try? AniListAPI.parseSimilar(data), !found.items.isEmpty {
+                parsed = found
+                break
+            }
+        }
+        guard let parsed else { return nil }
+        let seedKey = Discover.franchiseKey(title)
         let kind: String? = switch medium {
         case .manga: "Manga"
         case .manhwa, .webtoon: "Manhwa"
         case .manhua: "Manhua"
         case .comic, .automatic: nil
         }
-        return parsed.items
-            .filter { item in item.format != "NOVEL" && (kind == nil || item.kind == kind) && !skip.contains { Discover.sameTitle($0, item.title) } }
-            .prefix(16)
-            .compactMap { item in
+        let items = parsed.items
+            .filter { item in item.format != "NOVEL" && (kind == nil || item.kind == kind) && !skip.contains { Discover.titleMatches($0, item.title) }
+                && Discover.franchiseKey(item.title) != seedKey }
+            .compactMap { item -> DiscoverItem? in
                 URL(string: "https://anilist.co/manga/\(item.id)").map {
                     DiscoverItem(id: "anilist-\(item.id)", title: item.title, url: $0, cover: item.cover,
                                  detail: [item.kind, item.year.map(String.init)].compactMap { $0 }.joined(separator: " · "))
                 }
             }
+        return Array(Discover.onePerFranchise(items).prefix(16))
     }
     private static func isAniList(_ item: DiscoverItem) -> Bool { item.url.host == "anilist.co" }
     private func select(_ item: DiscoverItem, add: Bool) {

@@ -314,15 +314,26 @@ public enum Discover {
     /// still found (alternative and partial titles), so non-Japanese series get recommendations too.
     public static func similar(to title: String, excluding: Set<String> = [], limit: Int = 16, style: ReadingStyle? = nil,
                                http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [DiscoverItem] {
-        var lookup = URLComponents(string: "https://api.mangadex.org/manga")!
-        lookup.queryItems = base(limit: 10, ratings: ["safe", "suggestive", "erotica"]) + [
-            URLQueryItem(name: "title", value: title), URLQueryItem(name: "order[relevance]", value: "desc")]
-        guard let lookupURL = lookup.url else { return [] }
-        let found = try parse(try await http.fetch(lookupURL, referer: nil, image: false))
         let wanted = style.flatMap { $0 == .automatic ? nil : $0 }
-        let source = found.first { Self.sameTitle($0.item.title, title) }
-            ?? found.first { entry in Self.looselySameTitle(entry.item.title, title) && (wanted.map { mediumMatches(entry.style, $0) } ?? true) }
-        guard let source else { return [] }
+        // Library titles are often worded differently from MangaDex ("Gurren Lagann Tengen Toppa
+        // Gurren Lagann" vs "Tengen Toppa Gurren Lagann"): try the title, then shorter forms of it.
+        var source: (item: DiscoverItem, tags: Any?, language: String, style: ReadingStyle)?
+        var lastError: (any Error)?
+        for query in lookupQueries(title) {
+            var lookup = URLComponents(string: "https://api.mangadex.org/manga")!
+            lookup.queryItems = base(limit: 10, ratings: ["safe", "suggestive", "erotica"]) + [
+                URLQueryItem(name: "title", value: query), URLQueryItem(name: "order[relevance]", value: "desc")]
+            guard let lookupURL = lookup.url else { continue }
+            let found: [(item: DiscoverItem, tags: Any?, language: String, style: ReadingStyle)]
+            do { found = try parse(try await http.fetch(lookupURL, referer: nil, image: false)) } catch { lastError = error; continue }
+            source = found.first { Self.sameTitle($0.item.title, title) }
+                ?? found.first { entry in Self.titleMatches(entry.item.title, title) && (wanted.map { mediumMatches(entry.style, $0) } ?? true) }
+            if source != nil { break }
+        }
+        guard let source else {
+            if let lastError { throw lastError }
+            return []
+        }
         let medium = wanted ?? source.style
         let tags = pickTags(source.tags)
         var parts = URLComponents(string: "https://api.mangadex.org/manga")!
@@ -337,8 +348,15 @@ public enum Discover {
         guard let url = parts.url else { return [] }
         let list = try parse(try await http.fetch(url, referer: nil, image: false))
             .filter { mediumMatches($0.style, medium) }.map(\.item)
-        let skip = excluding.map { $0.lowercased() }
-        let fresh = list.filter { item in item.id != source.item.id && !skip.contains { Self.sameTitle($0, item.title) } }
+        let skip = Array(excluding)
+        let seedKey = franchiseKey(title), sourceKey = franchiseKey(source.item.title)
+        var fresh = list.filter { item in
+            item.id != source.item.id && !skip.contains { Self.titleMatches($0, item.title) }
+                // Not the series itself again under another name, nor its own spin-offs.
+                && (seedKey.isEmpty || franchiseKey(item.title) != seedKey)
+                && (sourceKey.isEmpty || franchiseKey(item.title) != sourceKey)
+        }
+        fresh = onePerFranchise(fresh)
         return Array(await readable(Array(fresh.prefix(limit + 4)), http: http).prefix(limit))
     }
 
@@ -358,6 +376,64 @@ public enum Discover {
         case .webtoon, .automatic: nil
         }
     }
+    /// Words of a title for comparing, without punctuation or filler words.
+    static func titleWords(_ title: String) -> Set<String> {
+        let filler: Set<String> = ["the", "a", "an", "of", "no", "wa", "to", "ga", "wo", "and"]
+        return Set(title.lowercased().split { !($0.isLetter || $0.isNumber) }.map(String.init).filter { !filler.contains($0) })
+    }
+    /// The same work under another wording: identical, a near-identical prefix, or every word of the
+    /// shorter title (at least two) appearing in the longer one, in any order.
+    public static func titleMatches(_ a: String, _ b: String) -> Bool {
+        if sameTitle(a, b) || looselySameTitle(a, b) { return true }
+        let x = titleWords(a), y = titleWords(b)
+        let (short, long) = x.count <= y.count ? (x, y) : (y, x)
+        return short.count >= 2 && short.isSubset(of: long) && Double(short.count) >= Double(long.count) * 0.5
+    }
+    /// The title, then shorter forms: before a subtitle or bracket, and its first two words.
+    static func lookupQueries(_ title: String) -> [String] {
+        var queries = [title]
+        if let cut = title.range(of: #"\s*[:~(\[–—]|\s+-\s+"#, options: .regularExpression) {
+            let head = String(title[..<cut.lowerBound]).trimmingCharacters(in: .whitespaces)
+            if head.count >= 3 { queries.append(head) }
+        }
+        let words = title.split(separator: " ")
+        if words.count >= 4 { queries.append(words.prefix(2).joined(separator: " ")) }
+        var seen = Set<String>()
+        return queries.filter { seen.insert($0.lowercased()).inserted }
+    }
+    /// The series a title belongs to: without its part, subtitle or edition ("JoJo no Kimyou na Bouken:
+    /// Part 7" and "Part 8" share one; "Chainsaw Man (Official Colored)" shares "Chainsaw Man").
+    public static func franchiseKey(_ title: String) -> String {
+        var t = title.lowercased()
+        if let cut = t.range(of: #"\s*[:~(\[–—]|\s+-\s+|\s+part\s+\d|\s+season\s+\d"#, options: .regularExpression) {
+            t = String(t[..<cut.lowerBound])
+        }
+        for word in ["official colored", "colored", "coloured", "digital colored comics", "full color", "remastered"] {
+            t = t.replacingOccurrences(of: word, with: "")
+        }
+        return t.filter { $0.isLetter || $0.isNumber }
+    }
+    /// One entry per series, preferring the plain edition over colored or remastered ones.
+    static func onePerFranchise(_ items: [DiscoverItem]) -> [DiscoverItem] {
+        func isVariant(_ title: String) -> Bool {
+            let t = title.lowercased()
+            return t.contains("colored") || t.contains("coloured") || t.contains("full color") || t.contains("remastered")
+        }
+        var chosen: [String: Int] = [:]
+        var result: [DiscoverItem] = []
+        for item in items {
+            let key = franchiseKey(item.title)
+            if key.isEmpty { result.append(item); continue }
+            if let index = chosen[key] {
+                if isVariant(result[index].title) && !isVariant(item.title) { result[index] = item }
+            } else {
+                chosen[key] = result.count
+                result.append(item)
+            }
+        }
+        return result
+    }
+
     /// "Solo Leveling" vs "Solo Leveling (Official)", "The Beginning After the End" vs "Beginning After the End".
     static func looselySameTitle(_ a: String, _ b: String) -> Bool {
         func clean(_ s: String) -> String {
