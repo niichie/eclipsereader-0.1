@@ -2026,7 +2026,9 @@ struct SeriesView: View {
                         if let url = series.bookDownloadURL { downloadBook(url) }
                     })
                         .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
-                    if !builtIn || !series.isLibraryMember {
+                    // A catalog book joins the Library when it downloads, so it doesn't get its own
+                    // Add button here (saving it without the file is in the … menu).
+                    if (!builtIn || !series.isLibraryMember) && !series.isCatalogBookPreview {
                         Button { model.addToLibrary(series) } label: {
                             Label(series.isLibraryMember ? "In Library" : "Add to Library",
                                   systemImage: series.isLibraryMember ? "checkmark.circle" : "plus.circle")
@@ -2053,10 +2055,12 @@ struct SeriesView: View {
                         }
                     }
                     if series.chapters.isEmpty {
-                        if series.isCatalogBookPreview, let download = series.bookDownloadURL {
-                            Button { downloadBook(download) } label: {
-                                Label(updating ? "Downloading…" : "Download book", systemImage: "arrow.down.circle")
-                            }.disabled(updating)
+                        if series.isCatalogBookPreview {
+                            // The Download button is in the header just above.
+                            Text(updating ? "Downloading… the contents appear here when it's done."
+                                          : "The contents appear here once the book is downloaded.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                                .listRowBackground(Color.clear)
                         } else if builtIn || (series.isOnline && (!checked || updating)) {
                             HStack(spacing: 10) {
                                 ProgressView()
@@ -2113,6 +2117,7 @@ struct SeriesView: View {
                         Text(series.kind == .book ? "Contents" : "\(series.chapters.count) chapter\(series.chapters.count == 1 ? "" : "s")")
                             .font(.headline).foregroundStyle(.primary).textCase(nil)
                         Spacer()
+                        if !series.chapters.isEmpty {
                         Button { searching.toggle(); searchFocused = searching; if !searching { query = "" } } label: {
                             Image(systemName: "magnifyingglass")
                         }.accessibilityLabel("Find a chapter")
@@ -2127,6 +2132,7 @@ struct SeriesView: View {
                         } label: {
                             Image(systemName: filter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                         }.accessibilityLabel("Filter and sort chapters")
+                        }
                     }
                     .font(.title3).foregroundStyle(.white).textCase(nil)
                     .padding(.vertical, 4)
@@ -2150,6 +2156,12 @@ struct SeriesView: View {
                 ToolbarItem(placement: .principal) { Text("") }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        if series.isCatalogBookPreview && !series.isLibraryMember {
+                            Button { model.addToLibrary(series) } label: {
+                                Label("Save to Library without downloading", systemImage: "plus.circle")
+                            }
+                        }
+                        if !series.chapters.isEmpty {
                         Button { Task { await update(series) } } label: { Label("Check for new chapters", systemImage: "arrow.clockwise") }
                         if model.newCount(series) > 0 {
                             Button { model.clearNew(series) } label: { Label("Mark new chapters as seen", systemImage: "sparkles") }
@@ -2159,7 +2171,8 @@ struct SeriesView: View {
                                 model.record(chapter, page: 0, count: 1, completed: true)
                             }
                         } label: { Label("Mark all as read", systemImage: "checkmark.circle") }
-                        if series.isOnline {
+                        }
+                        if series.isOnline && !series.chapters.isEmpty {
                             Section("Offline") {
                                 Button {
                                     let start = model.resume(series).flatMap { series.chapters.firstIndex(of: $0) } ?? 0

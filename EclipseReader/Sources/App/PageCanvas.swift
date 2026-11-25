@@ -169,7 +169,10 @@ actor PageDecoder {
         var final = base.cropping(to: crop) ?? base
         let region = CGRect(x: (left + crop.minX) / CGFloat(cg.width), y: crop.minY / CGFloat(cg.height),
                             width: crop.width / CGFloat(cg.width), height: crop.height / CGFloat(cg.height))
-        if enhance, final.height <= final.width * 3 || final.width < 720 {
+        // Long strips (webtoons, manhwa) are enhanced whenever they're narrower than the screen shows
+        // them. Only strips under 720 px used to be, so typical 720-900 px strips were stretched raw
+        // and their JPEG blocks showed as crunchiness.
+        if enhance, final.height <= final.width * 3 || final.width < 1300 {
             let target = final.height > final.width * 3
                 ? 1440 * Double(final.height) / Double(final.width)
                 : min(limit * 0.66, enhanceTarget ?? limit * 0.66)

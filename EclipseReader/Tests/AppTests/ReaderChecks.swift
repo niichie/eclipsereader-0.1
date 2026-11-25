@@ -208,6 +208,37 @@ final class ReaderChecks: XCTestCase {
         return total / Double(width * height)
     }
 
+    /// A typical 800 px wide, heavily compressed colour strip is enhanced (strips under 720 px used to be
+    /// the only ones), coming out wider and cleaner than the raw strip the screen would stretch.
+    func testWebtoonStripsAreEnhanced() throws {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let strip = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 3200), format: format).image { _ in
+            UIColor.white.setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 800, height: 3200))
+            UIColor(red: 0.93, green: 0.62, blue: 0.66, alpha: 1).setFill(); UIRectFill(CGRect(x: 0, y: 900, width: 800, height: 700))
+            UIColor.white.setFill(); UIBezierPath(ovalIn: CGRect(x: 180, y: 1000, width: 460, height: 300)).fill()
+            UIColor(white: 0.1, alpha: 1).setStroke()
+            let bubble = UIBezierPath(ovalIn: CGRect(x: 180, y: 1000, width: 460, height: 300)); bubble.lineWidth = 2; bubble.stroke()
+            NSAttributedString(string: "ARE YOU STILL\nAWAKE UP\nTHERE?", attributes: [
+                .font: UIFont.boldSystemFont(ofSize: 30), .foregroundColor: UIColor(white: 0.08, alpha: 1)])
+                .draw(in: CGRect(x: 300, y: 1080, width: 260, height: 140))
+        }
+        let data = try XCTUnwrap(strip.jpegData(compressionQuality: 0.25))
+        let plain = try PageDecoder.decode(data, trim: false, limit: 6144, enhance: false, enhanceTarget: 2556)
+        let enhanced = try PageDecoder.decode(data, trim: false, limit: 6144, enhance: true, enhanceTarget: 2556)
+        let plainWidth = (plain.image.cgImage?.width ?? 0), enhancedWidth = (enhanced.image.cgImage?.width ?? 0)
+        print("CHECK|strip|width \(plainWidth) → \(enhancedWidth)")
+        XCTAssertGreaterThan(enhancedWidth, plainWidth, "an 800 px strip should be enhanced and enlarged")
+        XCTAssertEqual(enhanced.ratio, plain.ratio, accuracy: 0.01)
+        // The lettering, plain (stretched like the screen would) and enhanced, at the same size.
+        let size = CGSize(width: enhancedWidth, height: enhanced.image.cgImage?.height ?? 0)
+        for (name, image) in [("strip-plain", plain.image), ("strip-enhanced", enhanced.image)] {
+            let drawn = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+            let scale = size.width / 800
+            let crop = try XCTUnwrap(drawn.cgImage?.cropping(to: CGRect(x: 260 * scale, y: 1040 * scale, width: 340 * scale, height: 200 * scale)))
+            print("CHECK|image|\(name)|" + (try XCTUnwrap(UIImage(cgImage: crop).pngData())).base64EncodedString())
+        }
+    }
+
     /// The enhancer upscales a soft scan to the target, makes paper white and ink black, sharpens
     /// lettering, keeps black-and-white pages grey (8-bit), and leaves clean full-size pages alone.
     func testEnhancerCleansAndUpscalesScans() throws {
