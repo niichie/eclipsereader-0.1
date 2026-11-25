@@ -451,7 +451,19 @@ final class LibraryModel: ObservableObject {
                 found = LinkInspection(title: title, cover: found.cover, pages: found.pages, chapters: found.chapters,
                                        style: found.style, summary: found.summary)
             }
-            guard found.chapters.isEmpty && found.pages.isEmpty else { return commit(url, found, addToShelf: addToShelf) }
+            guard found.chapters.isEmpty && found.pages.isEmpty else {
+                let result = commit(url, found, addToShelf: addToShelf)
+                // MangaDex sometimes hosts only a few chapters of a series (licensed titles): keep it and
+                // fill the chapters it lacks from another site, as "Fill missing chapters" would.
+                guard MangaDex.handles(url), ChapterMerge.looksIncomplete(found.chapters),
+                      case .series(let series, let open) = result,
+                      let filled = await fillMissing(series), filled.count > 0 else { return result }
+                let updated = state.series?.first { $0.id == series.id } ?? series
+                if addToShelf {
+                    notice = (series.id, "MangaDex only has \(found.chapters.count) chapter\(found.chapters.count == 1 ? "" : "s") of \(found.title), so \(filled.count) more were added from \(filled.host).")
+                }
+                return .series(updated, open: open)
+            }
             // Nothing to read here (MangaDex only links licensed series to the publisher's app):
             // add the same series from a site that has its chapters.
             let host = url.host?.replacingOccurrences(of: "www.", with: "") ?? "This site"

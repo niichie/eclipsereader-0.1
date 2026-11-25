@@ -138,4 +138,15 @@ final class SeriesAndArchiveTests: XCTestCase {
         """
         XCTAssertTrue(LinkedSource.chapterLinks(in: html, base: home).isEmpty)
     }
+
+    /// A MangaDex list with a handful of chapters, or with big gaps, is treated as incomplete.
+    func testSparseChapterListsLookIncomplete() {
+        func chapters(_ numbers: [Int]) -> [Chapter] {
+            numbers.map { Chapter(url: URL(string: "https://example.org/c/\($0)")!, title: "Chapter \($0)", number: "\($0)") }
+        }
+        XCTAssertTrue(ChapterMerge.looksIncomplete(chapters([1])))
+        XCTAssertTrue(ChapterMerge.looksIncomplete(chapters(Array(1...12) + [200, 201, 202])))
+        XCTAssertFalse(ChapterMerge.looksIncomplete(chapters(Array(1...40))))
+        XCTAssertFalse(ChapterMerge.looksIncomplete(chapters(Array(1...30) + [31, 32, 34])))
+    }
 }

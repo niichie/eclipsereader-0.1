@@ -467,6 +467,13 @@ public enum ChapterMerge {
         let value = Double(chapter.number) ?? ChapterOrder.number(chapter.title) ?? ChapterOrder.number(chapter.url.path)
         return value.map { $0 == $0.rounded() ? String(Int($0)) : String($0) }
     }
+    /// A chapter list that is probably only part of the series: very few chapters, or numbers that run
+    /// far past how many chapters there are (MangaDex often hosts only a few chapters of a licensed series).
+    public static func looksIncomplete(_ chapters: [Chapter]) -> Bool {
+        if chapters.count < 10 { return true }
+        let highest = chapters.compactMap { key($0).flatMap(Double.init) }.max() ?? 0
+        return highest > Double(chapters.count) * 1.5 + 2
+    }
     /// The other site's chapters whose numbers the main list doesn't have.
     public static func missing(from main: [Chapter], in other: [Chapter]) -> [Chapter] {
         let have = Set(main.compactMap(key))
