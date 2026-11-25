@@ -284,6 +284,9 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                                width: w, height: h), animated: false)
     }
     private var lastSize = CGSize.zero
+    /// True while the quick plain decode is on screen and the enhanced page is still being prepared.
+    private(set) var showingPreview = false
+    private var previewRatio: Double?
     private var baseScale: CGFloat = 1
     private var preference = ReaderPreferences()
     private var start: (() -> Void)?
@@ -341,6 +344,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
         start = { [weak self] in
             guard let self else { return }
             clearDetail(); work?.cancel(); imageView.image = nil; imageView.isAccessibilityElement = false; message.text = nil; retry.isHidden = true; spinner.startAnimating()
+            showingPreview = false; previewRatio = nil
             let trim = preferences.trimMargins ?? true
             let enhance = preferences.enhance ?? true
             let options = DecodedPages.Options(trim: trim, enhance: enhance, quality: preferences.quality ?? .automatic)
@@ -357,6 +361,7 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                         if let (_, quick) = try? await DecodedPages.shared.load(page, chapter: chapter, pipeline: pipeline, options: plain),
                            !Task.isCancelled, let self, self.imageView.image == nil {
                             self.spinner.stopAnimating(); self.imageView.image = quick.image
+                            self.showingPreview = true; self.previewRatio = quick.ratio
                             self.resetFit(); loaded(index, quick.ratio)
                         }
                     }
@@ -368,8 +373,17 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
                     failureCategory = duplicate ? "Repeated image" : nil
                     message.text = duplicate ? "The source returned this image on several pages. Open the chapter in the browser to check it." : nil
                     originalData = data; sourceRegion = decoded.sourceRegion; needsTiles = decoded.needsTiles
-                    spinner.stopAnimating(); imageView.image = decoded.image
-                    resetFit(); restoreViewport(); scheduleDetail(); loaded(index, decoded.ratio)
+                    spinner.stopAnimating()
+                    let swapInPlace = showingPreview && imageView.image != nil
+                        && abs((previewRatio ?? 0) - decoded.ratio) < 0.002
+                    showingPreview = false; previewRatio = nil
+                    imageView.image = decoded.image
+                    if swapInPlace {
+                        // Same shape as the preview: keep the zoom and position you may already have.
+                        scheduleDetail()
+                    } else {
+                        resetFit(); restoreViewport(); scheduleDetail(); loaded(index, decoded.ratio)
+                    }
                     findPanels(rightToLeft: preferences.direction == .rightToLeft)
                 } catch is CancellationError { }
                 catch let e as URLError where e.code == .cancelled { }

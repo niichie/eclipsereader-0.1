@@ -125,6 +125,9 @@ final class ReaderChecks: XCTestCase {
         canvas.configure(page: image, index: 0, chapter: chapter, pipeline: pipeline, preferences: prefs) { _, _ in ready = true }
         let loaded = await wait(12) { ready }
         XCTAssertTrue(loaded)
+        // A plain preview shows first; the enhanced page replaces it in place.
+        let enhanced = await wait(12) { !canvas.showingPreview }
+        XCTAssertTrue(enhanced)
         canvas.layoutIfNeeded()
         let pageView = try XCTUnwrap(canvas.viewForZooming(in: canvas.scroll) as? UIImageView)
         let enhancedImage = try XCTUnwrap(pageView.image)
