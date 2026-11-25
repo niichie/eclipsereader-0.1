@@ -297,3 +297,47 @@ extension GlobalSearch {
         }.map(\.element)
     }
 }
+
+
+/// How each site has done in your searches: used to search the dependable ones first and to suggest
+/// switching off sites that keep not answering.
+public struct SearchReliability: Codable, Sendable, Equatable {
+    public enum Outcome: Sendable { case results, empty, noAnswer }
+    public struct Record: Codable, Sendable, Equatable {
+        public var searches = 0
+        public var withResults = 0
+        public var answered = 0
+        /// Searches in a row the site didn't answer.
+        public var missedInARow = 0
+    }
+    public var sites: [String: Record] = [:]
+    public init() {}
+
+    public mutating func record(_ site: String, _ outcome: Outcome) {
+        var r = sites[site] ?? Record()
+        r.searches += 1
+        switch outcome {
+        case .results: r.withResults += 1; r.answered += 1; r.missedInARow = 0
+        case .empty: r.answered += 1; r.missedInARow = 0
+        case .noAnswer: r.missedInARow += 1
+        }
+        sites[site] = r
+    }
+    /// 0...1: sites that find things score highest, ones that answer with nothing next, ones that
+    /// don't answer lowest. A site not searched yet sits in the middle.
+    public func score(_ site: String) -> Double {
+        guard let r = sites[site], r.searches > 0 else { return 0.5 }
+        return Double(2 * r.withResults + (r.answered - r.withResults) + 1) / Double(2 * r.searches + 2)
+    }
+    /// The sites in the order to search them: most dependable first, ties kept in their own order.
+    public func ordered(_ ids: [String]) -> [String] {
+        ids.enumerated().sorted { a, b in
+            let sa = score(a.element), sb = score(b.element)
+            return sa != sb ? sa > sb : a.offset < b.offset
+        }.map(\.element)
+    }
+    /// Sites that haven't answered the last `threshold` searches.
+    public func failing(_ ids: [String], threshold: Int = 5) -> [String] {
+        ids.filter { (sites[$0]?.missedInARow ?? 0) >= threshold }
+    }
+}

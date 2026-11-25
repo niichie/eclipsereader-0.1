@@ -12,6 +12,21 @@ final class GlobalSearchModel: ObservableObject {
     @Published private(set) var sections: [Section] = []
     /// Sites with results, in the order their results arrived (shown in that order, so rows never jump).
     @Published private(set) var arrived: [String] = []
+    /// Kept between launches: how each site has done in your searches.
+    @Published private(set) var reliability: SearchReliability = GlobalSearchModel.storedReliability()
+    nonisolated static let reliabilityKey = "globalSearchReliability"
+    nonisolated private static func storedReliability() -> SearchReliability {
+        UserDefaults.standard.data(forKey: reliabilityKey).flatMap { try? JSONDecoder().decode(SearchReliability.self, from: $0) } ?? SearchReliability()
+    }
+    /// Sites that haven't answered your last five searches (offered to switch off when a search ends).
+    var failingSites: [SearchSource] {
+        let ids = Set(reliability.failing(sections.map(\.id)))
+        return sections.map(\.source).filter { ids.contains($0.id) }
+    }
+    /// Switches off several sites at once (from the "haven't answered" suggestion).
+    func turnOff(_ sources: [SearchSource]) {
+        for source in sources { setIncluded(source, false) }
+    }
     @Published private(set) var query = ""
     /// Every site this search could use; the ones switched off in the Sites menu are not queried.
     @Published private(set) var candidates: [SearchSource] = []
@@ -49,7 +64,11 @@ final class GlobalSearchModel: ObservableObject {
         query = text
         candidates = sources
         self.queries = queries
-        let active = sources.filter { !excluded.contains($0.id) }
+        // Dependable sites start first: browser-read sites are searched a few at a time, so the
+        // start order decides how soon results appear.
+        let wanted = sources.filter { !excluded.contains($0.id) }
+        let order = reliability.ordered(wanted.map(\.id))
+        let active = order.compactMap { id in wanted.first { $0.id == id } }
         arrived = []
         sections = active.map { Section(source: $0, phase: .loading) }
         for source in active { start(source) }
@@ -100,6 +119,14 @@ final class GlobalSearchModel: ObservableObject {
             guard let self, !Task.isCancelled, self.query == text,
                   let i = self.sections.firstIndex(where: { $0.id == source.id }) else { return }
             self.sections[i].phase = phase
+            let outcome: SearchReliability.Outcome = switch phase {
+            case .done(let items): items.isEmpty ? .empty : .results
+            default: .noAnswer
+            }
+            self.reliability.record(source.id, outcome)
+            if let data = try? JSONEncoder().encode(self.reliability) {
+                UserDefaults.standard.set(data, forKey: Self.reliabilityKey)
+            }
             if case .done(let items) = phase, !items.isEmpty, !self.arrived.contains(source.id) {
                 withAnimation(.easeOut(duration: 0.25)) { self.arrived.append(source.id) }
             }
@@ -210,6 +237,20 @@ struct GlobalSearchResults: View {
                                 .font(.footnote.weight(.semibold))
                         }
                     }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 11).eclipseCard(cornerRadius: 12)
+            }
+            // Sites that haven't answered your last five searches: offer to switch them off.
+            let failing = search.finished ? search.failingSites : []
+            if !failing.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(failing.count == 1
+                         ? "\(failing[0].name) hasn’t answered your last 5 searches."
+                         : "\(failing.count) sites haven’t answered your last 5 searches: " + failing.map(\.name).joined(separator: ", ") + ".")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(failing.count == 1 ? "Turn off" : "Turn them off") { search.turnOff(failing) }
+                        .font(.footnote.weight(.semibold))
                 }
                 .padding(.horizontal, 14).padding(.vertical, 11).eclipseCard(cornerRadius: 12)
             }

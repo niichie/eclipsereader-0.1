@@ -67,4 +67,15 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(works[1].sites, ["WeebCentral", "MangaDex"])
         XCTAssertEqual(works[2].sites, ["MangaDot"])
     }
+
+    func testDependableSitesFirstAndSilentOnesFlagged() {
+        var r = SearchReliability()
+        for _ in 0..<3 { r.record("finds", .results); r.record("empty", .empty); r.record("silent", .noAnswer) }
+        XCTAssertEqual(r.ordered(["silent", "new", "empty", "finds"]), ["finds", "new", "empty", "silent"])
+        XCTAssertEqual(r.failing(["silent", "finds"]), [])
+        r.record("silent", .noAnswer); r.record("silent", .noAnswer)
+        XCTAssertEqual(r.failing(["silent", "finds"]), ["silent"])
+        r.record("silent", .empty)
+        XCTAssertEqual(r.failing(["silent"]), [], "answering once resets the run")
+    }
 }
