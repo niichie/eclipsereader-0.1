@@ -57,6 +57,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
             configurationKey = key; current = target; rebuild()
         } else if current != target {
             current = target
+            defer { prefetchAhead() }
             if let pager, let index = groups.firstIndex(where: { $0.indices.contains(target) }),
                let displayed = pager.viewControllers?.first as? PageCanvasController, displayed.groupIndex != index {
                 let forward = index > displayed.groupIndex
@@ -83,7 +84,22 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
             }
         }
     }
+    /// Decodes the next two spreads (and the previous one) in the background, so a turn shows them at once.
+    private func prefetchAhead() {
+        guard let chapter, let pipeline, !pages.isEmpty else { return }
+        let wanted: [Int]
+        if preferences.mode == .vertical {
+            wanted = Array((current + 1)...(current + 3)).filter { pages.indices.contains($0) }
+        } else {
+            let index = groups.firstIndex(where: { $0.indices.contains(current) }) ?? 0
+            wanted = [index + 1, index + 2, index - 1].filter { groups.indices.contains($0) }.flatMap { groups[$0].indices }
+        }
+        DecodedPages.shared.prefetch(wanted.filter { pages.indices.contains($0) }.map { pages[$0] }, chapter: chapter, pipeline: pipeline,
+                                     options: .init(trim: preferences.trimMargins ?? true, enhance: preferences.enhance ?? true,
+                                                    quality: preferences.quality ?? .automatic))
+    }
     private func rebuild() {
+        defer { prefetchAhead() }
         stopAutoScroll(notify: true)
         rebuilding = true
         defer { rebuilding = false }
@@ -169,6 +185,7 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
         turning = false
         if completed, let visible = pageViewController.viewControllers?.first as? PageCanvasController {
             current = visible.group.id
+            prefetchAhead()
         }
         if let update = pendingUpdate {
             pendingUpdate = nil
@@ -221,12 +238,12 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
         for case let cell as VerticalPageCell in collection.visibleCells { cell.canvas.scheduleDetail() }
         if collection.contentOffset.y + collection.bounds.height >= collection.contentSize.height - 1 {
             let last = max(0, pages.count - 1)
-            if last != current { current = last; changed?(current) }
+            if last != current { current = last; changed?(current); prefetchAhead() }
             return
         }
         let point = CGPoint(x: collection.bounds.midX, y: collection.contentOffset.y + 50)
         if let path = collection.indexPathForItem(at: point), path.item != current {
-            current = path.item; changed?(current)
+            current = path.item; changed?(current); prefetchAhead()
         }
     }
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {

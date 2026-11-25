@@ -802,9 +802,11 @@ private struct TextRecommendationStrip: View {
         VStack(alignment: .leading, spacing: 0) {
             if !suggestions.isEmpty || !classics.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("\(Text("Because you read ").foregroundStyle(.secondary))\(series.title)")
-                        .font(.title3.weight(.bold)).lineLimit(1)
-                        .contextMenu { Button("Ignore this series for recommendations") { model.ignoreRecommendationSeed(series.id) } }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("BECAUSE YOU READ").font(.caption.weight(.heavy)).tracking(1).foregroundStyle(.secondary)
+                        Text(series.title).font(.title3.weight(.bold)).lineLimit(2)
+                    }
+                    .contextMenu { Button("Ignore this series for recommendations") { model.ignoreRecommendationSeed(series.id) } }
                     FadingRow {
                         LazyHStack(alignment: .top, spacing: 12) {
                             ForEach(suggestions) { item in

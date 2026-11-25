@@ -257,7 +257,7 @@ enum PageEnhancer {
         guard long > 0, let analysis = analyse(image) else { return nil }
         let area = Double(image.width) * Double(image.height)
         // Memory ceiling per page (tall colour webtoon strips are the large ones).
-        let budget = (analysis.grayscale ? 48_000_000.0 : 24_000_000.0) / area
+        let budget = (analysis.grayscale ? 24_000_000.0 : 12_000_000.0) / area
         let scale = min(4.0, sqrt(budget), max(1.0, targetLongSide / long))
         let (gain, bias) = levels(analysis)
         let upscaling = scale > 1.05

@@ -3,16 +3,88 @@ import ImageIO
 import CoreImage
 import CryptoKit
 
-private struct DecodedImage: @unchecked Sendable {
+struct DecodedImage: @unchecked Sendable {
     let image: UIImage
     let sourceRegion: CGRect
     let needsTiles: Bool
     let ratio: Double
 }
+/// Pages decoded recently or ahead of time, so turning to them shows them at once instead of a
+/// spinner, a small page and then a jump, and so regrouping pages (when a spread is found) doesn't
+/// reload what's on screen. Decoding the next spreads starts as soon as a page is shown.
+@MainActor
+final class DecodedPages {
+    static let shared = DecodedPages()
+    struct Options: Hashable, Sendable {
+        var trim: Bool
+        var enhance: Bool
+        var quality: ImageQuality
+    }
+    private final class Entry: @unchecked Sendable {
+        let data: Data
+        let decoded: DecodedImage
+        init(data: Data, decoded: DecodedImage) { self.data = data; self.decoded = decoded }
+    }
+    private let cache: NSCache<NSString, Entry> = {
+        let cache = NSCache<NSString, Entry>()
+        cache.totalCostLimit = 220_000_000 // bytes of decoded pixels, about 8-12 enhanced pages
+        return cache
+    }()
+    private var inFlight: [String: Task<Entry, any Error>] = [:]
+    private func key(_ page: MangaPage, _ options: Options) -> String {
+        "\(page.id)|\(page.half.map { "\($0)" } ?? "-")|\(options.trim)|\(options.enhance)|\(options.quality.rawValue)"
+    }
+    /// The decoded image if it's ready now (shown without waiting for a run-loop turn).
+    func ready(_ page: MangaPage, _ options: Options) -> DecodedImage? { cache.object(forKey: key(page, options) as NSString)?.decoded }
+
+    /// The page's bytes and decoded image: from the cache, from a decode already running, or decoded now.
+    func load(_ page: MangaPage, chapter: Chapter, pipeline: ImagePipeline, options: Options) async throws -> (Data, DecodedImage) {
+        let entry = try await entry(page, chapter: chapter, pipeline: pipeline, options: options, priority: .userInitiated)
+        return (entry.data, entry.decoded)
+    }
+    /// Decodes pages in the background (the next spreads) so they are ready when you turn to them.
+    func prefetch(_ pages: [MangaPage], chapter: Chapter, pipeline: ImagePipeline, options: Options) {
+        for page in pages where cache.object(forKey: key(page, options) as NSString) == nil && inFlight[key(page, options)] == nil {
+            Task { _ = try? await entry(page, chapter: chapter, pipeline: pipeline, options: options, priority: .utility) }
+        }
+    }
+    private func entry(_ page: MangaPage, chapter: Chapter, pipeline: ImagePipeline, options: Options,
+                       priority: TaskPriority) async throws -> Entry {
+        let id = key(page, options)
+        if let hit = cache.object(forKey: id as NSString) { return hit }
+        if let running = inFlight[id] { return try await running.value }
+        let limit = DisplayQuality.longSide(options.quality)
+        let screen = DisplayQuality.screenLongSide
+        let half = page.half
+        let task = Task<Entry, any Error>(priority: priority) {
+            let data = try await pipeline.data(for: page, chapter: chapter)
+            // Decode (and enhance) off the main thread, several pages in parallel.
+            let decoded = try await Task.detached(priority: priority) {
+                try PageDecoder.decode(data, trim: options.trim, limit: limit, enhance: options.enhance, half: half,
+                                       enhanceTarget: screen)
+            }.value
+            return Entry(data: data, decoded: decoded)
+        }
+        inFlight[id] = task
+        defer { inFlight[id] = nil }
+        let result = try await task.value
+        let cost = Int(result.decoded.image.size.width * result.decoded.image.size.height * result.decoded.image.scale * result.decoded.image.scale)
+            * ((result.decoded.image.cgImage?.bitsPerPixel ?? 32) / 8)
+        cache.setObject(result, forKey: id as NSString, cost: cost)
+        return result
+    }
+}
+
 /// Picks how many pixels to decode per page for this device: its screen's real pixel size,
 /// headroom for zooming, its memory, and Low Power Mode.
 @MainActor
 enum DisplayQuality {
+    /// The screen's long side in real pixels: what a page needs to be sharp when it fills the screen.
+    static var screenLongSide: Double {
+        let screen = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.nativeBounds.size
+            ?? CGSize(width: 1290, height: 2796)
+        return Double(max(screen.width, screen.height))
+    }
     static func longSide(_ quality: ImageQuality) -> Double {
         let screen = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.nativeBounds.size
             ?? CGSize(width: 1290, height: 2796)
@@ -31,7 +103,7 @@ enum DisplayQuality {
     }
 }
 
-private actor PageDecoder {
+actor PageDecoder {
     static let shared = PageDecoder()
     private var checkedChapter: String?
     private var fingerprints: [SHA256.Digest: Set<Int>] = [:]
@@ -73,8 +145,10 @@ private actor PageDecoder {
         if height > width * 2.5 && width <= 1600 { return min(long, 16384) }
         return min(long, limit)
     }
+    /// `enhanceTarget`: the long side enhancement aims for (the screen's pixel size). Enlarging
+    /// beyond what the screen shows only made each page slower to prepare.
     static func decode(_ data: Data, trim: Bool = true, limit: Double = 4096, enhance: Bool = false,
-                       half: MangaPage.Half? = nil) throws -> DecodedImage {
+                       half: MangaPage.Half? = nil, enhanceTarget: Double? = nil) throws -> DecodedImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Double,
@@ -102,7 +176,7 @@ private actor PageDecoder {
         if enhance, final.height <= final.width * 3 || final.width < 720 {
             let target = final.height > final.width * 3
                 ? 1440 * Double(final.height) / Double(final.width)
-                : limit * 0.66
+                : min(limit * 0.66, enhanceTarget ?? limit * 0.66)
             final = PageEnhancer.enhance(final, targetLongSide: target) ?? final
         }
         return DecodedImage(image: UIImage(cgImage: final), sourceRegion: region, needsTiles: !enhance && max(width, height) > Double(max(cg.width, cg.height)) * 1.01, ratio: Double(final.width) / Double(final.height))
@@ -273,18 +347,14 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
             clearDetail(); work?.cancel(); imageView.image = nil; imageView.isAccessibilityElement = false; message.text = nil; retry.isHidden = true; spinner.startAnimating()
             let trim = preferences.trimMargins ?? true
             let enhance = preferences.enhance ?? true
-            let limit = DisplayQuality.longSide(preferences.quality ?? .automatic)
+            let options = DecodedPages.Options(trim: trim, enhance: enhance, quality: preferences.quality ?? .automatic)
+            // A page decoded ahead of time (or shown a moment ago) appears at once, without a spinner.
+            if let ready = DecodedPages.shared.ready(page, options) {
+                spinner.stopAnimating(); imageView.image = ready.image; resetFit()
+            }
             work = Task { [weak self] in
                 do {
-                    let data = try await pipeline.data(for: page, chapter: chapter)
-                    try Task.checkCancellation()
-                    let half = page.half
-                    // Decode (and enhance) in parallel, as the handoff build did. Routing every page through
-                    // one actor made neighbours queue behind each other and pages appear slowly.
-                    let decoded = try await Task.detached(priority: .userInitiated) { [trim, limit, enhance, half] in
-                        try Task.checkCancellation()
-                        return try PageDecoder.decode(data, trim: trim, limit: limit, enhance: enhance, half: half)
-                    }.value
+                    let (data, decoded) = try await DecodedPages.shared.load(page, chapter: chapter, pipeline: pipeline, options: options)
                     let repeated = page.half == nil && page.url.scheme == "https"
                     let duplicate = repeated ? await PageDecoder.shared.isRepeated(data, chapter: chapter.id, index: index) : false
                     try Task.checkCancellation()
