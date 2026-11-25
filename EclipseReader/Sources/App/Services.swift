@@ -286,12 +286,17 @@ enum PageEnhancer {
         }
         if gain != 1 || bias != 0 {
             let g = CGFloat(gain), b = CGFloat(bias)
-            page = page.applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: g, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: g, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: g, w: 0),
-                "inputBiasVector": CIVector(x: b, y: b, z: b, w: 0),
-            ]).applyingFilter("CIColorClamp")
+            // Ink and paper are measured on the page's stored (sRGB) values, but Core Image works in
+            // linear light: apply the stretch in sRGB too, or grey paper only reaches ~90% white.
+            page = page.applyingFilter("CILinearToSRGBToneCurve")
+                .applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x: g, y: 0, z: 0, w: 0),
+                    "inputGVector": CIVector(x: 0, y: g, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: g, w: 0),
+                    "inputBiasVector": CIVector(x: b, y: b, z: b, w: 0),
+                ])
+                .applyingFilter("CIColorClamp")
+                .applyingFilter("CISRGBToneCurveToLinear")
         }
         // Edge pixels repeat outward so the filters below don't darken the page border.
         page = page.clampedToExtent()
