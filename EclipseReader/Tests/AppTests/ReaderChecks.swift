@@ -205,6 +205,61 @@ final class ReaderChecks: XCTestCase {
         return total / Double(width * height)
     }
 
+    /// Edge-setting variants on two hard cases, printed as crops for checking by eye: thin serif lettering
+    /// on a black-and-white scan, and bold lettering on a heavily compressed colour page.
+    private func printTuningVariants() throws {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        func jpeg(_ image: UIImage, _ quality: CGFloat) throws -> CGImage {
+            try XCTUnwrap(UIImage(data: try XCTUnwrap(image.jpegData(compressionQuality: quality)))?.cgImage)
+        }
+        let serif = try jpeg(UIGraphicsImageRenderer(size: CGSize(width: 400, height: 300), format: format).image { _ in
+            UIColor(white: 0.87, alpha: 1).setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 400, height: 300))
+            let ink = UIColor(white: 0.12, alpha: 1)
+            let font = UIFont(name: "Georgia", size: 15) ?? .systemFont(ofSize: 15)
+            NSAttributedString(string: "The lantern burns\nlow beneath a\nsilver evening.", attributes: [.font: font, .foregroundColor: ink])
+                .draw(in: CGRect(x: 40, y: 50, width: 200, height: 100))
+            for y in stride(from: 190, to: 290, by: 3) { for x in stride(from: 220, to: 390, by: 3) {
+                ink.setFill(); UIBezierPath(ovalIn: CGRect(x: x, y: y, width: 1.4, height: 1.4)).fill()
+            } }
+        }, 0.7)
+        let colour = try jpeg(UIGraphicsImageRenderer(size: CGSize(width: 600, height: 450), format: format).image { _ in
+            UIColor.white.setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 600, height: 450))
+            UIColor(red: 0.93, green: 0.59, blue: 0.63, alpha: 1).setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 210, height: 450))
+            UIColor.white.setFill(); UIBezierPath(ovalIn: CGRect(x: 130, y: 60, width: 420, height: 340)).fill()
+            UIColor(white: 0.1, alpha: 1).setStroke()
+            let bubble = UIBezierPath(ovalIn: CGRect(x: 130, y: 60, width: 420, height: 340)); bubble.lineWidth = 2; bubble.stroke()
+            NSAttributedString(string: "WHEN DOES THE\nLAST TRAIN\nLEAVE TONIGHT?", attributes: [
+                .font: UIFont.boldSystemFont(ofSize: 28), .foregroundColor: UIColor(white: 0.08, alpha: 1)])
+                .draw(in: CGRect(x: 230, y: 165, width: 260, height: 120))
+        }, 0.2)
+        typealias Edge = PageEnhancer.Edge
+        let greys: [(String, Edge)] = [
+            ("g-old", Edge(denoise: 0.03, smoothing: 0.45, curve: 0.07, sharpenRadius: 0.6, sharpenAmount: 0.55)),
+            ("g-std", PageEnhancer.Tuning.standard.grey),
+            ("g-lighter", Edge(denoise: 0.03, smoothing: 0.1, curve: 0.17, sharpenRadius: 0.4, sharpenAmount: 0.3)),
+        ]
+        let colours: [(String, Edge)] = [
+            ("c-old", Edge(denoise: 0.03, smoothing: 0.45, curve: 0.21, sharpenRadius: 0.6, sharpenAmount: 0.5)),
+            ("c-std", PageEnhancer.Tuning.standard.colour),
+            ("c-clean", Edge(denoise: 0.09, smoothing: 0.35, curve: 0.2, sharpenRadius: 0.5, sharpenAmount: 0.15)),
+            ("c-soft", Edge(denoise: 0.06, smoothing: 0.45, curve: 0.22, sharpenRadius: 0.5, sharpenAmount: 0.1)),
+        ]
+        func crop(_ image: CGImage, _ rect: CGRect, _ name: String) throws {
+            let cropped = try XCTUnwrap(image.cropping(to: rect))
+            print("CHECK|image|\(name)|" + (try XCTUnwrap(UIImage(cgImage: cropped).pngData())).base64EncodedString())
+        }
+        for (name, edge) in greys {
+            var tuning = PageEnhancer.Tuning.standard; tuning.grey = edge
+            let out = try XCTUnwrap(PageEnhancer.enhance(serif, targetLongSide: 1200, tuning: tuning))
+            try crop(out, CGRect(x: 120, y: 180, width: 720, height: 360), name)
+        }
+        for (name, edge) in colours {
+            var tuning = PageEnhancer.Tuning.standard; tuning.colour = edge
+            let out = try XCTUnwrap(PageEnhancer.enhance(colour, targetLongSide: 1440, tuning: tuning))
+            try crop(out, CGRect(x: 520, y: 360, width: 720, height: 420), name)
+        }
+    }
+
     /// The enhancer upscales a soft scan to the target, makes paper white and ink black, sharpens
     /// lettering, keeps black-and-white pages grey (8-bit), and leaves clean full-size pages alone.
     func testEnhancerCleansAndUpscalesScans() throws {
@@ -222,7 +277,8 @@ final class ReaderChecks: XCTestCase {
         print("CHECK|enhance|paper \(paper(before)) → \(paper(after)); ink \(ink(before)) → \(ink(after)); sharpness \(sharpness(before, width: w, height: h)) → \(sharpness(after, width: w, height: h))")
         XCTAssertGreaterThan(paper(after), 245, "grey paper should come out white")
         XCTAssertLessThan(ink(after), 20, "washed-out ink should come out black")
-        XCTAssertGreaterThan(sharpness(after, width: w, height: h), sharpness(before, width: w, height: h) * 1.3)
+        XCTAssertGreaterThan(sharpness(after, width: w, height: h), sharpness(before, width: w, height: h) * 1.15)
+        try printTuningVariants()
         // A before/after crop of the lettering, for checking by eye in the log.
         let crop = CGRect(x: 300, y: 150, width: 640, height: 420)
         for (name, image) in [("before", before), ("after", after)] {
