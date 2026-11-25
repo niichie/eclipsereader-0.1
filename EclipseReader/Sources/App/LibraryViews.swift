@@ -709,15 +709,43 @@ struct DiscoverStrip: View {
         .contextMenu { if similarTo != nil { Button("Less like this") { model.hideSuggestion(item.title) } } }
         .disabled(adding != nil)
     }
+    /// Recommendations kept between launches, so the shelf shows at once when the app opens.
+    private struct Saved: Codable {
+        struct Item: Codable { var id: String; var title: String; var url: URL; var cover: URL?; var detail: String? }
+        var date: Date
+        var items: [Item]
+    }
+    private static let savedKey = "becauseYouReadShelves"
+    private static func saved(_ key: String) -> Saved? {
+        guard let data = UserDefaults.standard.data(forKey: savedKey),
+              let all = try? JSONDecoder().decode([String: Saved].self, from: data) else { return nil }
+        return all[key]
+    }
+    private static func save(_ items: [DiscoverItem], for key: String) {
+        var all = (UserDefaults.standard.data(forKey: savedKey)).flatMap { try? JSONDecoder().decode([String: Saved].self, from: $0) } ?? [:]
+        all[key] = Saved(date: Date(), items: items.map { .init(id: $0.id, title: $0.title, url: $0.url, cover: $0.cover, detail: $0.detail) })
+        // Only the most recent few series are kept.
+        if all.count > 8, let oldest = all.min(by: { $0.value.date < $1.value.date })?.key { all[oldest] = nil }
+        if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: savedKey) }
+    }
     private func load(force: Bool) async {
         let key = memoryKey
         if !force, let cached = Self.memory[key] { items = cached; phase = .loaded; return }
+        // From the last launch: show it at once, and refresh it quietly when it's more than six hours old.
+        var refreshingSaved = false
+        if !force, similarTo != nil, let saved = Self.saved(key), Date().timeIntervalSince(saved.date) < 24 * 3600 {
+            items = saved.items.map { DiscoverItem(id: $0.id, title: $0.title, url: $0.url, cover: $0.cover, detail: $0.detail) }
+            phase = .loaded
+            Self.memory[key] = items
+            guard Date().timeIntervalSince(saved.date) > 6 * 3600 else { return }
+            refreshingSaved = true
+        }
         guard let similarTo else {
             if items.isEmpty { items = (try? await Discover.mangaDex(limit: 24)) ?? [] }
             phase = .loaded
             return
         }
-        phase = .loading
+        if !refreshingSaved { phase = .loading }
         let skip = Set(model.librarySeries.map(\.title))
         var reached = false
         var found: [DiscoverItem] = []
@@ -726,7 +754,7 @@ struct DiscoverStrip: View {
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
             guard !Task.isCancelled else { return }
             do {
-                found = try await Discover.similar(to: similarTo, excluding: skip, style: style)
+                found = try await Discover.similar(to: similarTo, excluding: skip, style: style, verify: false)
                 reached = true
                 break
             } catch {}
@@ -737,9 +765,20 @@ struct DiscoverStrip: View {
             found = fallback
         }
         guard !Task.isCancelled else { return }
-        items = found
+        if refreshingSaved && !reached { return } // keep showing last launch's shelf
+        // Show the matches now; then drop titles MangaDex can't actually show (licensed series that
+        // only link out to the publisher) as those checks finish, instead of waiting for all of them.
+        items = Array(found.prefix(16))
         phase = reached ? .loaded : .failed
-        if reached { Self.memory[key] = found }
+        guard reached else { return }
+        if found.contains(where: { !Self.isAniList($0) }) {
+            let checked = await Discover.readable(found)
+            guard !Task.isCancelled else { return }
+            found = Array(checked.prefix(16))
+            items = found
+        }
+        Self.memory[key] = found
+        Self.save(found, for: key)
     }
     private func aniList(_ title: String, skip: Set<String>) async -> [DiscoverItem]? {
         let medium = style ?? .automatic
@@ -1611,7 +1650,9 @@ struct AboutPage: View {
     static var version: String {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
-        return "\(short) (\(build))"
+        // The commit a build came from (set by CI), so each installed build can be told apart.
+        let commit = (Bundle.main.object(forInfoDictionaryKey: "EclipseCommit") as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return "\(short) (\(build)\(commit.map { " · \($0)" } ?? ""))"
     }
     var body: some View {
         Form {

@@ -96,6 +96,19 @@ final class SpotlightPreferenceTests: XCTestCase {
         XCTAssertNil(QuoteFeed.picksQuery(SpotlightPreference(categories: [.comics], origins: ["JP"]), page: 1))
     }
 
+    /// "Picked for you": recommendations for a library series, in your kinds, adult titles left out.
+    func testPersonalPicksFollowKindsAndSkipAdultTitles() throws {
+        func node(_ id: Int, _ title: String, country: String, adult: Bool = false) -> String {
+            #"{"mediaRecommendation":{"id":\#(id),"isAdult":\#(adult),"title":{"english":"\#(title)","romaji":"\#(title)"},"synonyms":[],"coverImage":{"large":"https://example.com/\#(id).jpg"},"averageScore":85,"format":"MANGA","countryOfOrigin":"\#(country)","startDate":{"year":2015},"description":"A quiet swordsman wanders from town to town looking for work."}}"#
+        }
+        let json = #"{"data":{"Media":{"recommendations":{"nodes":[\#(node(1, "Wandering Blade", country: "JP")),\#(node(2, "Tower Climber", country: "KR")),\#(node(3, "Hidden Title", country: "JP", adult: true))]}}}}"#
+        let picks = QuoteFeed.parsePersonal(Data(json.utf8), preference: SpotlightPreference(categories: [.manga], origins: ["JP"]))
+        XCTAssertEqual(picks.map(\.work), ["Wandering Blade"])
+        XCTAssertEqual(picks.first?.quote.who, "Picked for you")
+        XCTAssertEqual(picks.first?.pick, true)
+        XCTAssertNotNil(QuoteFeed.picksQuery(SpotlightPreference(categories: [.manga], origins: ["JP"]), page: 7, sort: "TRENDING_DESC")?.range(of: "sort: TRENDING_DESC"))
+    }
+
     /// Picks show whole sentences that fit the card, never a line cut off mid-sentence.
     func testSynopsisLinesAreWholeSentencesThatFit() throws {
         let short = try XCTUnwrap(QuoteFeed.synopsisLine("A young skater trains every morning before school. Her coach was once a champion. Years pass."))

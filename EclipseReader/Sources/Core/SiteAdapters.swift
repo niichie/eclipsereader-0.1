@@ -312,7 +312,10 @@ public enum Discover {
     /// `style` is the medium you read it as (manga, manhwa, manhua, webtoon, comic). Results stay in that
     /// medium even when MangaDex files the seed differently, and a seed MangaDex spells differently is
     /// still found (alternative and partial titles), so non-Japanese series get recommendations too.
+    /// `verify: false` skips the per-title chapter check (about 5 s at MangaDex's rate limit), so the
+    /// shelf can show at once and drop unreadable titles afterwards with `readable(_:)`.
     public static func similar(to title: String, excluding: Set<String> = [], limit: Int = 16, style: ReadingStyle? = nil,
+                               verify: Bool = true,
                                http: any HTTPTransport = WebsiteHTTPClient()) async throws -> [DiscoverItem] {
         let wanted = style.flatMap { $0 == .automatic ? nil : $0 }
         // Library titles are often worded differently from MangaDex ("Gurren Lagann Tengen Toppa
@@ -357,6 +360,7 @@ public enum Discover {
                 && (sourceKey.isEmpty || franchiseKey(item.title) != sourceKey)
         }
         fresh = onePerFranchise(fresh)
+        guard verify else { return Array(fresh.prefix(limit + 4)) }
         return Array(await readable(Array(fresh.prefix(limit + 4)), http: http).prefix(limit))
     }
 

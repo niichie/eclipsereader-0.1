@@ -52,7 +52,8 @@ jobs:
           xcodebuild build -project EclipseReader.xcodeproj -scheme EclipseReader \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build/DeviceData \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' > build.log 2>&1 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" ECLIPSE_COMMIT="${GITHUB_SHA::7}" > build.log 2>&1 \
             || { echo "::error::Build failed. Errors:"; grep -E "error:" build.log | sort -u | head -80; exit 1; }
           grep -E "warning:" build.log | grep -v "appintents" | sort -u | head -40 || true
           echo "BUILD SUCCEEDED"

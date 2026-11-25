@@ -110,7 +110,8 @@ final class SpotlightStore: ObservableObject {
     /// Series shown lately (so the card keeps introducing new ones).
     private var recent: [String] {
         get { UserDefaults.standard.stringArray(forKey: Self.recentKey) ?? [] }
-        set { UserDefaults.standard.set(Array(newValue.suffix(80)), forKey: Self.recentKey) }
+        // About 150 cards' worth, so the same series doesn't come back within a few days.
+        set { UserDefaults.standard.set(Array(newValue.suffix(300)), forKey: Self.recentKey) }
     }
     private func remember(_ works: String...) {
         recent += works.map(QuoteFeed.workKey).filter { !$0.isEmpty }
@@ -140,7 +141,15 @@ final class SpotlightStore: ObservableObject {
             let request = generation
             let cached = await cache.read(settings: settings)
             guard request == generation else { return }
-            ready = cached.filter { !owned.contains(QuoteFeed.workKey($0.item.work)) }
+            // Saved cards come back in a new order each launch, and never ones already shown: the card
+            // on screen used to be saved too, so the same quotes returned at every launch.
+            let shownWorks = Set(recent)
+            let shownLines = Set(UserDefaults.standard.stringArray(forKey: "spotlightRecentLines") ?? [])
+            ready = cached.filter { card in
+                let work = QuoteFeed.workKey(card.item.work)
+                return !owned.contains(work) && !shownWorks.contains(work) && !shownWorks.contains(QuoteFeed.workKey(card.item.quote.work))
+                    && !shownLines.contains(QuoteFeed.workKey(card.item.quote.text))
+            }.shuffled()
             if let fresh = ready.firstIndex(where: { !recent.contains(QuoteFeed.workKey($0.item.work)) }) {
                 ready.swapAt(0, fresh)
             }
@@ -163,7 +172,8 @@ final class SpotlightStore: ObservableObject {
             let bootstrap = mangaQueue.isEmpty && current == nil && Interests.categories.contains(.manga)
                 && (Interests.origins.isEmpty || Interests.origins.contains("JP"))
             let seeds = bootstrap ? QuoteFeed.candidates(CuratedQuotes.shuffled(CuratedQuotes.manga), skipping: skip, limit: 2) : []
-            let feed = mangaQueue.isEmpty ? Task { await refillManga(owned: owned) } : nil
+            let libraryTitles = model.libraryMembers.map(\.title)
+            let feed = mangaQueue.isEmpty ? Task { await refillManga(owned: owned, library: libraryTitles) } : nil
             defer { feed?.cancel() }
             mangaQueue.insert(contentsOf: seeds.map { Spotlight(quote: $0, media: nil) }, at: 0)
             var fetched = false
@@ -193,7 +203,7 @@ final class SpotlightStore: ObservableObject {
                         guard let card else { continue }
                         ready.append(card)
                         if loadingManga { showReady(model) }
-                        if let cacheSettings { await cache.write(ready + [current].compactMap { $0 }, settings: cacheSettings) }
+                        if let cacheSettings { await cache.write(ready, settings: cacheSettings) }
                     }
                 }
             }
@@ -202,7 +212,7 @@ final class SpotlightStore: ObservableObject {
 
     private func showReady(_ model: LibraryModel) {
         let lastKind = UserDefaults.standard.string(forKey: "spotlightLastKind")
-        let fresh = ready.indices.filter { !recent.contains(QuoteFeed.workKey(ready[$0].item.work)) }
+        let fresh = ready.indices.filter { !recent.contains(QuoteFeed.workKey(ready[$0].item.work)) }.shuffled()
         let index = fresh.first { (ready[$0].item.media?.category ?? .manga).rawValue != lastKind } ?? fresh.first ?? 0
         let card = ready.remove(at: index)
         let item = card.item
@@ -212,7 +222,7 @@ final class SpotlightStore: ObservableObject {
         loadingManga = false
         remember(item.quote.work, item.work)
         let lines = UserDefaults.standard.stringArray(forKey: "spotlightRecentLines") ?? []
-        UserDefaults.standard.set(Array((lines + [QuoteFeed.workKey(item.quote.text)]).suffix(120)), forKey: "spotlightRecentLines")
+        UserDefaults.standard.set(Array((lines + [QuoteFeed.workKey(item.quote.text)]).suffix(400)), forKey: "spotlightRecentLines")
         UserDefaults.standard.set((item.media?.category ?? .manga).rawValue, forKey: "spotlightLastKind")
     }
 
@@ -263,12 +273,15 @@ final class SpotlightStore: ObservableObject {
         return nil
     }
 
-    private func refillManga(owned: Set<String>) async -> [Spotlight] {
+    private func refillManga(owned: Set<String>, library: [String]) async -> [Spotlight] {
         var skip = Set(recent).union(owned)
         for item in mangaQueue + [manga].compactMap({ $0 }) { skip.insert(QuoteFeed.workKey(item.quote.work)) }
         // Live lines (two databases at once), then the built-in list as a backup.
         let preference = SpotlightPreference(categories: Interests.categories, origins: Interests.origins)
-        async let picksTask = QuoteFeed.picks(preference, page: Int.random(in: 1...4))
+        // Top-rated, popular, trending or fan-favourite series from a random page, and AniList readers'
+        // recommendations for something in your library, so the card is a real "you might like this".
+        async let picksTask = QuoteFeed.varietyPicks(preference)
+        async let personalTask = QuoteFeed.personalPicks(seed: library.randomElement(), preference: preference)
         let batchTask = Task { try? await withDeadline(6) { try await QuoteFeed.yurippe(count: 30) } }
         let chanTask: Task<LaunchQuote?, Never>? = animeChanAllowed()
             ? Task { try? await withDeadline(6) { try await QuoteFeed.animeChan() } } : nil
@@ -285,6 +298,12 @@ final class SpotlightStore: ObservableObject {
             .filter { item in item.media.map { !owned.contains(QuoteFeed.workKey($0.title)) } ?? true }
         // Quote databases are mostly anime (so manga): manhwa, manhua, webtoon and novel readers, or anyone whose quotes ran
         // thin, also get top-rated picks of their kinds.
+        let personal = await personalTask.filter { pick in
+            let key = QuoteFeed.workKey(pick.work)
+            return !skip.contains(key) && !owned.contains(key) && !(pick.media.map { seen.contains($0.id) } ?? false)
+        }
+        for pick in personal { if let id = pick.media?.id { seen.insert(id) } }
+        rated = Self.interleave(rated, Array(personal.prefix(4)), every: 2)
         let thin = rated.count < 4
         if thin || !preference.categories.isDisjoint(with: [.manhwa, .manhua, .webtoons, .novels]) {
             let picks = await picksTask.filter { pick in

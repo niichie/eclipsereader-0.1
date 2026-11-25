@@ -197,11 +197,15 @@ public enum QuoteFeed {
     // MARK: Picks (when quotes for your kinds are thin)
 
     /// AniList's top-rated series of each kind you chose (one request), for the card to mix in.
-    static func picksQuery(_ preference: SpotlightPreference, page: Int) -> String? {
+    /// Orders the picks are drawn from, one chosen at random each time, so the card isn't always
+    /// the same few all-time top-rated series.
+    public static let pickOrders = ["SCORE_DESC", "POPULARITY_DESC", "TRENDING_DESC", "FAVOURITES_DESC"]
+    static func picksQuery(_ preference: SpotlightPreference, page: Int, sort: String = "SCORE_DESC") -> String? {
         var parts: [String] = []
         let p = max(1, page)
+        let order = pickOrders.contains(sort) ? sort : "SCORE_DESC"
         func add(_ alias: String, _ filter: String) {
-            parts.append("\(alias): Page(page: \(p), perPage: 12) { media(type: MANGA, \(filter), sort: SCORE_DESC, isAdult: false, averageScore_greater: \(minimumScore + 2)) { ...f } }")
+            parts.append("\(alias): Page(page: \(p), perPage: 12) { media(type: MANGA, \(filter), sort: \(order), isAdult: false, averageScore_greater: \(minimumScore + 2)) { ...f } }")
         }
         let kinds = preference.categories
         let origins = preference.origins.isEmpty ? ["JP", "KR", "CN", "TW"] : preference.origins
@@ -212,8 +216,42 @@ public enum QuoteFeed {
         guard !parts.isEmpty else { return nil }
         return "query {\n" + parts.joined(separator: "\n") + "\n}\nfragment f on Media { id title { english romaji native } synonyms coverImage { extraLarge large } averageScore format countryOfOrigin startDate { year } description(asHtml: false) }"
     }
-    public static func picks(_ preference: SpotlightPreference, page: Int) async -> [Spotlight] {
-        guard let query = picksQuery(preference, page: page) else { return [] }
+    /// Picks from a random order and page; a page past the end of a short list falls back to the first.
+    public static func varietyPicks(_ preference: SpotlightPreference) async -> [Spotlight] {
+        let order = pickOrders.randomElement() ?? "SCORE_DESC"
+        let found = await picks(preference, page: Int.random(in: 1...10), sort: order)
+        return found.isEmpty ? await picks(preference, page: 1, sort: order) : found
+    }
+    /// "Picked for you": AniList readers' recommendations for a series in your library, in your kinds,
+    /// each with its synopsis. Nil seed (an empty library) gives none.
+    public static func personalPicks(seed: String?, preference: SpotlightPreference) async -> [Spotlight] {
+        guard let seed else { return [] }
+        let query = """
+        query ($search: String) { Media(search: $search, type: MANGA, sort: SEARCH_MATCH) {
+          recommendations(sort: RATING_DESC, perPage: 25) { nodes { mediaRecommendation { ...f isAdult } } } } }
+        fragment f on Media { id title { english romaji native } synonyms coverImage { extraLarge large } averageScore format countryOfOrigin startDate { year } description(asHtml: false) }
+        """
+        var request = URLRequest(url: AniListAPI.endpoint, timeoutInterval: 12)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try? AniListAPI.body(query, variables: ["search": seed])
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return [] }
+        return parsePersonal(data, preference: preference)
+    }
+    static func parsePersonal(_ data: Data, preference: SpotlightPreference) -> [Spotlight] {
+        let media = (((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["data"] as? [String: Any])?["Media"] as? [String: Any]
+        let nodes = ((media?["recommendations"] as? [String: Any])?["nodes"] as? [[String: Any]]) ?? []
+        return nodes.compactMap { node in
+            guard let entry = node["mediaRecommendation"] as? [String: Any], entry["isAdult"] as? Bool != true,
+                  let hit = hit(entry), preference.allows(hit.media), let score = hit.media.score, score >= minimumScore,
+                  let line = synopsisLine(entry["description"] as? String) else { return nil }
+            return Spotlight(quote: LaunchQuote(text: line, who: "Picked for you", work: hit.media.title), media: hit.media, pick: true)
+        }.shuffled()
+    }
+    public static func picks(_ preference: SpotlightPreference, page: Int, sort: String = "SCORE_DESC") async -> [Spotlight] {
+        guard let query = picksQuery(preference, page: page, sort: sort) else { return [] }
         var request = URLRequest(url: AniListAPI.endpoint, timeoutInterval: 12)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
