@@ -148,22 +148,45 @@ struct GlobalSearchResults: View {
                                    done: search.sections.filter { $0.phase != .loading }.count,
                                    found: search.arrived.count)
             }
-            ForEach(search.arrived.compactMap { id in search.sections.first { $0.id == id } }) { section in
-                switch section.phase {
-                case .done(let items) where !items.isEmpty:
-                    row(title: section.source.name, host: section.source.host, count: items.count) {
-                        ForEach(items) { item in
-                            card(title: item.title, cover: cover(for: item), detail: item.detail,
-                                 owned: library.ownsWork(title: item.title, url: item.url), busy: busyID == item.id, referer: nil) {
-                                pick(item)
+            // Each series once, with the sites it's on, instead of the same cover in every site's row.
+            // Exact title matches first, then series on more sites; new ones slide in as sites answer.
+            let works = GlobalSearch.group(search.arrived.compactMap { id -> (site: String, items: [DiscoverItem])? in
+                guard let section = search.sections.first(where: { $0.id == id }),
+                      case .done(let items) = section.phase, !items.isEmpty else { return nil }
+                return (section.source.name, items)
+            }, query: search.query)
+            if !works.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("Results").font(.title3.weight(.bold))
+                        Text("\(works.count)").font(.caption.weight(.bold)).monospacedDigit()
+                            .padding(.horizontal, 7).padding(.vertical, 2).background(Eclipse.accent.opacity(0.35), in: Capsule())
+                        Spacer()
+                        Text("Hold a cover to pick the site").font(.caption).foregroundStyle(.secondary)
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: cardWidth, maximum: cardWidth + 20), spacing: 12, alignment: .top)],
+                              alignment: .leading, spacing: 18) {
+                        ForEach(works) { work in
+                            let first = work.entries[0].item
+                            card(title: work.title, cover: work.cover ?? cover(for: first),
+                                 detail: work.sites.count == 1 ? work.sites[0] : "\(work.sites[0]) +\(work.sites.count - 1)",
+                                 owned: library.ownsWork(title: work.title, url: first.url),
+                                 busy: work.entries.contains { busyID == $0.item.id }, referer: nil) {
+                                pick(first)
                             }
+                            .contextMenu {
+                                Section("Open from") {
+                                    ForEach(work.entries, id: \.item.id) { entry in
+                                        Button(entry.site, systemImage: "arrow.up.right.square") { pick(entry.item) }
+                                    }
+                                }
+                            }
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
                         }
                     }
-                default:
-                    EmptyView()
                 }
+                .animation(.easeOut(duration: 0.25), value: works.map(\.id))
             }
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
             let empty = search.sections.filter { if case .done(let items) = $0.phase { return items.isEmpty } else { return false } }
             let failed = search.sections.filter { $0.phase == .failed }
             // One compact line for sites that didn't answer, with their browser searches in a menu,

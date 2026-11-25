@@ -249,3 +249,51 @@ public enum GlobalSearch {
         }
     }
 }
+
+
+/// One series found by a global search, with every site that has it.
+public struct SearchWork: Identifiable, Sendable {
+    public struct Entry: Sendable {
+        public let site: String
+        public let item: DiscoverItem
+    }
+    public let id: String
+    public var entries: [Entry]
+    public var title: String { entries[0].item.title }
+    public var cover: URL? { entries.lazy.compactMap(\.item.cover).first }
+    public var sites: [String] { entries.map(\.site) }
+}
+
+extension GlobalSearch {
+    /// The same series on several sites, shown once. Titles count as the same work only when they
+    /// match ignoring case, punctuation and a leading "the" (so "Jujutsu Kaisen 0" stays separate).
+    /// Order: titles matching the query exactly, then works on more sites, then the order sites answered.
+    public static func group(_ results: [(site: String, items: [DiscoverItem])], query: String) -> [SearchWork] {
+        func key(_ title: String) -> String {
+            var t = title.lowercased()
+            if t.hasPrefix("the ") { t.removeFirst(4) }
+            return t.filter { $0.isLetter || $0.isNumber }
+        }
+        var works: [SearchWork] = []
+        var index: [String: Int] = [:]
+        for (site, items) in results {
+            for item in items {
+                let k = key(item.title)
+                guard !k.isEmpty else { continue }
+                if let i = index[k] {
+                    if !works[i].entries.contains(where: { $0.site == site }) { works[i].entries.append(.init(site: site, item: item)) }
+                } else {
+                    index[k] = works.count
+                    works.append(SearchWork(id: k, entries: [.init(site: site, item: item)]))
+                }
+            }
+        }
+        let wanted = key(query)
+        return works.enumerated().sorted { a, b in
+            let ea = a.element.id == wanted, eb = b.element.id == wanted
+            if ea != eb { return ea }
+            if a.element.entries.count != b.element.entries.count { return a.element.entries.count > b.element.entries.count }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
+}

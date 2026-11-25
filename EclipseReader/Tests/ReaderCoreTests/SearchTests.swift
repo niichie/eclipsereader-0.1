@@ -52,4 +52,19 @@ final class SearchTests: XCTestCase {
         let results = titles.map { DiscoverItem(id: $0, title: $0, url: items[0].url, cover: nil, detail: nil) }
         XCTAssertEqual(GlobalSearch.relevant(results, to: "Xiao Gu Niang").map(\.title), ["Xiao Gǔ Niang"])
     }
+
+    func testSameSeriesOnSeveralSitesIsGroupedOnce() {
+        func item(_ id: String, _ title: String) -> DiscoverItem {
+            DiscoverItem(id: id, title: title, url: URL(string: "https://example.org/\(id)")!, cover: nil, detail: nil)
+        }
+        let works = GlobalSearch.group([
+            (site: "WeebCentral", items: [item("w1", "Jujutsu Kaisen 0"), item("w2", "Jujutsu Kaisen")]),
+            (site: "MangaDot", items: [item("d1", "JUJUTSU KAISEN"), item("d2", "Jujutsu Kaisen Modulo")]),
+            (site: "MangaDex", items: [item("x1", "Jujutsu Kaisen"), item("x2", "Jujutsu Kaisen 0")]),
+        ], query: "jujutsu kaisen")
+        XCTAssertEqual(works.map(\.title), ["Jujutsu Kaisen", "Jujutsu Kaisen 0", "Jujutsu Kaisen Modulo"])
+        XCTAssertEqual(works[0].sites, ["WeebCentral", "MangaDot", "MangaDex"])
+        XCTAssertEqual(works[1].sites, ["WeebCentral", "MangaDex"])
+        XCTAssertEqual(works[2].sites, ["MangaDot"])
+    }
 }
