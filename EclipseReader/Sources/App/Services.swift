@@ -227,7 +227,11 @@ enum PageEnhancer {
             }
             return 1
         }
-        return Analysis(ink: percentile(0.008), paper: percentile(0.96), grayscale: Double(colourful) < Double(total) * 0.04)
+        // Paper is the most common tone among the lighter part of the page. The brightest few percent
+        // sit above it (JPEG noise), which left grey paper grey.
+        let lighter = Int(percentile(0.6) * 255)
+        let paperBin = (lighter...255).max { histogram[$0] < histogram[$1] } ?? 255
+        return Analysis(ink: percentile(0.008), paper: Double(paperBin) / 255, grayscale: Double(colourful) < Double(total) * 0.04)
     }
 
     /// The levels stretch for a page: (scale, bias) so that ink maps to 0 and paper to 1.
@@ -258,7 +262,9 @@ enum PageEnhancer {
         var grey = Edge(denoise: 0.03, smoothing: 0.15, curve: 0.15, sharpenRadius: 0.45, sharpenAmount: 0.35)
         /// Colour pages (manhwa, webtoons): often heavily compressed, so more cleanup and gentle
         /// sharpening, which otherwise sharpens the JPEG grit around lettering along with it.
-        var colour = Edge(denoise: 0.06, smoothing: 0.3, curve: 0.2, sharpenRadius: 0.5, sharpenAmount: 0.25)
+        /// No contrast curve (0.18 leaves the tones as they are): on low-resolution colour pages it
+        /// flattened colours into blotches.
+        var colour = Edge(denoise: 0.08, smoothing: 0.4, curve: 0.18, sharpenRadius: 0.5, sharpenAmount: 0.1)
         static let standard = Tuning()
     }
 
