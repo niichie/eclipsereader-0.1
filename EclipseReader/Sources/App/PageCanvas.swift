@@ -350,6 +350,16 @@ final class ZoomPageView: UIView, UIScrollViewDelegate {
             }
             work = Task { [weak self] in
                 do {
+                    // Show a plain decode first (a fraction of the time), then swap in the enhanced page
+                    // when it's ready: scrolling a long strip no longer reaches a black, empty page.
+                    if enhance, DecodedPages.shared.ready(page, options) == nil {
+                        var plain = options; plain.enhance = false
+                        if let (_, quick) = try? await DecodedPages.shared.load(page, chapter: chapter, pipeline: pipeline, options: plain),
+                           !Task.isCancelled, let self, self.imageView.image == nil {
+                            self.spinner.stopAnimating(); self.imageView.image = quick.image
+                            self.resetFit(); loaded(index, quick.ratio)
+                        }
+                    }
                     let (data, decoded) = try await DecodedPages.shared.load(page, chapter: chapter, pipeline: pipeline, options: options)
                     let repeated = page.half == nil && page.url.scheme == "https"
                     let duplicate = repeated ? await PageDecoder.shared.isRepeated(data, chapter: chapter.id, index: index) : false

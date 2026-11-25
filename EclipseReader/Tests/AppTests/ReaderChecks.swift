@@ -218,7 +218,7 @@ final class ReaderChecks: XCTestCase {
             let font = UIFont(name: "Georgia", size: 15) ?? .systemFont(ofSize: 15)
             NSAttributedString(string: "The lantern burns\nlow beneath a\nsilver evening.", attributes: [.font: font, .foregroundColor: ink])
                 .draw(in: CGRect(x: 40, y: 50, width: 200, height: 100))
-            for y in stride(from: 190, to: 290, by: 3) { for x in stride(from: 220, to: 390, by: 3) {
+            for y in stride(from: 190.0, to: 290.0, by: 3.0) { for x in stride(from: 220.0, to: 390.0, by: 3.0) {
                 ink.setFill(); UIBezierPath(ovalIn: CGRect(x: x, y: y, width: 1.4, height: 1.4)).fill()
             } }
         }, 0.7)
@@ -243,6 +243,7 @@ final class ReaderChecks: XCTestCase {
             ("c-std", PageEnhancer.Tuning.standard.colour),
             ("c-clean", Edge(denoise: 0.09, smoothing: 0.35, curve: 0.2, sharpenRadius: 0.5, sharpenAmount: 0.15)),
             ("c-soft", Edge(denoise: 0.06, smoothing: 0.45, curve: 0.22, sharpenRadius: 0.5, sharpenAmount: 0.1)),
+            ("c-plain", Edge(denoise: 0.08, smoothing: 0.4, curve: 0.18, sharpenRadius: 0.5, sharpenAmount: 0)),
         ]
         func crop(_ image: CGImage, _ rect: CGRect, _ name: String) throws {
             let cropped = try XCTUnwrap(image.cropping(to: rect))

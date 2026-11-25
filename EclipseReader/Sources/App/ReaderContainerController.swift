@@ -202,7 +202,8 @@ final class ReaderContainerController: UIViewController, UIPageViewControllerDat
         cell.canvas.tapped = { [weak self] x in self?.tapped?(x) }
         cell.canvas.configure(page: pages[index], index: index, chapter: chapter!, pipeline: pipeline!, preferences: fit) { [weak self, weak collectionView] i, ratio in
             guard let self, collectionView === self.collection, pages.indices.contains(i) else { return }
-            if ratios[i] != ratio {
+            // The plain preview and the enhanced page can differ by a rounding pixel: not a relayout.
+            if abs((ratios[i] ?? 0) - ratio) > 0.002 {
                 ratios[i] = ratio
                 // Keep the current reading position anchored after correcting estimated heights.
                 let anchor = current
