@@ -47,22 +47,40 @@ final class LibraryUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--demo-library"] // Disables automatic network refresh, never changes source data.
         app.launch()
+        defer { XCUIDevice.shared.orientation = .portrait }
         XCTAssertTrue(app.buttons["chapterBrowser"].waitForExistence(timeout: 10))
-        app.buttons["Settings"].firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].exists)
+        // The phone tab bar sits along the bottom in both orientations.
+        let settingsTab = tab("Settings", in: app)
+        XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(settingsTab.frame.midY, app.windows.firstMatch.frame.height * 0.8)
+        settingsTab.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
         XCUIDevice.shared.orientation = .landscapeLeft
-        let clearCache = app.buttons["Clear temporary images"]
+        let landscapeTab = tab("Settings", in: app)
+        XCTAssertGreaterThan(landscapeTab.frame.midY, app.windows.firstMatch.frame.height * 0.75)
+        let storage = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Storage")).firstMatch
         for _ in 0..<6 {
-            if clearCache.exists && clearCache.isHittable { break }
+            if storage.exists && storage.isHittable { break }
             app.swipeUp()
         }
-        XCTAssertTrue(clearCache.exists && clearCache.isHittable)
+        XCTAssertTrue(storage.exists && storage.isHittable)
+        storage.tap()
+        let clearCache = app.buttons["Clear temporary images"]
+        XCTAssertTrue(clearCache.waitForExistence(timeout: 5) && clearCache.isHittable)
         XCUIDevice.shared.orientation = .portrait
-        app.buttons["Library"].firstMatch.tap()
+        tab("Library", in: app).tap()
+        XCTAssertTrue(app.buttons["chapterBrowser"].waitForExistence(timeout: 5))
+        // Opening the series covers the library with its page.
         app.buttons["chapterBrowser"].tap()
-        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
+        let covered = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: app.buttons["chapterBrowser"])
+        XCTAssertEqual(XCTWaiter.wait(for: [covered], timeout: 5), .completed)
         app.terminate()
         app.launch()
         XCTAssertTrue(app.buttons["chapterBrowser"].waitForExistence(timeout: 5))
+    }
+    @MainActor
+    private func tab(_ name: String, in app: XCUIApplication) -> XCUIElement {
+        let phone = app.buttons["tab-\(name)"]
+        return phone.exists ? phone : app.tabBars.buttons[name]
     }
 }

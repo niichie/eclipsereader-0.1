@@ -168,6 +168,7 @@ struct PhoneTabBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(item.title)
+                .accessibilityIdentifier("tab-\(item.title)")
                 .accessibilityValue(item == .updates && badge > 0 ? "\(badge) new" : "")
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
