@@ -26,6 +26,7 @@
 - **Select several series** to mark read, download, file into a category, hide or remove in one go.
 - **One launch card that doubles as a recommendation:** a quote pulled live from two anime quote databases (Yurippe and AnimeChan) plus a hand-picked list, kept only when AniList readers rate the work 77% or higher and it's a kind you chose (manga, manhwa, manhua, light novels) from a country you chose. Top-rated picks of your kinds fill in where quotes are thin. It shows the cover, score and year; *Read* finds it on every site (light novels on the novel sites), and shuffle shows another. It never repeats a recent one or suggests something already in your library, and it shrinks on small screens.
 - A **first-launch setup** asks what you're into (manga, manhwa, manhua, webtoons, comics; light novels and books as options), where from (Japan, Korea, China, Taiwan; raws too), and what the home shows. Change any of it in Settings › Library.
+- **"Because you read"**: AniList recommendations based on the last series you read, matched to its kind (manga, manhwa, manhua, webtoons or comics), one per series, never something you already own. The shelf is saved, so it shows at once on launch.
 - **Bookmarks** in every reader (Library ⋯ › Bookmarks) and **favourite series**.
 - A plain-language **Guide** to every button and setting (Settings › Guide, the end of the setup, and the reader's settings).
 - **Full cover control:** Photos, Files, an image link, any page of the series, or the automatic cover. Covers tint the series page.
@@ -33,12 +34,16 @@
 
 ### Manga, manhwa, manhua, webtoons and comics
 - **Manga:** right to left with paper-curl page turns. **Manhwa, manhua and webtoons:** one seamless vertical strip. **Comics:** left to right.
-- Two-page spreads in landscape, or **split spreads** into two pages in portrait.
+- Two-page spreads in landscape (and on the unfolded Duo), or **split spreads** into two pages in portrait. **Pairs** shifts the pairing by one page when double-page art lands split, remembered per series.
+- **Page slider preview:** hold the slider and you see the page you'd land on with two pages either side, in reading order.
+- A chapter is **marked read** as soon as its last page (or last pair) is on screen, or when you go on to the next chapter from its last pages.
+- **Rotation lock** in the reader's bottom bar, for reading lying down.
 - **Panels (guided view):** finds the panels on a page; edge taps zoom panel by panel (right to left for manga), then turn the page.
 - Blank white or black scan borders are trimmed automatically.
-- Keyboard and game controller page turns on iPad, auto-scroll for strips, haptics, and a warm night filter.
+- Keyboard and game controller page turns on iPad, auto-scroll for strips, haptics, plus artwork dimming and a warm night filter.
 - On-device **translation of raw chapters** (Vision text recognition and Apple Translation): bubbles are remembered, and a pinned raw series translates every chapter automatically.
-- Optional enhancement for low-resolution scans; image quality matched to the screen, memory and Low Power Mode.
+- **Scan enhancer** (on by default, on-device): grey paper turns white, faded ink turns black, JPEG noise is smoothed out and small scans are upscaled to your screen with clean lettering. Manga pages are kept in true greyscale; colour pages keep their colour. Hold two fingers on a page to compare with the original, and switch it off per series from the reader's ⋯ menu.
+- Image quality matched to the screen, memory and Low Power Mode. Pages show instantly and the enhanced version swaps in place, with the next pages prepared ahead.
 
 ### Light novels and web novels (optional)
 Off unless you turn it on in the setup or Settings › Library; eclipsereader is a comics reader first.
@@ -56,12 +61,13 @@ Off unless you turn it on in the setup or Settings › Library (adding a book fi
 - In the browser, a book's page (Standard Ebooks, Gutenberg, Wikisource or any page linking an EPUB) shows **Add book**; any EPUB, Kindle or FB2 download goes straight into the library.
 
 ### Browse and sources
-- **Native connections:** MangaDex (official API), WeebCentral and WEBTOON. **Global search** across them and your other sources.
+- **Native connections:** MangaDex (official API), WeebCentral and WEBTOON.
+- **One search across every site:** results fill in as each site answers, only sites that found something are shown, and the same series on several sites appears once (with "Open from" to pick the site). Sites that usually find things are searched first, and a site that hasn't answered your last 5 searches gets a one-tap **Turn off**. Your **recent searches** sit under the search field.
 - **Sources** come from one editable file, `EclipseReader/Resources/DefaultSources.json` (format documented in the file): they appear in Browse after install, grouped by what they offer, and open in the in-app browser. Browse › Manage sources edits, hides, removes, reorders and favourites them, adds your own, or adds a whole list (pasted, from a file, or a link you **subscribe** to, re-read at every launch).
 - **Sign in on any site** inside the in-app browser; sessions persist. A source set to "Read with my browser sign-in" loads its pages through that same session, so what your account can see opens in the reader too. Credentials and cookies never leave WebKit. Sign out of one site from its settings.
 - Built-in browser for any other site, with ads, trackers and "get the app" banners blocked. The connected sources are checked against the live sites by the **Probe sources** workflow.
 - The **Add** button only appears where a series can be read; elsewhere a guide explains why, with *Try anyway*.
-- **Fill missing chapters** (from Neko): when a site lacks some chapters (licensed MangaDex series, say), the series page can fill the gaps from the same series on another site. Only the missing numbers are added, they're refreshed on every update, and they give way once the main site posts them.
+- **Fill missing chapters** (from Neko): when a site lacks some chapters (licensed MangaDex series, say), the gaps are filled from the same series on another site. Adding a MangaDex series that only has a few chapters does this automatically. Only the missing numbers are added, they're refreshed on every update, and they give way once the main site posts them.
 - **Similar series** (from Neko): AniList readers' recommendations for any series, with scores. Tap one to find it on every site.
 - **Migrate** a series to another site, keeping your progress.
 
@@ -77,11 +83,12 @@ Off unless you turn it on in the setup or Settings › Library (adding a book fi
 
 1. Download `EclipseReader-unsigned.ipa` from the newest **[release](https://github.com/niichie/eclipsereader-0.1/releases)**,
    or from the newest green **[Actions](https://github.com/niichie/eclipsereader-0.1/actions)** run (artifact **EclipseReader-unsigned-IPA**).
-2. Install it with AltStore, SideStore, Sideloadly or your usual signing tool.
+2. Install it with AltStore, SideStore, Sideloadly, Signulous or your usual signing tool.
+3. Settings › About shows the version, build number and commit (for example `1.0.0 (140 · 5eddbf7)`), so you can tell which build you're running.
 
 Pushing a tag like `v1.0` builds the IPA and publishes it as a release.
 
-The app is built with the iOS 27 SDK, so the iPhone Duo runs it full-screen folded and unfolded.
+The app is built with the iOS 27 SDK, so the iPhone Duo runs it full-screen folded and unfolded. On iPhone (both Duo screens) the tabs sit in a bottom bar rather than the front screen's side rail, so pages use the full width.
 
 ## Build from source
 
