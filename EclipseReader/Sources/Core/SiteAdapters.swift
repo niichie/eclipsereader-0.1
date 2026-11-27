@@ -232,7 +232,9 @@ struct WeebCentral {
         for m in LinkedSource.matches(#"(?is)<a\b[^>]*href=["']((?:https://weebcentral\.com)?/chapters/[0-9A-Za-z]+)["'][^>]*>(.*?)</a>"#, html) {
             guard let url = URL(string: m[0].hasPrefix("/") ? "https://weebcentral.com" + m[0] : m[0]),
                   seen.insert(url.absoluteString).inserted else { continue }
-            let text = LinkedSource.plain(m[1])
+            // Dates and "Last Read" markers sit inside the link too; keep only the chapter's name.
+            let inner = m[1].replacingOccurrences(of: #"(?is)<time\b.*?</time>"#, with: " ", options: .regularExpression)
+            let text = LinkedSource.cleanChapterTitle(LinkedSource.plain(inner))
             let name = LinkedSource.firstMatch(#"((?:Chapter|Episode|Ch\.?)\s*[\d.]+)"#, text) ?? text
             let n = ChapterOrder.number(name) ?? ChapterOrder.number(text)
             found.append(Chapter(url: url, title: name.isEmpty ? "Chapter" : name, number: n.map { LinkedSource.format($0) } ?? ""))

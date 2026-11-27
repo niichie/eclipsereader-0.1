@@ -357,6 +357,15 @@ public struct LinkedSource: Sendable {
               let r = Range(m.range(at: 1), in: text) else { return nil }
         return String(text[r])
     }
+    /// Drops reading-status text some sites print inside a chapter's link ("Days 1 Last Read
+    /// 2024-09-07T17:04:15.717343Z" → "Days 1"): "Last read …" and raw timestamps.
+    public static func cleanChapterTitle(_ title: String) -> String {
+        var text = title
+        text = text.replacingOccurrences(of: #"(?i)\s*\blast\s+read\b.*$"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"#, with: "", options: .regularExpression)
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? title.trimmingCharacters(in: .whitespacesAndNewlines) : text
+    }
     static func plain(_ html: String) -> String {
         decodeEntities(html.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression))
             .components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")

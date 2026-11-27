@@ -22,7 +22,7 @@ struct GuideView: View {
                 item("flame", "Warm filter", "Tints pages amber for reading at night. It stays on until you turn it down, in the reader's settings or Settings › Reader.")
                 item("wand.and.stars", "Enhance scanned pages", "Cleans up scans on this device: grey paper turns white, faded ink turns black, JPEG noise is removed and small pages are upscaled to your screen with sharp lettering. Hold two fingers on a page to see the original. Uses more battery; leave it off for clean digital pages.")
                 item("hand.draw", "Compare a scan", "Hold two fingers on the art to compare the original at the same zoom. To turn enhancing on or off for one series, use the reader's ⋯ menu › Enhance scans for this series.")
-                item("slider.horizontal.3", "Find a page", "Drag the page slider for a preview. Release to jump, or use Return to go back.")
+                item("slider.horizontal.3", "Find a page", "Hold and drag the page slider: the page you'd land on shows in the middle, with two pages either side, so you can see where you are. Release to jump, or use Return to go back.")
                 item("crop", "Blank borders", "Plain white or black borders around scanned pages are trimmed automatically so the art fills the screen. Switch it off in Settings › Reader if a page ever looks cut.")
                 item("rectangle.split.2x1", "Spreads", "Turn the phone sideways (or unfold the Duo) for two pages side by side. In portrait, a double-page spread can be split into two pages.")
                 item("rectangle.split.2x1", "Pairs", "If double-page art lands split across two pages, tap Pairs in the reader's bottom bar to shift the pairing by one page. It's remembered for that series.")

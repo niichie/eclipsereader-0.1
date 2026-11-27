@@ -110,6 +110,23 @@ final class LibraryModel: ObservableObject {
             restored.preferences.enhance = true
             restored.defaultsVersion = 6
         }
+        // v7: some chapter names carried the site's "Last Read <date>" text, and chapters read to
+        // their last pages weren't counted as finished. Tidy the names and mark those chapters read.
+        if (restored.defaultsVersion ?? 0) < 7 {
+            restored.series = restored.series?.map { item in
+                var item = item
+                item.chapters = item.chapters.map { chapter in
+                    let clean = LinkedSource.cleanChapterTitle(chapter.title)
+                    return clean == chapter.title ? chapter : Chapter(url: chapter.url, title: clean, number: chapter.number, published: chapter.published)
+                }
+                return item
+            }
+            for (id, progress) in restored.progress where !progress.completed
+                && ChapterProgress.reachedEnd(page: progress.page, count: progress.pageCount) {
+                restored.progress[id]?.completed = true
+            }
+            restored.defaultsVersion = 7
+        }
         #if DEBUG
         if ReaderTestFixture.demo { restored = ReaderTestFixture.demoState() }
         #endif

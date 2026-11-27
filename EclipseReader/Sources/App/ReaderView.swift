@@ -27,6 +27,9 @@ struct ReaderView: View {
     @AppStorage("keepScreenOn") private var keepScreenOn = true
     /// Rotation lock: while on, the reader stays the way the screen faced when it was locked.
     @AppStorage("readerRotationLock") private var rotationLocked = false
+    /// Whether the reader is wide enough to show two pages side by side (kept for progress, which
+    /// is saved outside the layout pass).
+    @State private var pairing = false
     @AppStorage("readerPageNumber") private var showPageNumber = true
     @AppStorage("pageHaptics") private var haptics = true
     @State private var lastActivity = Date()
@@ -198,7 +201,8 @@ struct ReaderView: View {
                     let start = min(last + 1, pages.count)
                     await library.pipeline.prefetch(Array(pages.dropFirst(start).prefix(2)), chapter: chapter)
                 }
-                .onChange(of: ReadingOrder.canPair(width: geometry.size.width, height: geometry.size.height)) { _, landscape in
+                .onChange(of: ReadingOrder.canPair(width: geometry.size.width, height: geometry.size.height), initial: true) { _, landscape in
+                    pairing = landscape
                     if landscape { unsplit() }
                 }
                 .background(KeyTurnCatcher().frame(width: 0, height: 0))
@@ -438,10 +442,8 @@ struct ReaderView: View {
         let previous = library.previous(before: chapter)
         let next = library.next(after: chapter)
         return VStack(spacing: 10) {
-            if let scrub, let preview = pages[safe: scrub] {
-                CoverView(url: preview.url, referer: chapter).id(preview.id)
-                    .frame(width: 78, height: 108).clipShape(RoundedRectangle(cornerRadius: 6))
-                    .accessibilityLabel("Preview of page \(scrub + 1)")
+            if let scrub, pages.indices.contains(scrub) {
+                PageScrubStrip(pages: pages, target: scrub, chapter: chapter, pipeline: library.pipeline, rightToLeft: rtl)
             } else if let previous = returnPage, pages.indices.contains(previous) {
                 Button("Return to page \(previous + 1)") { returnPage = nil; page = previous }
             }
@@ -596,7 +598,7 @@ struct ReaderView: View {
     private func stopSpeech() { speechTask?.cancel(); speaker.stop(); spokenBubbles = [] }
     private func open(_ target: Chapter) {
         stopSpeech()
-        remember(); returnChapter = chapter
+        remember(movingOn: library.next(after: chapter)?.id == target.id); returnChapter = chapter
         scrub = nil; returnPage = nil; pages = []; loading = true; chapter = target
     }
     /// Tap the left or right edge to turn the page (direction-aware), the middle to show or hide controls.
@@ -643,9 +645,21 @@ struct ReaderView: View {
         catch let error as URLError where error.code == .cancelled { }
         catch { if !Task.isCancelled && requested.id == chapter.id { failure = error.localizedDescription; loading = false } }
     }
-    private func remember() {
+    /// Saves where you are. A chapter counts as read once its last page has been on screen (in a
+    /// two-page view, the last pair), or when you go on to the next chapter from its last pages.
+    private func remember(movingOn: Bool = false) {
         guard !loading, !pages.isEmpty else { return }
-        library.record(chapter, page: publishedPage, count: publishedCount)
+        let finished = lastPageShown || (movingOn && ChapterProgress.reachedEnd(page: publishedPage, count: publishedCount))
+        library.record(chapter, page: publishedPage, count: publishedCount, completed: finished)
+    }
+    private var lastPageShown: Bool {
+        guard !pages.isEmpty else { return false }
+        if page >= pages.count - 1 { return true }
+        guard effective.mode == .paged else { return false }
+        let groups = ReadingOrder.groups(count: pages.count, landscape: pairing, spreads: effective.landscapeSpreads,
+                                         wide: effective.detectWidePages ? wide : [],
+                                         shifted: library.spreadsShifted(library.seriesID(for: chapter)))
+        return groups.last?.indices.contains(page) ?? false
     }
     /// Progress is saved against the chapter as published, so split spreads don't shift it.
     private var publishedPage: Int { origin.isEmpty ? page : (origin.indices.contains(page) ? origin[page] : page) }
