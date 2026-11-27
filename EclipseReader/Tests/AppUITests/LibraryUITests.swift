@@ -30,7 +30,14 @@ final class LibraryUITests: XCTestCase {
             // The manga fixture uses the default rightward swipe to advance.
             to.press(forDuration: 0.03, thenDragTo: from)
             let advanced = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@", "Page 1 of 8"), object: counter)
-            XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 5), .completed)
+            let turned = XCTWaiter.wait(for: [advanced], timeout: 5)
+            if turned != .completed {
+                print("CHECK|rotate|\(style) did not turn: label=\(counter.label) window=\(window)")
+                for line in app.debugDescription.split(separator: "\n") where line.contains("art-") || line.contains("Page") || line.contains("Other") && line.contains("identifier") {
+                    print("CHECK|rotate|tree|\(line.trimmingCharacters(in: .whitespaces).prefix(220))")
+                }
+            }
+            XCTAssertEqual(turned, .completed)
             let landed = counter.label
             XCTAssertTrue(["Page 2 of 8", "Page 3 of 8"].contains(landed))
             device.orientation = .portrait
