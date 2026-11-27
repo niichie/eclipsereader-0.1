@@ -32,8 +32,6 @@ enum AppTab: Int, CaseIterable, Identifiable {
 struct RootView: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var tab = 0
-    /// Phone tabs are built the first time they're opened (like a tab view), then kept.
-    @State private var visited: Set<Int> = [0]
     /// Tapping the tab you're already on goes back to its start, like the system tab bar.
     @State private var resets = [Int](repeating: 0, count: AppTab.allCases.count)
     @State private var keyboardShown = false
@@ -87,25 +85,19 @@ struct RootView: View {
 extension RootView {
     @ViewBuilder fileprivate var sections: some View {
         if phoneBar {
-            ZStack {
-                ForEach(AppTab.allCases) { item in
-                    if visited.contains(item.rawValue) {
-                        section(item)
-                            .id(resets[item.rawValue])
-                            .opacity(tab == item.rawValue ? 1 : 0)
-                            .allowsHitTesting(tab == item.rawValue)
-                            .accessibilityHidden(tab != item.rawValue)
-                    }
-                }
+            // The standard tab container (its own bar hidden) keeps each tab's life cycle exactly
+            // as before: tabs you leave stop drawing and get their usual appear/disappear calls.
+            PhoneTabContainer(selected: tab, resets: resets, barHeight: keyboardShown ? 0 : PhoneTabBar.height) { item in
+                AnyView(section(item).environmentObject(model).tint(.white))
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            .ignoresSafeArea()
+            .overlay(alignment: .bottom) {
                 if !keyboardShown {
                     PhoneTabBar(selected: tab, badge: model.totalNew) { choice in
                         if choice == tab { resets[choice] += 1 } else { tab = choice }
                     }
                 }
             }
-            .onChange(of: tab) { _, now in visited.insert(now) }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardShown = true }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
             .sensoryFeedback(.selection, trigger: tab)
@@ -132,8 +124,48 @@ extension RootView {
     }
 }
 
+/// A UITabBarController with its bar hidden: it switches tabs, and makes room for our bar.
+struct PhoneTabContainer: UIViewControllerRepresentable {
+    let selected: Int
+    let resets: [Int]
+    let barHeight: CGFloat
+    let page: (AppTab) -> AnyView
+    final class Coordinator { var resets: [Int] = [] }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIViewController(context: Context) -> UITabBarController {
+        let controller = UITabBarController()
+        controller.viewControllers = AppTab.allCases.map { item in
+            let host = UIHostingController(rootView: page(item))
+            host.view.backgroundColor = .black
+            host.overrideUserInterfaceStyle = .dark
+            return host
+        }
+        if #available(iOS 18.0, *) { controller.setTabBarHidden(true, animated: false) }
+        controller.tabBar.isHidden = true
+        controller.view.backgroundColor = .black
+        context.coordinator.resets = resets
+        return controller
+    }
+    func updateUIViewController(_ controller: UITabBarController, context: Context) {
+        if controller.selectedIndex != selected { controller.selectedIndex = selected }
+        controller.tabBar.isHidden = true
+        for item in AppTab.allCases where context.coordinator.resets[safe: item.rawValue] != resets[item.rawValue] {
+            // Same tab tapped again: start that tab over (back to its first screen, scrolled to the top).
+            if let host = controller.viewControllers?[safe: item.rawValue] as? UIHostingController<AnyView> {
+                host.rootView = AnyView(page(item).id(resets[item.rawValue]))
+            }
+        }
+        context.coordinator.resets = resets
+        for child in controller.viewControllers ?? [] where child.additionalSafeAreaInsets.bottom != barHeight {
+            child.additionalSafeAreaInsets.bottom = barHeight
+        }
+    }
+}
+
 /// A bottom tab bar that keeps to the bottom edge on every iPhone screen shape.
 struct PhoneTabBar: View {
+    /// The bar's height above the home indicator; tab pages leave this much room at the bottom.
+    static let height: CGFloat = 51
     let selected: Int
     let badge: Int
     let select: (Int) -> Void
@@ -163,7 +195,7 @@ struct PhoneTabBar: View {
                             .lineLimit(1).minimumScaleFactor(0.8)
                     }
                     .foregroundStyle(on ? Color.white : Color.white.opacity(0.45))
-                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .frame(maxWidth: .infinity, minHeight: Self.height - 3)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -174,6 +206,7 @@ struct PhoneTabBar: View {
             }
         }
         .padding(.top, 3)
+        .frame(height: Self.height)
         .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
         .overlay(alignment: .top) { Rectangle().fill(Eclipse.hairline).frame(height: 0.5) }
     }
