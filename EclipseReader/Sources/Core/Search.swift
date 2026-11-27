@@ -341,3 +341,16 @@ public struct SearchReliability: Codable, Sendable, Equatable {
         ids.filter { (sites[$0]?.missedInARow ?? 0) >= threshold }
     }
 }
+
+/// The last few searches, newest first, without repeats (letter case ignored).
+public enum RecentSearches {
+    public static let limit = 8
+    public static func adding(_ query: String, to list: [String], limit: Int = RecentSearches.limit) -> [String] {
+        let cleaned = query.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return list }
+        let rest = list.filter { $0.caseInsensitiveCompare(cleaned) != .orderedSame }
+        return Array(([cleaned] + rest).prefix(max(0, limit)))
+    }
+    public static func decode(_ raw: String) -> [String] { raw.split(separator: "\n").map(String.init) }
+    public static func encode(_ list: [String]) -> String { list.joined(separator: "\n") }
+}

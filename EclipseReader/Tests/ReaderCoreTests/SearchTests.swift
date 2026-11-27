@@ -68,6 +68,16 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(works[2].sites, ["MangaDot"])
     }
 
+    func testRecentSearchesKeepNewestFirstWithoutRepeats() {
+        var list: [String] = []
+        for query in ["Berserk", "  hellsing ", "", "BERSERK", "Vagabond"] { list = RecentSearches.adding(query, to: list) }
+        XCTAssertEqual(list, ["Vagabond", "BERSERK", "hellsing"])
+        XCTAssertEqual(RecentSearches.decode(RecentSearches.encode(list)), list)
+        XCTAssertEqual(RecentSearches.decode(""), [])
+        let many = (1...12).reduce([String]()) { RecentSearches.adding("Title \($1)", to: $0) }
+        XCTAssertEqual(many.count, RecentSearches.limit)
+        XCTAssertEqual(many.first, "Title 12")
+    }
     func testDependableSitesFirstAndSilentOnesFlagged() {
         var r = SearchReliability()
         for _ in 0..<3 { r.record("finds", .results); r.record("empty", .empty); r.record("silent", .noAnswer) }

@@ -230,6 +230,14 @@ final class LibraryModel: ObservableObject {
         state.styleOverrides = map
         save()
     }
+    /// Two-page spreads shifted by one page for this series (volumes that open with a cover page).
+    func spreadsShifted(_ seriesID: String) -> Bool { state.shiftedSpreads?.contains(seriesID) ?? false }
+    func setSpreadsShifted(_ shifted: Bool, for seriesID: String) {
+        var set = state.shiftedSpreads ?? []
+        if shifted { set.insert(seriesID) } else { set.remove(seriesID) }
+        state.shiftedSpreads = set.isEmpty ? nil : set
+        save()
+    }
     /// The style actually used: the user's choice, else what was detected, else manga.
     func style(for seriesID: String) -> ReadingStyle {
         if let chosen = state.styleOverrides?[seriesID], chosen != .automatic { return chosen }

@@ -5,19 +5,44 @@ import UniformTypeIdentifiers
 import ImageIO
 import PhotosUI
 
+/// The app's sections, in Mihon's order: your shelf, what's new, what you read, where to find more, settings.
+enum AppTab: Int, CaseIterable, Identifiable {
+    case library, updates, history, browse, settings
+    var id: Int { rawValue }
+    var title: String {
+        switch self {
+        case .library: "Library"
+        case .updates: "Updates"
+        case .history: "History"
+        case .browse: "Browse"
+        case .settings: "Settings"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .library: "books.vertical.fill"
+        case .updates: "sparkles"
+        case .history: "clock.arrow.circlepath"
+        case .browse: "safari"
+        case .settings: "gearshape"
+        }
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject private var model: LibraryModel
     @State private var tab = 0
+    /// Phone tabs are built the first time they're opened (like a tab view), then kept.
+    @State private var visited: Set<Int> = [0]
+    /// Tapping the tab you're already on goes back to its start, like the system tab bar.
+    @State private var resets = [Int](repeating: 0, count: AppTab.allCases.count)
+    @State private var keyboardShown = false
+    /// iPhones (both screens of the Duo) get our own bottom bar. The system one turns into a
+    /// vertical rail inside the Duo front screen's side column and covers the right edge of
+    /// every page; ours always sits along the bottom, inside the safe area.
+    private var phoneBar: Bool { UIDevice.current.userInterfaceIdiom == .phone }
     var body: some View {
-        TabView(selection: $tab) {
-            // Mihon's order: your shelf, what's new, what you read, where to find more, settings.
-            LibraryView().tabItem { Label("Library", systemImage: "books.vertical.fill") }.tag(0)
-            UpdatesView().tabItem { Label("Updates", systemImage: "sparkles") }
-                .badge(model.totalNew).tag(1)
-            HistoryView().tabItem { Label("History", systemImage: "clock.arrow.circlepath") }.tag(2)
-            BrowseView().tabItem { Label("Browse", systemImage: "safari") }.tag(3)
-            SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
-        }
+        sections
         .fullScreenCover(item: $model.requestedChapter) { chapter in ReaderView(chapter: chapter).environmentObject(model) }
         .background {
             Color.clear.fullScreenCover(item: $model.incoming) { target in MangaBrowserView(start: target.url).environmentObject(model) }
@@ -56,6 +81,100 @@ struct RootView: View {
         .task(id: model.libraryMembers.count) {
             SpotlightIndex.update(model.libraryMembers, hidden: Set(model.state.hiddenSeries ?? []))
         }
+    }
+}
+
+extension RootView {
+    @ViewBuilder fileprivate var sections: some View {
+        if phoneBar {
+            ZStack {
+                ForEach(AppTab.allCases) { item in
+                    if visited.contains(item.rawValue) {
+                        section(item)
+                            .id(resets[item.rawValue])
+                            .opacity(tab == item.rawValue ? 1 : 0)
+                            .allowsHitTesting(tab == item.rawValue)
+                            .accessibilityHidden(tab != item.rawValue)
+                    }
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !keyboardShown {
+                    PhoneTabBar(selected: tab, badge: model.totalNew) { choice in
+                        if choice == tab { resets[choice] += 1 } else { tab = choice }
+                    }
+                }
+            }
+            .onChange(of: tab) { _, now in visited.insert(now) }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardShown = true }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
+            .sensoryFeedback(.selection, trigger: tab)
+        } else {
+            TabView(selection: $tab) {
+                ForEach(AppTab.allCases) { item in
+                    if item == .updates {
+                        section(item).tabItem { Label(item.title, systemImage: item.symbol) }.badge(model.totalNew).tag(item.rawValue)
+                    } else {
+                        section(item).tabItem { Label(item.title, systemImage: item.symbol) }.tag(item.rawValue)
+                    }
+                }
+            }
+        }
+    }
+    @ViewBuilder fileprivate func section(_ item: AppTab) -> some View {
+        switch item {
+        case .library: LibraryView()
+        case .updates: UpdatesView()
+        case .history: HistoryView()
+        case .browse: BrowseView()
+        case .settings: SettingsView()
+        }
+    }
+}
+
+/// A bottom tab bar that keeps to the bottom edge on every iPhone screen shape.
+struct PhoneTabBar: View {
+    let selected: Int
+    let badge: Int
+    let select: (Int) -> Void
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(AppTab.allCases) { item in
+                let on = selected == item.rawValue
+                Button { select(item.rawValue) } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: item.symbol)
+                            .font(.system(size: 19, weight: on ? .semibold : .regular))
+                            .frame(height: 24)
+                            .overlay(alignment: .topTrailing) {
+                                if item == .updates && badge > 0 {
+                                    Text(badge > 99 ? "99+" : "\(badge)")
+                                        .font(.system(size: 10, weight: .bold)).monospacedDigit()
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 4)
+                                        .frame(minWidth: 16, minHeight: 16)
+                                        .background(Color.red, in: Capsule())
+                                        .fixedSize()
+                                        .offset(x: 11, y: -4)
+                                }
+                            }
+                        Text(item.title)
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .foregroundStyle(on ? Color.white : Color.white.opacity(0.45))
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.title)
+                .accessibilityValue(item == .updates && badge > 0 ? "\(badge) new" : "")
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(.top, 3)
+        .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
+        .overlay(alignment: .top) { Rectangle().fill(Eclipse.hairline).frame(height: 0.5) }
     }
 }
 

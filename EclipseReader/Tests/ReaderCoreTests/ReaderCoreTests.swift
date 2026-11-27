@@ -90,6 +90,18 @@ final class ReaderCoreTests: XCTestCase {
             XCTAssertEqual(containing[0].displayOrder(.rightToLeft), Array(containing[0].indices.reversed()))
         }
     }
+    func testShiftedPairingStartsOnePageLater() {
+        XCTAssertEqual(ReadingOrder.groups(count: 6, landscape: true, spreads: true, wide: [], shifted: true).map(\.indices),
+                       [[0], [1, 2], [3, 4], [5]])
+        // A wide first page already stands alone, so the shift moves the next pair instead.
+        XCTAssertEqual(ReadingOrder.groups(count: 5, landscape: true, spreads: true, wide: [0], shifted: true).map(\.indices),
+                       [[0], [1], [2, 3], [4]])
+        // Single-page layouts are unaffected, and every page is still shown once.
+        XCTAssertEqual(ReadingOrder.groups(count: 3, landscape: false, spreads: true, wide: [], shifted: true).map(\.indices), [[0], [1], [2]])
+        for count in 0..<8 {
+            XCTAssertEqual(ReadingOrder.groups(count: count, landscape: true, spreads: true, wide: [3], shifted: true).flatMap(\.indices), Array(0..<count))
+        }
+    }
     func testPortraitAndDisabledSpreadsUseSinglePages() {
         XCTAssertEqual(ReadingOrder.groups(count: 3, landscape: false, spreads: true, wide: []).map(\.indices), [[0], [1], [2]])
         XCTAssertEqual(ReadingOrder.groups(count: 2, landscape: true, spreads: false, wide: []).map(\.indices), [[0], [1]])

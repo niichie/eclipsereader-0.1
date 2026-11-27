@@ -36,6 +36,8 @@ struct BrowseView: View {
     @State private var opened: MangaSeries?
     @State private var addingID: String?
     @State private var discoverError: String?
+    /// Your last few searches (newline-separated), shown under the search field.
+    @AppStorage("recentSearches") private var recentRaw = ""
     @Environment(\.horizontalSizeClass) private var sizeClass
     var body: some View {
         NavigationStack {
@@ -49,6 +51,11 @@ struct BrowseView: View {
                             .onSubmit { open(address) }
                     }
                     .padding(14).eclipseCard(cornerRadius: 14)
+
+                    let recents = RecentSearches.decode(recentRaw)
+                    if searchingText == nil && !recents.isEmpty {
+                        recentSearches(recents)
+                    }
 
                     if let searchingText {
                         VStack(alignment: .leading, spacing: 14) {
@@ -138,8 +145,39 @@ struct BrowseView: View {
             // Words: search every source at once, with a web search one tap away.
             withAnimation { searchingText = trimmed }
             discoverError = nil
+            if model.state.incognito != true { recentRaw = RecentSearches.encode(RecentSearches.adding(trimmed, to: RecentSearches.decode(recentRaw))) }
             let sites = model.state.sites ?? []
             search.run(trimmed, sources: GlobalSearchModel.sources(saved: sites) + (novelsOn ? GlobalSearchModel.sources(saved: sites, novels: true) : []))
+        }
+    }
+    private func recentSearches(_ recents: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Recent searches").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear") { withAnimation { recentRaw = "" } }
+                    .font(.footnote.weight(.semibold))
+                    .accessibilityLabel("Clear recent searches")
+            }
+            FadingRow {
+                LazyHStack(spacing: 8) {
+                    ForEach(recents, id: \.self) { recent in
+                        Button { address = recent; open(recent) } label: {
+                            Label(recent, systemImage: "clock.arrow.circlepath")
+                                .font(.subheadline).lineLimit(1)
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                .background(Eclipse.surfaceHigh, in: Capsule())
+                                .overlay(Capsule().stroke(Eclipse.hairline, lineWidth: 0.5))
+                        }
+                        .buttonStyle(PressableStyle())
+                        .contextMenu {
+                            Button("Remove from recent searches", systemImage: "xmark") {
+                                withAnimation { recentRaw = RecentSearches.encode(RecentSearches.decode(recentRaw).filter { $0 != recent }) }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     private func webSearch(_ text: String) {

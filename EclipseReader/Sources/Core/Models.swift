@@ -323,6 +323,8 @@ public struct LibraryState: Codable, Sendable {
     public var seriesCleanup: [String: Double]?
     /// Per-series "Enhance scans" choice (true on, false off). Missing means the global setting.
     public var seriesEnhance: [String: Bool]?
+    /// Series whose two-page spreads are shifted by one page (see `ReadingOrder.groups`).
+    public var shiftedSpreads: Set<String>?
     /// Covers the user picked (a page or a photo); these win over automatic ones.
     public var customCovers: [String: URL]?
     /// Chapters that appeared since the last check and have not been opened yet.
@@ -368,11 +370,16 @@ public enum ReadingOrder {
         width > 0 && height > 0 && width >= 600 && width >= height * 1.12
     }
     // Source DOM order is the story order. Never reverse individual artwork.
-    public static func groups(count: Int, landscape: Bool, spreads: Bool, wide: Set<Int>) -> [PageGroup] {
+    /// `shifted` moves the pairing by one page: the first page that would start a pair is shown
+    /// on its own, so every pair after it starts one page later (for volumes that open with a
+    /// cover or credits page and would otherwise split each double-page spread).
+    public static func groups(count: Int, landscape: Bool, spreads: Bool, wide: Set<Int>, shifted: Bool = false) -> [PageGroup] {
         var result: [PageGroup] = []
         var i = 0
+        var skip = shifted
         while i < count {
             if landscape && spreads && !wide.contains(i) && i + 1 < count && !wide.contains(i + 1) {
+                if skip { skip = false; result.append(PageGroup(indices: [i])); i += 1; continue }
                 result.append(PageGroup(indices: [i, i + 1])); i += 2
             } else { result.append(PageGroup(indices: [i])); i += 1 }
         }

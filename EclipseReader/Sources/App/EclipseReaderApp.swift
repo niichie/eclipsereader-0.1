@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct EclipseReaderApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = LibraryModel()
     @Environment(\.scenePhase) private var phase
     @AppStorage("appLock") private var appLock = false
@@ -53,6 +54,50 @@ struct EclipseReaderApp: App {
         // iOS wakes the app every few hours (when alerts are on) to look for new chapters.
         .backgroundTask(.appRefresh(ChapterAlerts.refreshID)) {
             await LibraryModel.backgroundRefresh()
+        }
+    }
+}
+
+/// Answers which orientations the app may turn to, so the reader can hold the screen still.
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        OrientationLock.mask
+    }
+}
+
+/// The reader's rotation lock: holds whichever way the screen faces now, until released.
+@MainActor enum OrientationLock {
+    static private(set) var mask: UIInterfaceOrientationMask = .all
+    private static var scene: UIWindowScene? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+    }
+    static func hold() {
+        guard let scene else { return }
+        mask = switch scene.effectiveGeometry.interfaceOrientation {
+        case .portrait: .portrait
+        case .portraitUpsideDown: .portraitUpsideDown
+        case .landscapeLeft: .landscapeLeft
+        case .landscapeRight: .landscapeRight
+        default: .all
+        }
+        refresh(scene)
+    }
+    static func release() {
+        guard mask != .all else { return }
+        mask = .all
+        if let scene { refresh(scene) }
+    }
+    /// What the lock is holding, for the reader's message.
+    static var heldName: String {
+        if mask == .all { return "place" }
+        return mask == .portrait || mask == .portraitUpsideDown ? "portrait" : "landscape"
+    }
+    private static func refresh(_ scene: UIWindowScene) {
+        var controller = scene.keyWindow?.rootViewController
+        while let current = controller {
+            current.setNeedsUpdateOfSupportedInterfaceOrientations()
+            controller = current.presentedViewController
         }
     }
 }

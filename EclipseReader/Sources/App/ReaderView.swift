@@ -25,6 +25,8 @@ struct ReaderView: View {
     @State private var dimming = 0.0
     @AppStorage("readerWarmth") private var warmth = 0.0
     @AppStorage("keepScreenOn") private var keepScreenOn = true
+    /// Rotation lock: while on, the reader stays the way the screen faced when it was locked.
+    @AppStorage("readerRotationLock") private var rotationLocked = false
     @AppStorage("readerPageNumber") private var showPageNumber = true
     @AppStorage("pageHaptics") private var haptics = true
     @State private var lastActivity = Date()
@@ -93,7 +95,8 @@ struct ReaderView: View {
     private var mangaBody: some View {
         GeometryReader { geometry in
             let groups = ReadingOrder.groups(count: pages.count, landscape: ReadingOrder.canPair(width: geometry.size.width, height: geometry.size.height),
-                spreads: effective.landscapeSpreads, wide: effective.detectWidePages ? wide : [])
+                spreads: effective.landscapeSpreads, wide: effective.detectWidePages ? wide : [],
+                shifted: library.spreadsShifted(library.seriesID(for: chapter)))
             let showBars = controls || failure != nil || loading
             ZStack {
                 ZStack {
@@ -211,8 +214,11 @@ struct ReaderView: View {
                 .onChange(of: phase) { _, phase in
                     if phase != .active { logTime(); remember() } else { lastActivity = Date() }
                 }
-                .onDisappear { stopSpeech(); logTime(); remember(); UIApplication.shared.isIdleTimerDisabled = false }
-                .onAppear { lastActivity = Date(); UIApplication.shared.isIdleTimerDisabled = keepScreenOn }
+                .onDisappear { stopSpeech(); logTime(); remember(); UIApplication.shared.isIdleTimerDisabled = false; OrientationLock.release() }
+                .onAppear {
+                    lastActivity = Date(); UIApplication.shared.isIdleTimerDisabled = keepScreenOn
+                    if rotationLocked { OrientationLock.hold() }
+                }
                 // A soft tap of the Taptic Engine for each page turn, like paper under the thumb.
                 .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.55), trigger: page) { _, _ in
                     haptics && effective.mode == .paged
@@ -496,8 +502,25 @@ struct ReaderView: View {
                         quickLabel("rectangle.split.1x2", "Gap", on: library.preferences.verticalGap ?? false)
                     }.accessibilityLabel("Gap between pages")
                 }
+                if effective.mode == .paged, groups.contains(where: { $0.indices.count == 2 }) || library.spreadsShifted(library.seriesID(for: chapter)) {
+                    let seriesID = library.seriesID(for: chapter)
+                    let shifted = library.spreadsShifted(seriesID)
+                    Button {
+                        library.setSpreadsShifted(!shifted, for: seriesID)
+                        flash(shifted ? "Pages paired from the first page" : "Pairing shifted by one page for this series")
+                    } label: { quickLabel("rectangle.split.2x1", "Pairs", on: shifted) }
+                        .accessibilityLabel(shifted ? "Pair pages from the first page" : "Shift page pairing by one page")
+                        .accessibilityIdentifier("shiftPairing")
+                }
                 Button { warmth = warmth > 0 ? 0 : 0.3 } label: { quickLabel("moon.haze", "Warm", on: warmth > 0) }
                     .accessibilityLabel("Warm night filter")
+                Button {
+                    rotationLocked.toggle()
+                    if rotationLocked { OrientationLock.hold(); flash("Rotation locked in \(OrientationLock.heldName)") }
+                    else { OrientationLock.release(); flash("Rotation unlocked") }
+                } label: { quickLabel(rotationLocked ? "lock.rotation" : "lock.rotation.open", "Rotate", on: rotationLocked) }
+                    .accessibilityLabel(rotationLocked ? "Unlock rotation" : "Lock rotation")
+                    .accessibilityIdentifier("rotationLock")
                 Button { settings = true } label: { quickLabel("slider.horizontal.3", "Settings") }
                     .accessibilityLabel("Reading settings")
             }
@@ -519,7 +542,7 @@ struct ReaderView: View {
     private func quickLabel(_ symbol: String, _ title: String, on: Bool = false) -> some View {
         VStack(spacing: 3) {
             Image(systemName: symbol).font(.system(size: 17, weight: .medium))
-            Text(title).font(.caption2.weight(.medium)).lineLimit(1)
+            Text(title).font(.caption2.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
         }
         .foregroundStyle(on ? Eclipse.highlight : .white)
         .frame(maxWidth: .infinity, minHeight: 44)
