@@ -34,6 +34,7 @@ jobs:
           for t in "${PICKED[@]}"; do ONLY+=("-only-testing:$t"); done
           xcodebuild test -project EclipseReader.xcodeproj -scheme EclipseReader \
             -destination "id=$UDID" "${ONLY[@]}" \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 420 -maximum-test-execution-time-allowance 600 \
             -resultBundlePath checks.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee checks.log | grep -E "CHECK\||error:|Test Case|XCTAssert|failed|passed|\*\* TEST" || true
           if ! grep -q "\*\* TEST SUCCEEDED \*\*" checks.log; then
             echo "----- why it failed -----"

@@ -105,10 +105,12 @@ final class ScreenTourUITests: XCTestCase {
 
     // MARK: Helpers
 
+    private let started = Date()
     private func settle(_ seconds: TimeInterval = 1.2) { Thread.sleep(forTimeInterval: seconds) }
 
     @MainActor
     private func shot(_ app: XCUIApplication, _ name: String) {
+        print("CHECK|tour|\(name) at \(Int(Date().timeIntervalSince(started)))s")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "\(UIDevice.current.name) - \(name)"
         attachment.lifetime = .keepAlways
