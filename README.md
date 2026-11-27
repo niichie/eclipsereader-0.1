@@ -6,7 +6,8 @@
 
 <p align="center">
   A dark, manga-first reader for iPhone, iPad and iPhone Duo.<br>
-  Right-to-left page turns for manga, seamless vertical strips for manhwa, everything kept on your device.
+  Right-to-left page turns for manga, seamless vertical strips for manhwa, 51 sources built in, everything kept on your device.<br>
+  <sub>Vibe coded with Claude: the code was written by AI, tested by a human on a real phone.</sub>
 </p>
 
 <p align="center">
@@ -127,7 +128,10 @@ AniList sign-in stays in the iOS Keychain.
 
 ## Disclaimer
 
-eclipsereader is a personal project and doesn't include any manga. It isn't affiliated with MangaDex, WEBTOON,
-WeebCentral, AniList, MyAnimeList, Open Library, Project Gutenberg or any other site it can open. Support the creators and official releases where you can.
+eclipsereader is a personal project, vibe coded with Claude. It comes with 51 sources built in, so there's plenty to
+read from the first launch, but the app itself doesn't host or store any manga: pages load straight from those sites,
+the same as opening them in a browser, and downloads stay on your device. It isn't affiliated with MangaDex, WEBTOON,
+WeebCentral, AniList, MyAnimeList, Open Library, Project Gutenberg or any other site it can open. Support the creators
+and official releases where you can.
 
 Inspired by [Mihon](https://mihon.app/).
