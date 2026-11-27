@@ -236,7 +236,9 @@ struct WeebCentral {
             let inner = m[1].replacingOccurrences(of: #"(?is)<time\b.*?</time>"#, with: " ", options: .regularExpression)
             let text = LinkedSource.cleanChapterTitle(LinkedSource.plain(inner))
             let name = LinkedSource.firstMatch(#"((?:Chapter|Episode|Ch\.?)\s*[\d.]+)"#, text) ?? text
+            // Some series name chapters their own way ("Days 12"); the number in the name still orders them.
             let n = ChapterOrder.number(name) ?? ChapterOrder.number(text)
+                ?? LinkedSource.firstMatch(#"(\d+(?:\.\d+)?)"#, name).flatMap(Double.init)
             found.append(Chapter(url: url, title: name.isEmpty ? "Chapter" : name, number: n.map { LinkedSource.format($0) } ?? ""))
         }
         return ChapterOrder.sorted(found)
