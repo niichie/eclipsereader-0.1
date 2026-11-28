@@ -34,7 +34,6 @@ struct RootView: View {
     @State private var tab = 0
     /// Tapping the tab you're already on goes back to its start, like the system tab bar.
     @State private var resets = [Int](repeating: 0, count: AppTab.allCases.count)
-    @State private var keyboardShown = false
     /// iPhones (both screens of the Duo) get our own bottom bar. The system one turns into a
     /// vertical rail inside the Duo front screen's side column and covers the right edge of
     /// every page; ours always sits along the bottom, inside the safe area.
@@ -87,19 +86,19 @@ extension RootView {
         if phoneBar {
             // The standard tab container (its own bar hidden) keeps each tab's life cycle exactly
             // as before: tabs you leave stop drawing and get their usual appear/disappear calls.
-            PhoneTabContainer(selected: tab, resets: resets, barHeight: keyboardShown ? 0 : PhoneTabBar.height) { item in
+            PhoneTabContainer(selected: tab, resets: resets, barHeight: PhoneTabBar.height) { item in
                 AnyView(section(item).environmentObject(model).tint(.white))
             }
             .ignoresSafeArea()
             .overlay(alignment: .bottom) {
-                if !keyboardShown {
-                    PhoneTabBar(selected: tab, badge: model.totalNew) { choice in
-                        if choice == tab { resets[choice] += 1 } else { tab = choice }
-                    }
+                // Always there, like the system tab bar: the keyboard simply covers it while it's up.
+                // (Hiding it on keyboard notifications could leave it hidden when a keyboard went
+                // away without saying so, for example when a sheet closed with the keyboard up.)
+                PhoneTabBar(selected: tab, badge: model.totalNew) { choice in
+                    if choice == tab { resets[choice] += 1 } else { tab = choice }
                 }
+                .ignoresSafeArea(.keyboard)
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardShown = true }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
             .sensoryFeedback(.selection, trigger: tab)
         } else {
             TabView(selection: $tab) {
@@ -1849,6 +1848,7 @@ struct AboutPage: View {
                 Text("No manga is bundled with the app. Series come from websites you add or files you import; eclipsereader isn’t affiliated with any of them.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
+            CrashReportsSection()
             Section {
                 Link(destination: URL(string: "https://mihon.app/")!) { Label("Inspired by Mihon", systemImage: "heart") }
             }
