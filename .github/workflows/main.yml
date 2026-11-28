@@ -82,7 +82,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: EclipseReader-unsigned.ipa
+          body_path: .github/release-notes.md
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, 'beta') }}
           name: eclipsereader ${{ github.ref_name }}
 
       - name: Upload build log on failure
