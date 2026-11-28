@@ -3,6 +3,16 @@ import SwiftUI
 /// Runs one query against every source at once; each source fills in as it answers.
 @MainActor
 final class GlobalSearchModel: ObservableObject {
+    /// The search page's last search. If the page is closed and shown again by the system (not by
+    /// Done), it picks this up, results and all, instead of starting over.
+    private static var resumableSearch: (key: String, model: GlobalSearchModel, started: Date)?
+    static func resumable(for key: String) -> GlobalSearchModel {
+        if let last = resumableSearch, last.key == key, Date().timeIntervalSince(last.started) < 600 { return last.model }
+        let model = GlobalSearchModel()
+        resumableSearch = (key, model, Date())
+        return model
+    }
+    static func forgetResumable() { resumableSearch = nil }
     enum Phase: Equatable { case loading, done([DiscoverItem]), failed }
     struct Section: Identifiable {
         let source: SearchSource
@@ -59,14 +69,15 @@ final class GlobalSearchModel: ObservableObject {
     }
 
     /// `queries`: a different search text for some sources (by id), like a Japanese title for Syosetu.
-    func run(_ text: String, sources: [SearchSource], queries: [String: String] = [:]) {
+    /// `only`: search just that one site (a site you picked by name is searched even if it's switched off).
+    func run(_ text: String, sources: [SearchSource], queries: [String: String] = [:], only: String? = nil) {
         cancel()
         query = text
         candidates = sources
         self.queries = queries
         // Dependable sites start first: browser-read sites are searched a few at a time, so the
         // start order decides how soon results appear.
-        let wanted = sources.filter { !excluded.contains($0.id) }
+        let wanted = only.map { id in sources.filter { $0.id == id } } ?? sources.filter { !excluded.contains($0.id) }
         let order = reliability.ordered(wanted.map(\.id))
         let active = order.compactMap { id in wanted.first { $0.id == id } }
         arrived = []
@@ -333,7 +344,7 @@ struct MigrateSheet: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.dismiss) private var dismiss
     let series: MangaSeries
-    @StateObject private var search = GlobalSearchModel()
+    @StateObject private var search: GlobalSearchModel
     @State private var query: String
     @State private var link = ""
     @State private var address = ""
@@ -503,10 +514,14 @@ struct GlobalSearchSheet: View {
     /// Search the novel sources instead (with the title in its own language for Japanese sites).
     let novels: Bool
     let nativeQuery: String?
+    /// Search just this site (a source id) the first time; searching again uses every site.
+    @State private var site: String?
     @State private var browsing: BrowseTarget?
     @AppStorage(Features.booksKey) private var booksOn = false
-    init(query: String, novels: Bool = false, nativeQuery: String? = nil) {
+    init(query: String, novels: Bool = false, nativeQuery: String? = nil, site: String? = nil) {
         _query = State(initialValue: query); self.novels = novels; self.nativeQuery = nativeQuery
+        _site = State(initialValue: site)
+        _search = StateObject(wrappedValue: GlobalSearchModel.resumable(for: "\(query)|\(novels)|\(site ?? "")"))
     }
     var body: some View {
         NavigationStack {
@@ -514,7 +529,7 @@ struct GlobalSearchSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Title", text: $query).submitLabel(.search).onSubmit(run)
+                        TextField("Title", text: $query).submitLabel(.search).onSubmit { site = nil; run() }
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                     .padding(.horizontal, 14).frame(height: 50).eclipseCard(cornerRadius: 14)
@@ -528,23 +543,24 @@ struct GlobalSearchSheet: View {
                 .padding(20).frame(maxWidth: 1280).frame(maxWidth: .infinity)
             }
             .background(EclipseBackground())
-            .navigationTitle("Search everywhere").navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done") { search.cancel(); dismiss() }.fontWeight(.semibold) }
+            .navigationTitle(siteName.map { "Search \($0)" } ?? "Search everywhere").navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done") { search.cancel(); GlobalSearchModel.forgetResumable(); dismiss() }.fontWeight(.semibold) }
             .task { if search.sections.isEmpty { run() } }
             .fullScreenCover(item: $browsing) { target in MangaBrowserView(start: target.url).environmentObject(model) }
             .sheet(item: $opened) { series in SeriesSheet(series: series).environmentObject(model) }
         }
         .preferredColorScheme(.dark)
     }
+    private var siteName: String? { site.flatMap { id in allSources.first { $0.id == id }?.name } }
+    private var allSources: [SearchSource] {
+        novels ? GlobalSearchModel.sources(saved: model.state.sites ?? [], novels: true)
+            : GlobalSearchModel.sources(saved: model.sources) + (Features.novelsOn ? GlobalSearchModel.sources(saved: model.sources, novels: true) : [])
+    }
     private func run() {
         error = nil
-        if novels {
-            var queries: [String: String] = [:]
-            if let native = nativeQuery { for id in ["syosetu", "kakuyomu"] { queries[id] = QuoteFeed.searchable(native: native) } }
-            search.run(query, sources: GlobalSearchModel.sources(saved: model.state.sites ?? [], novels: true), queries: queries)
-        } else {
-            search.run(query, sources: GlobalSearchModel.sources(saved: model.sources) + (Features.novelsOn ? GlobalSearchModel.sources(saved: model.sources, novels: true) : []))
-        }
+        var queries: [String: String] = [:]
+        if novels, let native = nativeQuery { for id in ["syosetu", "kakuyomu"] { queries[id] = QuoteFeed.searchable(native: native) } }
+        search.run(query, sources: allSources, queries: queries, only: site)
     }
     private func open(_ item: DiscoverItem) {
         if let owned = model.series(id: item.id) ?? model.allSeries.first(where: { $0.url == item.url }) { opened = owned; return }

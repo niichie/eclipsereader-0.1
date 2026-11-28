@@ -294,8 +294,13 @@ struct LibraryView: View {
         let query: String
         var novels = false
         var native: String? = nil
-        var id: String { query + (novels ? "|novels" : "") }
+        /// Search one site only (a search source id).
+        var site: String? = nil
+        var id: String { query + (novels ? "|novels" : "") + (site.map { "|" + $0 } ?? "") }
     }
+    /// A search started from a recommendation shelf. Kept here, outside the shelves, so the search
+    /// page stays open while the shelves reload around it.
+    @State private var shelfSearch: QuoteSearch?
     @Namespace private var zoom
     @FocusState private var searchFocused: Bool
 
@@ -419,16 +424,16 @@ struct LibraryView: View {
                             }
                         }
                         if query.isEmpty && filter == .all && categoryID == nil && showDiscover {
-                            DiscoverStrip(openSeries: $openSeries, width: contentWidth)
+                            DiscoverStrip(openSeries: $openSeries, search: $shelfSearch, width: contentWidth)
                         }
                         // Recreate the shelf when the reader switches works, including identically titled adaptations.
                         if query.isEmpty && categoryID == nil && showBecause, let recent = recentSeries,
                            filter == .all || matches(recent, filter) {
                             if recent.readsAsText {
-                                TextRecommendationStrip(series: recent, width: contentWidth, openSeries: $openSeries)
+                                TextRecommendationStrip(series: recent, width: contentWidth, openSeries: $openSeries, search: $shelfSearch)
                                     .id(recent.id)
                             } else {
-                                DiscoverStrip(openSeries: $openSeries, width: contentWidth, similarTo: recent.title, seedID: recent.id,
+                                DiscoverStrip(openSeries: $openSeries, search: $shelfSearch, width: contentWidth, similarTo: recent.title, seedID: recent.id,
                                               style: model.knownStyle(for: recent.id))
                                     .id(recent.id)
                             }
@@ -490,6 +495,9 @@ struct LibraryView: View {
             .sheet(isPresented: $options) { LibraryOptionsSheet().environmentObject(model).presentationDetents([.medium, .large]) }
             .sheet(isPresented: $searchingEverywhere) { GlobalSearchSheet(query: query).environmentObject(model) }
             .sheet(item: $bookSearch) { item in BookSearchSheet(query: item.query).environmentObject(model) }
+            .sheet(item: $shelfSearch) { item in
+                GlobalSearchSheet(query: item.query, novels: item.novels, nativeQuery: item.native, site: item.site).environmentObject(model)
+            }
             .task {
                 if !setupDone && !ProcessInfo.processInfo.arguments.contains("--ui-testing") {
                     try? await Task.sleep(for: .seconds(0.6))
@@ -746,6 +754,8 @@ struct LibraryOptionsSheet: View {
 struct DiscoverStrip: View {
     @EnvironmentObject private var model: LibraryModel
     @Binding var openSeries: MangaSeries?
+    /// Searches are shown by the library, so they stay open while this shelf reloads.
+    @Binding var search: LibraryView.QuoteSearch?
     var width: CGFloat = 390
     /// nil: popular on MangaDex. A title: "Because you read …" that series.
     var similarTo: String? = nil
@@ -757,7 +767,6 @@ struct DiscoverStrip: View {
     @State private var phase: Phase = .loading
     @State private var adding: String?
     @State private var error: String?
-    @State private var search: LibraryView.QuoteSearch?
     /// Results per seed for this launch, so coming back to the library shows them at once
     /// instead of the shelf vanishing while it reloads.
     @MainActor private static var memory: [String: [DiscoverItem]] = [:]
@@ -822,7 +831,6 @@ struct DiscoverStrip: View {
             }
         }
         .padding(.top, 8)
-        .sheet(item: $search) { item in GlobalSearchSheet(query: item.query).environmentObject(model) }
         .task(id: memoryKey) {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
@@ -860,12 +868,12 @@ struct DiscoverStrip: View {
         }
         .frame(width: cardWidth)
         .contextMenu {
-            if Self.isAniList(item) {
-                Button { select(item, add: false) } label: { Label("Find on your sites", systemImage: "magnifyingglass") }
-            } else {
+            if !Self.isAniList(item) {
                 Button { select(item, add: false) } label: { Label("Preview", systemImage: "book") }
                 Button { select(item, add: true) } label: { Label("Add to Library", systemImage: "plus") }
-                Button { search = LibraryView.QuoteSearch(query: item.title) } label: { Label("Find on other sites", systemImage: "magnifyingglass") }
+            }
+            FindOnSitesMenu(sources: GlobalSearchModel.sources(saved: model.sources)) { site in
+                find(item.title, site: site)
             }
             if similarTo != nil {
                 Button { model.hideSuggestion(item.title) } label: { Label("Less like this", systemImage: "hand.thumbsdown") }
@@ -976,6 +984,14 @@ struct DiscoverStrip: View {
         return Array(Discover.onePerFranchise(items).prefix(16))
     }
     private static func isAniList(_ item: DiscoverItem) -> Bool { item.url.host == "anilist.co" }
+    /// Opens the search once the long-press menu has closed (opening it while the menu is still
+    /// animating away could drop it).
+    private func find(_ title: String, site: String?) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            search = LibraryView.QuoteSearch(query: title, site: site)
+        }
+    }
     private func select(_ item: DiscoverItem, add: Bool) {
         // AniList knows the work but not where to read it: find it on your sources.
         if Self.isAniList(item) { search = LibraryView.QuoteSearch(query: item.title); return }
@@ -994,9 +1010,9 @@ private struct TextRecommendationStrip: View {
     let series: MangaSeries
     let width: CGFloat
     @Binding var openSeries: MangaSeries?
+    @Binding var search: LibraryView.QuoteSearch?
     @State private var novels: [AniListMedia] = []
     @State private var books: [FreeBook] = []
-    @State private var search: LibraryView.QuoteSearch?
 
     var body: some View {
         let owned = Set((model.libraryMembers.map(\.title) + [series.title]).map(QuoteFeed.workKey)).union(model.state.hiddenRecommendationTitles ?? [])
@@ -1029,7 +1045,6 @@ private struct TextRecommendationStrip: View {
                 }.padding(.top, 8)
             }
         }
-        .sheet(item: $search) { item in GlobalSearchSheet(query: item.query, novels: true, nativeQuery: item.native) }
         .task(id: series.title) {
             if series.isNovel {
                 guard let data = try? await AniList.post(AniListAPI.similarNovelsQuery, variables: ["search": series.title], auth: false),
@@ -2969,5 +2984,20 @@ struct BookmarksSheet: View {
             .navigationTitle("Bookmarks").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+    }
+}
+
+/// "Find on…": every site at once, or one site you pick from the same list the search uses.
+struct FindOnSitesMenu: View {
+    let sources: [SearchSource]
+    let pick: (String?) -> Void
+    var body: some View {
+        Menu {
+            Button { pick(nil) } label: { Label("Every site", systemImage: "square.grid.2x2") }
+            Divider()
+            ForEach(sources) { source in
+                Button(source.name) { pick(source.id) }
+            }
+        } label: { Label("Find on…", systemImage: "magnifyingglass") }
     }
 }

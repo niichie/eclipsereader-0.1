@@ -136,7 +136,8 @@ struct BrowseView: View {
             } message: { Text("Saved sites appear here for one-tap browsing.") }
         }
     }
-    private func open(_ text: String) {
+    /// `site`: search just that one site (from a "Find on…" menu).
+    private func open(_ text: String, site: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if trimmed.contains("."), !trimmed.contains(" "), let url = WebLink.parse(trimmed) {
@@ -147,7 +148,7 @@ struct BrowseView: View {
             discoverError = nil
             if model.state.incognito != true { recentRaw = RecentSearches.encode(RecentSearches.adding(trimmed, to: RecentSearches.decode(recentRaw))) }
             let sites = model.state.sites ?? []
-            search.run(trimmed, sources: GlobalSearchModel.sources(saved: sites) + (novelsOn ? GlobalSearchModel.sources(saved: sites, novels: true) : []))
+            search.run(trimmed, sources: GlobalSearchModel.sources(saved: sites) + (novelsOn ? GlobalSearchModel.sources(saved: sites, novels: true) : []), only: site)
         }
     }
     private func recentSearches(_ recents: [String]) -> some View {
@@ -216,7 +217,9 @@ struct BrowseView: View {
             if !owned {
                 Button { add(item, toShelf: true) } label: { Label("Add to Library", systemImage: "plus") }
             }
-            Button { address = item.title; open(item.title) } label: { Label("Find on other sites", systemImage: "magnifyingglass") }
+            FindOnSitesMenu(sources: GlobalSearchModel.sources(saved: model.state.sites ?? [])) { site in
+                address = item.title; open(item.title, site: site)
+            }
             Button { browsing = BrowseTarget(url: item.url) } label: { Label("Open in browser", systemImage: "safari") }
         }
     }
