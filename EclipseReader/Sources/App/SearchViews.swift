@@ -344,7 +344,7 @@ struct MigrateSheet: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.dismiss) private var dismiss
     let series: MangaSeries
-    @StateObject private var search: GlobalSearchModel
+    @StateObject private var search = GlobalSearchModel()
     @State private var query: String
     @State private var link = ""
     @State private var address = ""
@@ -506,7 +506,7 @@ private struct MigrateConfirm: View {
 struct GlobalSearchSheet: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var search = GlobalSearchModel()
+    @StateObject private var search: GlobalSearchModel
     @State private var query: String
     @State private var busyID: String?
     @State private var opened: MangaSeries?
