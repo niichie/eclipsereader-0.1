@@ -234,7 +234,7 @@ struct WeebCentral {
                   seen.insert(url.absoluteString).inserted else { continue }
             // Dates and "Last Read" markers sit inside the link too; keep only the chapter's name.
             let inner = m[1].replacingOccurrences(of: #"(?is)<time\b.*?</time>"#, with: " ", options: .regularExpression)
-            let text = LinkedSource.cleanChapterTitle(LinkedSource.plain(inner))
+            let text = LinkedSource.tidyChapterTitle(LinkedSource.plain(inner))
             let name = LinkedSource.firstMatch(#"((?:Chapter|Episode|Ch\.?)\s*[\d.]+)"#, text) ?? text
             // Some series name chapters their own way ("Days 12"); the number in the name still orders them.
             let n = ChapterOrder.number(name) ?? ChapterOrder.number(text)

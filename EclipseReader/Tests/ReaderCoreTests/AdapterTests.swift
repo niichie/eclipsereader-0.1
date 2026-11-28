@@ -78,7 +78,7 @@ final class AdapterTests: XCTestCase {
             "<a href=\"/chapters/\(ids[i])\"><span class=\"grow\"><span>Kapitel \(162 - i)</span></span></a>"
         }.joined()
         let chapters = WeebCentral.chapters(in: html)
-        XCTAssertEqual(chapters.map(\.title), ["Kapitel 160", "Kapitel 161", "Kapitel 162"])
+        XCTAssertEqual(chapters.map(\.title), ["Chapter 160", "Chapter 161", "Chapter 162"])
         // Lists saved before the fix (no numbers stored) sort the same way.
         let stored = [162, 161, 160].map { Chapter(url: URL(string: "https://weebcentral.com/chapters/X\($0)")!, title: "Kapitel \($0)", number: "") }
         XCTAssertEqual(ChapterOrder.sorted(stored).map(\.title), ["Kapitel 160", "Kapitel 161", "Kapitel 162"])
@@ -88,6 +88,12 @@ final class AdapterTests: XCTestCase {
         let given = Chapter(url: URL(string: "https://example.com/chapters/CH99")!, title: "Prologue", number: "0")
         XCTAssertEqual(ChapterOrder.number(of: given), 0)
         XCTAssertNil(ChapterOrder.loneNumber("Vol 2 Chapter 5 Extra"))
+        // "Chapter" is written the same way whatever the site used; other names are left alone.
+        for (raw, tidy) in [("Kapitel 162", "Chapter 162"), ("Capítulo 5: El inicio", "Chapter 5: El inicio"), ("Глава 3", "Chapter 3"),
+                            ("Chap. 12", "Chapter 12"), ("Ch.7", "Chapter 7"), ("chapter 9", "Chapter 9"), ("Chapter 4", "Chapter 4"),
+                            ("Days 12", "Days 12"), ("Episode 4", "Episode 4"), ("Chapter Zero", "Chapter Zero"), ("Capstone 2", "Capstone 2")] {
+            XCTAssertEqual(LinkedSource.tidyChapterTitle(raw), tidy, raw)
+        }
     }
     func testChapterCountsAsReadAtItsLastPages() {
         XCTAssertTrue(ChapterProgress.reachedEnd(page: 24, count: 25))

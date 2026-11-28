@@ -366,6 +366,14 @@ public struct LinkedSource: Sendable {
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? title.trimmingCharacters(in: .whitespacesAndNewlines) : text
     }
+    /// A chapter name as the app shows it: reading-status text removed, and "chapter" written the
+    /// same way whatever the site used ("Kapitel 162", "Capítulo 5", "Глава 3", "Chap. 12", "Ch.7"
+    /// all become "Chapter …"). Names that aren't "chapter + number" ("Days 12", "Episode 4") are kept.
+    public static func tidyChapterTitle(_ title: String) -> String {
+        let cleaned = cleanChapterTitle(title)
+        let words = #"kapitel|cap[ií]tulo|capitolo|chapitre|hoofdstuk|rozdzia[lł]|kapitola|fejezet|kapittel|luku|b[öo]l[üu]m|bab|ch[uư][oơ]ng|kabanata|глава|розділ|chapter|chpt|chap|chp|cap|ch"#
+        return cleaned.replacingOccurrences(of: #"(?i)^\s*(?:"# + words + #")\.?\s*(?=[0-9])"#, with: "Chapter ", options: .regularExpression)
+    }
     static func plain(_ html: String) -> String {
         decodeEntities(html.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression))
             .components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
@@ -387,7 +395,7 @@ public struct LinkedSource: Sendable {
                   var url = URL(string: cleanHref, relativeTo: base)?.absoluteURL, WebLink.publicHTTPS(url),
                   let host = url.host, Self.root(host) == baseRoot else { return }
             if var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) { parts.fragment = nil; url = parts.url ?? url }
-            let label = plain(text)
+            let label = tidyChapterTitle(plain(text))
             let path = url.path
             guard path.count > 1, chapterLike(path) || chapterLike(label),
                   !path.lowercased().contains("/comment"), !path.lowercased().hasSuffix("/feed")

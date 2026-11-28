@@ -128,11 +128,16 @@ final class LibraryModel: ObservableObject {
             restored.defaultsVersion = 7
         }
         // v8: chapters named without "Chapter" ("Kapitel 162", "Days 12") were kept in the site's
-        // newest-first order, so reading started at the last chapter. Put every series back in order.
+        // newest-first order, so reading started at the last chapter. Write "chapter" the same way
+        // everywhere ("Kapitel 162" → "Chapter 162") and put every series back in order.
         if (restored.defaultsVersion ?? 0) < 8 {
             restored.series = restored.series?.map { item in
                 var item = item
-                item.chapters = ChapterOrder.sorted(item.chapters)
+                let tidied = item.chapters.map { chapter in
+                    let name = LinkedSource.tidyChapterTitle(chapter.title)
+                    return name == chapter.title ? chapter : Chapter(url: chapter.url, title: name, number: chapter.number, published: chapter.published)
+                }
+                item.chapters = ChapterOrder.sorted(tidied)
                 return item
             }
             restored.defaultsVersion = 8
