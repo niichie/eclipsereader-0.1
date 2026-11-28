@@ -598,7 +598,7 @@ struct ReaderView: View {
     private func stopSpeech() { speechTask?.cancel(); speaker.stop(); spokenBubbles = [] }
     private func open(_ target: Chapter) {
         stopSpeech()
-        remember(movingOn: library.next(after: chapter)?.id == target.id); returnChapter = chapter
+        remember(); returnChapter = chapter
         scrub = nil; returnPage = nil; pages = []; loading = true; chapter = target
     }
     /// Tap the left or right edge to turn the page (direction-aware), the middle to show or hide controls.
@@ -645,12 +645,11 @@ struct ReaderView: View {
         catch let error as URLError where error.code == .cancelled { }
         catch { if !Task.isCancelled && requested.id == chapter.id { failure = error.localizedDescription; loading = false } }
     }
-    /// Saves where you are. A chapter counts as read once its last page has been on screen (in a
-    /// two-page view, the last pair), or when you go on to the next chapter from its last pages.
-    private func remember(movingOn: Bool = false) {
+    /// Saves where you are. A chapter counts as read only once its last page has been on screen
+    /// (in a two-page view, the last pair).
+    private func remember() {
         guard !loading, !pages.isEmpty else { return }
-        let finished = lastPageShown || (movingOn && ChapterProgress.reachedEnd(page: publishedPage, count: publishedCount))
-        library.record(chapter, page: publishedPage, count: publishedCount, completed: finished)
+        library.record(chapter, page: publishedPage, count: publishedCount, completed: lastPageShown)
     }
     private var lastPageShown: Bool {
         guard !pages.isEmpty else { return false }

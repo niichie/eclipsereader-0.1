@@ -267,13 +267,6 @@ public struct ChapterProgress: Codable, Equatable, Sendable {
     public var completed: Bool
     public var updated: Date
     public var fraction: Double { pageCount > 0 ? Double(page + 1) / Double(pageCount) : 0 }
-    /// On the last page, or (in chapters of ten pages or more) within a page or two of it or 90%
-    /// through: far enough that moving on to the next chapter means this one was read.
-    public static func reachedEnd(page: Int, count: Int) -> Bool {
-        guard count > 0 else { return false }
-        if page >= count - 1 { return true }
-        return count >= 10 && (page >= count - 2 || Double(page + 1) / Double(count) >= 0.9)
-    }
     public init(page: Int, pageCount: Int, completed: Bool = false, updated: Date = Date()) {
         self.pageCount = max(0, pageCount)
         self.page = min(max(0, page), max(0, pageCount - 1))

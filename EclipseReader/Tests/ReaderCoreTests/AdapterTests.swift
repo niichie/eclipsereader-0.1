@@ -95,15 +95,6 @@ final class AdapterTests: XCTestCase {
             XCTAssertEqual(LinkedSource.tidyChapterTitle(raw), tidy, raw)
         }
     }
-    func testChapterCountsAsReadAtItsLastPages() {
-        XCTAssertTrue(ChapterProgress.reachedEnd(page: 24, count: 25))
-        XCTAssertTrue(ChapterProgress.reachedEnd(page: 22, count: 25))   // "Page 23 of 25"
-        XCTAssertTrue(ChapterProgress.reachedEnd(page: 22, count: 24))
-        XCTAssertFalse(ChapterProgress.reachedEnd(page: 2, count: 18))
-        XCTAssertFalse(ChapterProgress.reachedEnd(page: 3, count: 5))    // short chapters need the last page
-        XCTAssertTrue(ChapterProgress.reachedEnd(page: 4, count: 5))
-        XCTAssertFalse(ChapterProgress.reachedEnd(page: 0, count: 0))
-    }
     func testWeebCentralChapterList() {
         let html = """
         <a href="https://weebcentral.com/chapters/01J76XYAAA1111111111111111"><span>Chapter 2</span><time>2024</time></a>

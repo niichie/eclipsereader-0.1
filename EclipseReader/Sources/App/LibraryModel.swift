@@ -110,8 +110,8 @@ final class LibraryModel: ObservableObject {
             restored.preferences.enhance = true
             restored.defaultsVersion = 6
         }
-        // v7: some chapter names carried the site's "Last Read <date>" text, and chapters read to
-        // their last pages weren't counted as finished. Tidy the names and mark those chapters read.
+        // v7: some chapter names carried the site's "Last Read <date>" text. Tidy the names.
+        // (Reading progress is never changed here: a chapter is read only when you read it.)
         if (restored.defaultsVersion ?? 0) < 7 {
             restored.series = restored.series?.map { item in
                 var item = item
@@ -120,10 +120,6 @@ final class LibraryModel: ObservableObject {
                     return clean == chapter.title ? chapter : Chapter(url: chapter.url, title: clean, number: chapter.number, published: chapter.published)
                 }
                 return item
-            }
-            for (id, progress) in restored.progress where !progress.completed
-                && ChapterProgress.reachedEnd(page: progress.page, count: progress.pageCount) {
-                restored.progress[id]?.completed = true
             }
             restored.defaultsVersion = 7
         }
