@@ -210,8 +210,17 @@ struct BrowseView: View {
         }
         .buttonStyle(PressableStyle())
         .disabled(addingID != nil)
+        .contextMenu {
+            let owned = model.ownsWork(title: item.title, url: item.url)
+            Button { add(item) } label: { Label(owned ? "Open" : "Preview", systemImage: "book") }
+            if !owned {
+                Button { add(item, toShelf: true) } label: { Label("Add to Library", systemImage: "plus") }
+            }
+            Button { address = item.title; open(item.title) } label: { Label("Find on other sites", systemImage: "magnifyingglass") }
+            Button { browsing = BrowseTarget(url: item.url) } label: { Label("Open in browser", systemImage: "safari") }
+        }
     }
-    private func add(_ item: DiscoverItem) {
+    private func add(_ item: DiscoverItem, toShelf: Bool = false) {
         if let owned = model.series(id: item.id) ?? model.allSeries.first(where: { $0.url == item.url }) {
             opened = owned
             return
@@ -221,7 +230,7 @@ struct BrowseView: View {
         Task {
             defer { addingID = nil }
             do {
-                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title, addToShelf: false) { opened = series }
+                if case .series(let series, _) = try await model.addLink(item.url.absoluteString, title: item.title, addToShelf: toShelf), !toShelf { opened = series }
             } catch {
                 discoverError = "Couldn’t open \(item.title): \(error.localizedDescription)"
             }

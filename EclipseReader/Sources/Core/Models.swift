@@ -478,7 +478,7 @@ public struct MangaSeries: Codable, Hashable, Identifiable, Sendable {
 public enum ChapterMerge {
     /// A chapter's number as a comparable key ("12", "12.5").
     public static func key(_ chapter: Chapter) -> String? {
-        let value = Double(chapter.number) ?? ChapterOrder.number(chapter.title) ?? ChapterOrder.number(chapter.url.path)
+        let value = ChapterOrder.number(of: chapter)
         return value.map { $0 == $0.rounded() ? String(Int($0)) : String($0) }
     }
     /// A chapter list that is probably only part of the series: very few chapters, or numbers that run
@@ -534,8 +534,21 @@ public enum ChapterOrder {
     }
     /// Puts chapters into reading order. Uses chapter numbers when most chapters have one,
     /// otherwise assumes the page listed newest-first if it ends with the oldest number.
+    /// The number a chapter is filed under: the number the site gave it, else one in its title
+    /// ("Chapter 12", "Kapitel 162", "Days 12"), else one in its link.
+    public static func number(of chapter: Chapter) -> Double? {
+        Double(chapter.number) ?? number(chapter.title) ?? loneNumber(chapter.title) ?? number(chapter.url.path)
+    }
+    /// A title whose only number is at its end ("Kapitel 162", "Days 12", "Episode #4"): chapters
+    /// named in another language or the series' own style.
+    static func loneNumber(_ title: String) -> Double? {
+        guard let re = try? NSRegularExpression(pattern: #"^[^0-9]*?([0-9]+(?:\.[0-9]+)?)\s*$"#),
+              let m = re.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
+              let r = Range(m.range(at: 1), in: title) else { return nil }
+        return Double(title[r])
+    }
     public static func sorted(_ chapters: [Chapter]) -> [Chapter] {
-        let numbers = chapters.map { number($0.title) ?? number($0.url.path) }
+        let numbers = chapters.map { number(of: $0) }
         let known = numbers.compactMap { $0 }
         if known.count >= max(2, chapters.count * 4 / 5) {
             return zip(chapters, numbers).enumerated().sorted { a, b in

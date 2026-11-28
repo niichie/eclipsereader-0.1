@@ -127,6 +127,16 @@ final class LibraryModel: ObservableObject {
             }
             restored.defaultsVersion = 7
         }
+        // v8: chapters named without "Chapter" ("Kapitel 162", "Days 12") were kept in the site's
+        // newest-first order, so reading started at the last chapter. Put every series back in order.
+        if (restored.defaultsVersion ?? 0) < 8 {
+            restored.series = restored.series?.map { item in
+                var item = item
+                item.chapters = ChapterOrder.sorted(item.chapters)
+                return item
+            }
+            restored.defaultsVersion = 8
+        }
         #if DEBUG
         if ReaderTestFixture.demo { restored = ReaderTestFixture.demoState() }
         #endif
@@ -556,7 +566,8 @@ final class LibraryModel: ObservableObject {
     /// A chapter's number as a comparable key ("12", "12.5"), from its number or its title.
     nonisolated static func numberKey(_ chapter: Chapter) -> String? {
         if let n = Double(chapter.number) { return LinkedSource.format(n) }
-        return ChapterOrder.number(ChapterText.split(chapter.title).name).map(LinkedSource.format)
+        let name = ChapterText.split(chapter.title).name
+        return (ChapterOrder.number(name) ?? ChapterOrder.loneNumber(name)).map(LinkedSource.format)
     }
     /// How many chapters with reading progress have a matching chapter number in `found`.
     func migrationMatches(_ series: MangaSeries, to found: LinkInspection) -> (matched: Int, total: Int) {

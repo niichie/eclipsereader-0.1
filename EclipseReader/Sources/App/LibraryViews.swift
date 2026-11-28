@@ -859,7 +859,18 @@ struct DiscoverStrip: View {
             }.buttonStyle(PressableStyle())
         }
         .frame(width: cardWidth)
-        .contextMenu { if similarTo != nil { Button("Less like this") { model.hideSuggestion(item.title) } } }
+        .contextMenu {
+            if Self.isAniList(item) {
+                Button { select(item, add: false) } label: { Label("Find on your sites", systemImage: "magnifyingglass") }
+            } else {
+                Button { select(item, add: false) } label: { Label("Preview", systemImage: "book") }
+                Button { select(item, add: true) } label: { Label("Add to Library", systemImage: "plus") }
+                Button { search = LibraryView.QuoteSearch(query: item.title) } label: { Label("Find on other sites", systemImage: "magnifyingglass") }
+            }
+            if similarTo != nil {
+                Button { model.hideSuggestion(item.title) } label: { Label("Less like this", systemImage: "hand.thumbsdown") }
+            }
+        }
         .disabled(adding != nil)
     }
     /// Recommendations kept between launches, so the shelf shows at once when the app opens.

@@ -71,6 +71,24 @@ final class AdapterTests: XCTestCase {
         XCTAssertEqual(LinkedSource.cleanChapterTitle("Chapter 3: The Last Reader"), "Chapter 3: The Last Reader")
         XCTAssertEqual(LinkedSource.cleanChapterTitle("Chapter 3 2026-06-10T02:58:38.500Z"), "Chapter 3")
     }
+    func testChaptersNamedInTheirOwnWayStillStartAtTheFirst() {
+        // WeebCentral lists newest first; "Kapitel" titles have no "Chapter" in them, and the links are IDs.
+        let ids = ["01J8Z8P9QM1BAS1VAEX8T40XQ3", "01J8Z8P9QMCH7AS1VAEX8T40XQ", "01J8Z8P9QM9BAS1VAEX8T40XQ5"]
+        let html = (0..<3).map { i in
+            "<a href=\"/chapters/\(ids[i])\"><span class=\"grow\"><span>Kapitel \(162 - i)</span></span></a>"
+        }.joined()
+        let chapters = WeebCentral.chapters(in: html)
+        XCTAssertEqual(chapters.map(\.title), ["Kapitel 160", "Kapitel 161", "Kapitel 162"])
+        // Lists saved before the fix (no numbers stored) sort the same way.
+        let stored = [162, 161, 160].map { Chapter(url: URL(string: "https://weebcentral.com/chapters/X\($0)")!, title: "Kapitel \($0)", number: "") }
+        XCTAssertEqual(ChapterOrder.sorted(stored).map(\.title), ["Kapitel 160", "Kapitel 161", "Kapitel 162"])
+        let days = [3, 2, 1].map { Chapter(url: URL(string: "https://weebcentral.com/chapters/D\($0)")!, title: "Days \($0)", number: "") }
+        XCTAssertEqual(ChapterOrder.sorted(days).first?.title, "Days 1")
+        // The number a site gives a chapter wins over anything in its link.
+        let given = Chapter(url: URL(string: "https://example.com/chapters/CH99")!, title: "Prologue", number: "0")
+        XCTAssertEqual(ChapterOrder.number(of: given), 0)
+        XCTAssertNil(ChapterOrder.loneNumber("Vol 2 Chapter 5 Extra"))
+    }
     func testChapterCountsAsReadAtItsLastPages() {
         XCTAssertTrue(ChapterProgress.reachedEnd(page: 24, count: 25))
         XCTAssertTrue(ChapterProgress.reachedEnd(page: 22, count: 25))   // "Page 23 of 25"
